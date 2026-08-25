@@ -567,3 +567,16 @@ inspection remains a no-network `ssh -G` operation.
 No fake reachability, logs, redirect target, container, or SSH result is created.
 The remaining Priority 2 work is deeper Nmap/HTTP parser coverage, full runtime
 specific output schemas, fuzzing, and real Linux acceptance evidence.
+
+### Priority 2 — parser and execution hardening progress
+
+**Implemented in the current iteration.** Nmap XML parsing now validates host
+addresses and port observations and records parser errors without inventing
+findings. HTTP parsing records response chains, redacted headers, and observed
+redirects requiring a new scope decision. Container logs have bounded level/line
+summaries, and SSH connectivity output has explicit classifications for DNS,
+host-key, authentication, timeout, refused, and generic failures. A real DNS
+change invalidation test protects active plans, and parser tests exercise
+malformed, hostile, and random bounded input. The registry remains split across
+adapter, network, facts, and artifact modules; the remaining package-level
+separation and disposable Linux acceptance work is still pending.

@@ -139,3 +139,41 @@ def parse_systemd_facts(results: list[dict[str, Any]]) -> dict[str, Any]:
         if item.get("executable") == "systemctl" and "show" in item.get("argv", []): facts["unit"] = parse_systemd_show(item.get("stdout", "") + item.get("stderr", ""), item.get("exit_code"))
         elif item.get("executable") == "journalctl": facts["journal"] = parse_journal(item.get("stdout", "") + item.get("stderr", ""), item.get("exit_code"))
     return facts
+
+
+def parse_container_logs(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize bounded Docker/Podman logs without turning log text into findings."""
+    if not results:
+        return {"state": "not_run", "line_count": 0, "error": "no container log command was run"}
+    item = results[-1]
+    text = clean(item.get("stdout", "") + item.get("stderr", ""))
+    lines = [line for line in text.splitlines() if line.strip()]
+    levels = {level: sum(1 for line in lines if re.search(rf"\b{level}\b", line, re.I)) for level in ("trace", "debug", "info", "warn", "error", "fatal")}
+    state = "observed" if item.get("status") == "succeeded" else "tool_error"
+    return {"state": state, "line_count": len(lines), "levels": levels, "sample": lines[:20], "bounded": True, "limit_lines": 200, "limitations": ["Container logs are untrusted observations; level counts do not confirm an incident or vulnerability."]}
+
+
+def parse_ssh_connection(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify real ssh connectivity output without retaining unredacted secrets."""
+    if not results:
+        return {"state": "not_run", "classification": "not_run"}
+    item = results[-1]
+    text = clean(item.get("stdout", "") + item.get("stderr", ""))
+    lowered = text.lower()
+    if item.get("status") == "succeeded" and item.get("exit_code") == 0:
+        classification = "connected"
+    elif "could not resolve hostname" in lowered or "name or service not known" in lowered:
+        classification = "dns_failed"
+    elif "host key verification failed" in lowered or "remote host identification has changed" in lowered:
+        classification = "host_key_rejected"
+    elif "permission denied" in lowered or "authentication failed" in lowered:
+        classification = "auth_failed"
+    elif "connection timed out" in lowered or "operation timed out" in lowered:
+        classification = "timeout"
+    elif "connection refused" in lowered:
+        classification = "refused"
+    elif item.get("status") != "succeeded":
+        classification = "connection_failed"
+    else:
+        classification = "unknown"
+    return {"state": "observed" if item.get("status") == "succeeded" else "tool_error", "classification": classification, "exit_code": item.get("exit_code"), "signal": item.get("signal"), "observed_lines": len([line for line in text.splitlines() if line.strip()]), "limitations": ["Connectivity/authentication status is not a security finding; passwords, keys, and full environment data are not retained."]}

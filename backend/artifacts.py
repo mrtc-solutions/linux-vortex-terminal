@@ -7,6 +7,7 @@ are not included in returned records.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -115,31 +116,44 @@ def parse_nmap_xml(data: bytes, source: dict[str, Any]) -> dict[str, Any]:
         return base
     hosts: list[dict[str, Any]] = []
     observations: list[dict[str, Any]] = []
-    for host in root.findall(".//host"):
-        status = host.find("status")
-        addresses = [item.attrib.get("addr", "") for item in host.findall("address") if item.attrib.get("addr")]
-        names = [item.attrib.get("name", "") for item in host.findall(".//hostname") if item.attrib.get("name")]
-        host_item: dict[str, Any] = {"addresses": addresses[:8], "hostnames": names[:8], "status": status.attrib.get("state") if status is not None else "unknown", "ports": []}
-        for port in host.findall(".//port"):
-            state = port.find("state")
-            service = port.find("service")
-            port_item = {"protocol": port.attrib.get("protocol"), "port": port.attrib.get("portid"), "state": state.attrib.get("state") if state is not None else "unknown"}
+    parse_errors: list[str] = []
+    elements = lambda name: [item for item in root.iter() if item.tag.rsplit("}", 1)[-1] == name]
+    for host in elements("host")[:512]:
+        status = next(iter([item for item in host if item.tag.rsplit("}", 1)[-1] == "status"]), None)
+        addresses = [item.attrib.get("addr", "") for item in host if item.tag.rsplit("}", 1)[-1] == "address" and item.attrib.get("addr")]
+        names = [item.attrib.get("name", "") for item in elements("hostname") if item.attrib.get("name") and host in list(item.iterancestors())] if hasattr(host, "iterancestors") else [item.attrib.get("name", "") for item in host.iter() if item.tag.rsplit("}", 1)[-1] == "hostname" and item.attrib.get("name")]
+        valid_addresses = []
+        for address in addresses:
+            try: ipaddress.ip_address(address); valid_addresses.append(address)
+            except ValueError: parse_errors.append("invalid host address observed")
+        host_item: dict[str, Any] = {"addresses": valid_addresses[:8], "hostnames": [redact(name) for name in names[:8]], "status": status.attrib.get("state") if status is not None else "unknown", "ports": []}
+        for port in [item for item in host.iter() if item.tag.rsplit("}", 1)[-1] == "port"]:
+            state = next(iter([item for item in port if item.tag.rsplit("}", 1)[-1] == "state"]), None)
+            service = next(iter([item for item in port if item.tag.rsplit("}", 1)[-1] == "service"]), None)
+            protocol, port_id = port.attrib.get("protocol"), port.attrib.get("portid")
+            try:
+                if protocol not in {"tcp", "udp", "sctp"} or not port_id or not (1 <= int(port_id) <= 65535): raise ValueError
+            except ValueError:
+                parse_errors.append("invalid port observation")
+                continue
+            port_item = {"protocol": protocol, "port": port_id, "state": state.attrib.get("state") if state is not None else "unknown"}
             if service is not None:
                 port_item["service"] = redact(service.attrib.get("name", ""))
                 for key in ("product", "version", "extrainfo"):
                     if service.attrib.get(key): port_item[key] = redact(service.attrib[key])
             host_item["ports"].append(port_item)
             if port_item["state"] == "open":
-                observations.append({"type": "open_port", "host": addresses[0] if addresses else (names[0] if names else "unknown"), "protocol": port_item["protocol"], "port": port_item["port"], "service": port_item.get("service"), "evidence_ref": "nmaprun.host.ports.port.state"})
+                observations.append({"type": "open_port", "host": valid_addresses[0] if valid_addresses else (names[0] if names else "unknown"), "protocol": protocol, "port": port_id, "service": port_item.get("service"), "evidence_ref": "nmaprun.host.ports.port.state"})
         hosts.append(host_item)
     hosts = hosts[:512]
     observations = observations[:2048]
     base.update({
-        "state": "observed" if hosts else "inconclusive",
+        "state": "tool_error" if parse_errors and not hosts else "observed" if hosts else "inconclusive",
         "scanner": redact(root.attrib.get("scanner", "nmap")),
         "scanner_arguments": redact(root.attrib.get("args", "")),
         "hosts": hosts,
         "observations": observations,
+        "parse_errors": parse_errors[:20],
         "summary": f"Observed {len(hosts)} host record(s) and {len(observations)} open-port observation(s).",
         "limitations": ["This parser reports tool observations only; it does not confirm vulnerabilities or host security."],
     })

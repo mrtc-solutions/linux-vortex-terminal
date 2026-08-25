@@ -12,7 +12,7 @@ from pathlib import Path
 
 from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
 from backend.vortex_backend import sanitize_pty
-from backend.facts import parse_apt_preflight, parse_package_facts, parse_systemd_show
+from backend.facts import parse_apt_preflight, parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_show
 from backend.network import resolve_target, resolve_targets, resolution_digest
 from backend.vortex_backend import (
     ExecutionManager, PolicyError, SessionManager, Store, build_plan, command_spec,
@@ -451,6 +451,21 @@ The following packages will be upgraded:
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_nmap_parser_rejects_invalid_port_observations(self):
+        data = b'<nmaprun><host><address addr="192.0.2.1"/><ports><port protocol="tcp" portid="99999"><state state="open"/></port></ports></host></nmaprun>'
+        artifact = analyze_bytes(data, kind='nmap-xml')
+        self.assertEqual(artifact['state'], 'observed')
+        self.assertEqual(artifact['observations'], [])
+        self.assertTrue(artifact['parse_errors'])
+
+    def test_container_and_ssh_parsers_are_evidence_only(self):
+        logs = parse_container_logs([{'status':'succeeded','stdout':'2026-01-01T00:00:00Z ERROR failed once\nINFO ok\n','stderr':''}])
+        self.assertEqual(logs['state'], 'observed')
+        self.assertEqual(logs['line_count'], 2)
+        ssh = parse_ssh_connection([{'status':'failed','exit_code':255,'stdout':'','stderr':'ssh: connect to host lab port 22: Connection refused'}])
+        self.assertEqual(ssh['classification'], 'refused')
+        self.assertNotIn('super-secret', json.dumps(ssh).lower())
 
     def test_dns_facts_are_real_and_digestable(self):
         fact = resolve_target('localhost')

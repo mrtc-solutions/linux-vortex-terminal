@@ -40,11 +40,11 @@ from typing import Any
 
 try:
     from .artifacts import ArtifactError, analyze_operation_http, analyze_path
-    from .facts import parse_package_facts, parse_systemd_facts
+    from .facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
     from .network import resolve_targets, resolution_digest
 except ImportError:  # direct `python backend/vortex_backend.py`
     from artifacts import ArtifactError, analyze_operation_http, analyze_path
-    from facts import parse_package_facts, parse_systemd_facts
+    from facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
     from network import resolve_targets, resolution_digest
 
 SCHEMA_VERSION = 1
@@ -1747,6 +1747,8 @@ class ExecutionManager:
         for adapter_id, results in grouped.items():
             if adapter_id == "linux.packages.apt": facts[adapter_id] = parse_package_facts(results)
             elif adapter_id in ("linux.systemd.inspect", "linux.systemd.mutate"): facts[adapter_id] = parse_systemd_facts(results)
+            elif adapter_id == "linux.containers.logs": facts[adapter_id] = parse_container_logs(results)
+            elif adapter_id == "linux.ssh.connection": facts[adapter_id] = parse_ssh_connection(results)
         return facts
 
     def _collect_artifacts(self, plan: dict[str, Any], op: dict[str, Any]) -> list[dict[str, Any]]:

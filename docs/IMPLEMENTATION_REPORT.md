@@ -44,8 +44,8 @@
   parsing. Guarded mutations now stop when fresh preflight/state is missing or
   unsafe, and completed operations expose structured package/service facts to
   analysis and reports. No privileged mutation was run on the shared host.
-- Added real read-only Docker/Podman runtime detection and SSH effective-config
-  diagnostics. Missing runtimes produce no fabricated container state; SSH
+- Added real read-only Docker/Podman runtime detection, bounded container log
+  collection, and SSH effective-config/connection diagnostics. Missing runtimes produce no fabricated container state; SSH
   diagnostics use `ssh -G` only and never connect or read private keys.
 - Added bounded Docker/Podman log collection, scoped SSH connectivity checks
   using BatchMode and strict host-key verification, and DNS resolution facts
@@ -64,7 +64,7 @@
 
 ```text
 python3 -m py_compile backend/vortex_backend.py cli/vortex.py
-python3 -m unittest discover -s tests -v  # 37 Python tests; npm test also runs the JS emulator test
+python3 -m unittest discover -s tests -v  # 39 Python tests; npm test also runs the JS emulator test
 ./vortex doctor --json
 ./vortex plan "system health"
 ./vortex run --yes -- /bin/echo hello
