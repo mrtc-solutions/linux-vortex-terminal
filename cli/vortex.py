@@ -66,7 +66,7 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
@@ -113,6 +113,9 @@ def main(argv=None):
     sub.add_parser('tools')
     sub.add_parser('adapters')
     art = sub.add_parser('artifact'); art.add_argument('action', choices=['inspect','analyze'], nargs='?', default='inspect'); art.add_argument('path'); art.add_argument('--type', choices=['auto','nmap-xml','http-headers','text'], default='auto')
+    b = sub.add_parser('backup'); b.add_argument('path'); b.add_argument('--force', action='store_true')
+    db = sub.add_parser('db'); db.add_argument('action', choices=['integrity'], nargs='?', default='integrity')
+    sub.add_parser('migrate')
     h = sub.add_parser('history'); h.add_argument('action', choices=['list','show','search','replay'], nargs='?', default='list'); h.add_argument('query', nargs='?')
     x = sub.add_parser('explain'); x.add_argument('request', nargs='+')
     a = sub.add_parser('audit'); a.add_argument('action', choices=['verify'], nargs='?', default='verify')
@@ -142,6 +145,17 @@ def main(argv=None):
             store.save_artifact(artifact)
             emit({'artifact': artifact}, args.as_json)
             return 0 if artifact.get('state') != 'tool_error' else EXIT_CODES['failure']
+        if args.subcommand == 'backup':
+            destination = store.backup(args.path, args.force)
+            emit({'backup': {'path': str(destination), 'mode': oct(destination.stat().st_mode & 0o777)}}, args.as_json)
+            return 0
+        if args.subcommand == 'db':
+            result = {'integrity': store.integrity_check()}
+            emit(result, args.as_json)
+            return 0 if result['integrity']['valid'] else EXIT_CODES['integrity_failure']
+        if args.subcommand == 'migrate':
+            result = {'migration': {'schema_version': 1, 'state': 'compatible', 'message': 'No irreversible schema migration is pending.'}}
+            emit(result, args.as_json); return 0
         if args.subcommand == 'session':
             if args.action == 'list':
                 emit({'sessions': store.list_sessions()}, args.as_json); return 0

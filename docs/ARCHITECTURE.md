@@ -9,7 +9,7 @@ the only production component permitted to spawn a process.
 
 The repository also ships a dependency-free `vortex` CLI that calls the same
 core modules directly. The current HTTP handler uses Python's standard library
-so a fresh Ubuntu host has no runtime dependency download. A future FastAPI /
+so a fresh Linux host has no runtime dependency download. A future FastAPI /
 Pydantic handler must preserve the same route and authority boundary.
 
 ## Request flow
@@ -45,6 +45,8 @@ attributed and still audited rather than falsely described as adapter-validated.
   detects ordinary alteration; it does not protect a compromised account.
 - `feedback`: redacted local corrections only. It cannot create capabilities or
   relax policy.
+- `artifacts`: hashes, parser provenance, and redacted observations for supplied
+  files or real adapter output; raw generated evidence is removed by default.
 
 The database is SQLite WAL with a five-second busy timeout. The data root is
 created as mode 0700 and the database is intended to be mode 0600. Runtime raw

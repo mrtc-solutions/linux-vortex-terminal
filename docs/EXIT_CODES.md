@@ -21,4 +21,5 @@ or ANSI output is mixed into JSON.
 The map is intentionally stable. Breaking JSON, policy, database, or direct
 command behavior requires a major semantic-version release. Non-interactive
 execution requires the plan ID, exact digest, and approval token; `--yes` alone
-never universally authorizes a plan.
+never universally authorizes a plan. Guarded apt/systemd mutations also require
+an exact second approval of the observed preflight digest.

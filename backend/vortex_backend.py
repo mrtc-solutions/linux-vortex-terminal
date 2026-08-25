@@ -2,7 +2,7 @@
 """Linux Vortex local sidecar.
 
 The sidecar is deliberately dependency-light: the checked-in implementation uses
-Python's standard library so a fresh Ubuntu installation can boot the product
+Python's standard library so a fresh Linux installation can boot the product
 before optional FastAPI/Electron packaging is installed.  It owns all command
 execution; the renderer is never allowed to spawn a process.
 """
@@ -322,18 +322,17 @@ def detect_context() -> dict[str, Any]:
     systemd = bool(shutil.which("systemctl")) and Path("/run/systemd/system").exists()
     kernel_text = os.uname().release.lower()
     wsl = bool(os.environ.get("WSL_INTEROP")) or "microsoft" in kernel_text
-    distro_id = os_release.get("ID", "unknown")
-    if distro_id == "ubuntu" and os_release.get("VERSION_ID", "") == "24.04":
-        tier = "tier-1"
-    elif distro_id == "ubuntu" or distro_id == "debian":
-        tier = "tier-2"
-    elif distro_id in {"linuxmint", "pop", "kali"}:
-        tier = "tier-3"
+    distro_id = os_release.get("ID", "unknown").lower()
+    distro_like = set(os_release.get("ID_LIKE", "").lower().split())
+    if distro_id in {"kali", "debian", "ubuntu", "linuxmint", "pop"} or "debian" in distro_like:
+        support_tier = "linux-debian-family"
     else:
-        tier = "deferred"
+        support_tier = "linux-best-effort"
+    if sys.platform != "linux":
+        support_tier = "unsupported-non-linux"
     return {
         "distribution": {"id": distro_id, "version_id": os_release.get("VERSION_ID", "unknown"), "pretty_name": os_release.get("PRETTY_NAME", distro_id)},
-        "support_tier": tier,
+        "support_tier": support_tier,
         "kernel": os.uname().release,
         "architecture": os.uname().machine,
         "uid": os.getuid(),
@@ -530,6 +529,45 @@ class Store:
         with self.connect() as db:
             rows = db.execute("SELECT result_json FROM operations ORDER BY COALESCE(ended_at, started_at) DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def integrity_check(self) -> dict[str, Any]:
+        with self.connect() as db:
+            row = db.execute("PRAGMA integrity_check").fetchone()
+            result = str(row[0]) if row else "unknown"
+        audit = self.verify_audit()
+        return {"sqlite": result, "sqlite_valid": result.lower() == "ok", "audit": audit, "valid": result.lower() == "ok" and audit.get("valid", False)}
+
+    def backup(self, destination: str | Path, overwrite: bool = False) -> Path:
+        dest = Path(destination).expanduser()
+        if not dest.is_absolute():
+            dest = Path.cwd() / dest
+        dest = dest.resolve()
+        if dest == self.db_path.resolve():
+            raise ValueError("backup destination must differ from the active database")
+        if dest.parent.exists():
+            parent_stat = dest.parent.stat()
+            if not dest.parent.is_dir() or (os.getuid() != 0 and parent_stat.st_uid != os.getuid()):
+                raise PermissionError("backup parent directory is not operator-owned")
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if dest.exists() and not overwrite:
+            raise FileExistsError("backup destination exists; use --force to replace it")
+        if dest.exists() and dest.is_symlink():
+            raise ValueError("backup destination symlink is not accepted")
+        self.append_audit("database_backup_requested", {"destination": redact(str(dest))})
+        source = self.connect()
+        target = sqlite3.connect(dest)
+        try:
+            source.backup(target)
+            target.commit()
+        finally:
+            target.close()
+            source.close()
+        try:
+            dest.chmod(0o600)
+        except OSError:
+            pass
+        return dest
 
     def save_session(self, session: dict[str, Any]) -> None:
         with self.lock, self.connect() as db:
@@ -1714,6 +1752,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/history": return self._json(200, {"history": self.store.list_history()})
             if path == "/api/engagements": return self._json(200, {"engagements": self.store.list_engagements()})
             if path == "/api/audit/verify": return self._json(200, {"audit": self.store.verify_audit()})
+            if path == "/api/store/integrity": return self._json(200, {"integrity": self.store.integrity_check()})
             if path.startswith("/api/plans/"):
                 plan = self.store.get_plan(path.rsplit("/", 1)[-1]); return self._json(200 if plan else 404, {"plan": plan} if plan else {"error": {"code": "not_found", "message": "plan not found"}})
             if path.startswith("/api/operations/"):
@@ -1763,6 +1802,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                     if not self.sessions.kill(parts[-2]):
                         return self._json(404, {"error": {"code": "not_running", "message": "session is not running"}})
                     return self._json(202, {"kill_requested": True, "session_id": parts[-2]})
+            if path == "/api/store/backup":
+                destination = body.get("destination")
+                if not isinstance(destination, str) or not destination.strip(): raise ValueError("backup destination is required")
+                backup_path = self.store.backup(destination, bool(body.get("overwrite", False)))
+                return self._json(201, {"backup": {"path": str(backup_path), "mode": oct(backup_path.stat().st_mode & 0o777)}})
             if path == "/api/artifacts/analyze":
                 artifact = analyze_path(body.get("path"), body.get("kind", "auto"))
                 self.store.save_artifact(artifact)

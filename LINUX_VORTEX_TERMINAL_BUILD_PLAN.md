@@ -33,15 +33,15 @@ or cloud SOC.
 North-star requests:
 
 ```bash
-vortex "why is this Ubuntu server exposing port 8080? inspect locally first"
+vortex "why is this Linux server exposing port 8080? inspect locally first"
 vortex "free space by finding large cache directories, show me the plan, then clean only caches I approve"
 vortex "enumerate the authorized web application at https://lab.example.test, save evidence, and explain each step"
 ```
 
 ### What is in scope for v1
 
-- Ubuntu 24.04 LTS first; Ubuntu 22.04 and Debian 12+ core compatibility where
-  probes prove it; best-effort Debian-family reporting elsewhere.
+- Linux first, with Kali and Debian-family compatibility driven by factual probes;
+  no distribution/version support claim is made without dedicated testing.
 - Linux administration, diagnostics, files, processes, services, packages, Git,
   containers, SSH diagnostics, authorized reconnaissance, defensive triage, and
   supplied-artifact analysis.
@@ -165,10 +165,10 @@ Output protocol:
 
 | Tier | Context | v1 promise |
 |---|---|---|
-| 1 | Ubuntu 24.04 LTS amd64/arm64 | Full acceptance target and first `.deb` |
-| 2 | Ubuntu 22.04, Debian 12+ | Source build/core CLI after probes |
-| 3 | Mint, Pop!_OS, Kali-derived | Best-effort Debian-family facts |
-| Deferred | Fedora/RHEL/openSUSE/Arch/Alpine, WSL, immutable OS, containers | Detect and report limits |
+| 1 | Linux on a supported host with required probes | Core CLI and local execution promise |
+| 2 | Kali/Debian-family Linux | Apt/systemd behavior after host probes |
+| 3 | Other Linux distributions | Best-effort facts; no mutation promise |
+| Deferred | Non-Linux, WSL, immutable OS, and constrained containers | Detect and report limits |
 
 `/etc/os-release`, actual executable probes, and usable-state probes are the
 source of truth. `doctor` reports distro/version/family, physical/VM/container/
@@ -200,7 +200,7 @@ Python 3.11 local sidecar (single authority, loopback-only)
         └─ optional disabled-by-default local model client
 ```
 
-The current sidecar uses the Python standard library so a clean Ubuntu host can
+The current sidecar uses the Python standard library so a clean Linux host can
 boot without downloading runtime dependencies; the packaged architecture can
 swap the HTTP handler for FastAPI/Pydantic without changing the authority
 boundary. Electron uses `contextIsolation`, `nodeIntegration=false`, sandboxed
@@ -303,7 +303,7 @@ No OSC background/cursor/title sequences are emitted by default.
 Inspect repository/Git/licensing; add README, security, contributing, conduct,
 threat model, ADRs, changelog convention, CI, pinned dev instructions,
 compatibility matrix, I/O protocol, retention policy, threat boundary, and exit
-codes. Gate: clean Ubuntu can boot help/doctor with no model or network.
+codes. Gate: clean Linux host can boot help/doctor with no model or network.
 
 ### Phase 1 — Honest vertical slice (implemented in this delivery)
 
@@ -326,7 +326,7 @@ is stored, and dry-run/declined operations change nothing.
 Add apt simulation/source/lock handling, systemd semantic adapters, filesystem,
 process/resource, Git, container, DNS/SSH, nmap and reviewed HTTP/content
 adapters, target normalization, artifact hashes/parsers, tool-specific negative
-and disposable-Ubuntu tests. No mutation is released without fresh facts and
+and disposable Linux tests. No mutation is released without fresh facts and
 confirmation.
 
 ### Phase 4 — Persistence/recovery
@@ -349,7 +349,7 @@ concurrency/resource caps. Shell RC files are never touched implicitly.
 
 ### Phase 7 — Linux release
 
-Release tested signed/checksummed Ubuntu 24.04 `.deb` first, with `/usr/bin/vortex`,
+Release tested signed/checksummed Linux Debian-family `.deb` first, with `/usr/bin/vortex`,
 man page, completions, documentation, SBOM, SPDX inventory, provenance,
 reproducibility notes, fresh-VM install/upgrade/uninstall tests, and no desktop
 autostart/listener/telemetry. Defer Snap/Flatpak/RPM/AUR until confinement and
@@ -358,7 +358,7 @@ host-execution behavior are separately tested.
 ## 10. Quality, abuse resistance, and release blockers
 
 Unit, integration, golden, property, fuzz/mutation, shell compatibility, and
-real disposable Ubuntu tests cover argv/path/package/unit parsing, plan digest and
+real disposable Linux tests cover argv/path/package/unit parsing, plan digest and
 approval invalidation, ANSI/bidi/control output, malformed UTF-8, giant output,
 symlink traversal, public model endpoints, prompt injection, stale/replayed plans,
 tampered audit/package data, sudo/password handling, forked descendants, signal
@@ -368,13 +368,13 @@ acceptance tests.
 
 CI runs formatting, lint, tests, dependency/license/SBOM review, shellcheck,
 unsafe-code review if introduced, dependency lock/provenance checks, and build
-smoke tests on Ubuntu. Maintain a capability matrix marked `implemented + tested`,
+smoke tests on Linux. Maintain a capability matrix marked `implemented + tested`,
 `available but tool missing`, `planned`, or `explicitly unsupported`; documentation
 must not turn proposals into claims. Maintainers publish an incident process,
 adapter emergency-disable list, knowledge revocation path, security update
 channel, rollback instructions, and release support lifecycle.
 
-Version 1 is blocked until a clean Ubuntu 24.04 VM demonstrates: no-network/no-
+Version 1 is blocked until a clean supported Linux VM demonstrates: no-network/no-
 model install and operation; correct TTY/non-TTY stdout/stderr/JSON/exit behavior;
 plan substitution/double-run/PATH replacement resistance; truthful cancellation,
 timeout, SSH disconnect and crash states with no descendants; no password capture
@@ -385,7 +385,7 @@ clearly distinguishes real capability from proposal.
 
 ## 11. Product-owner decisions before mutation/release phases
 
-1. Confirm Ubuntu/Debian-first v1 and defer Fedora/Arch.
+1. Confirm Linux-first v1 and defer Fedora/Arch.
 2. Keep command name `vortex` unless a distro collision requires `linux-vortex`.
 3. Confirm MIT licensing and third-party attribution policy.
 4. Choose Ollama, llama.cpp, or both behind the local OpenAI-compatible protocol.
@@ -455,7 +455,7 @@ POST /api/artifacts/analyze {"path":"./scan.xml","kind":"auto"}
 
 The remaining evidence work is parser confidence/error taxonomy expansion,
 namespace/format coverage, DNS/redirect provenance, signed artifact packages,
-and parser fuzzing in disposable Ubuntu CI.
+and parser fuzzing in disposable Linux CI.
 
 ### Priority 3 — guarded apt and systemd operations
 
@@ -476,7 +476,7 @@ explicit operator-direct path retain full Linux capability. Tests use planning
 and policy checks only; no shared-host apt or service mutation is run.
 
 Remaining Priority 3 work is richer held/reboot/incomplete-state reporting,
-lock behavior on Ubuntu 24.04, systemd user-bus semantics, fresh privileged
+lock behavior on supported Linux, systemd user-bus semantics, fresh privileged
 disposable-VM install/remove and service acceptance tests, interactive privilege
 flows, and rollback/recovery metadata.
 
@@ -494,9 +494,19 @@ remove with no observed removal is blocked, and missing/not-found systemd units
 are blocked before the action command. The normal-user root gate remains in
 place. Current tests use fake output and do not mutate the shared host.
 
-The remaining acceptance work is a disposable Ubuntu 24.04 VM for real apt
+The remaining acceptance work is a disposable supported Linux VM for real apt
 install/remove and service actions, user-bus semantics, held/reboot edge cases,
 and rollback metadata. The production path has no fake simulation mode; apt
 `-s` is a real package-manager read-only preflight. Mutating operations pause
 with the observed preflight facts and require a second exact approval before the
 real mutation command runs.
+
+### Product-owner platform clarification — Linux without version marketing
+
+The product is presented as **Linux Vortex Terminal for Linux**, not as an
+distribution-release-specific application. Kali Linux is a first-class Debian-family
+runtime when factual probes show the required tools and context. Documentation,
+branding, and capability claims must not name a Linux release version. `doctor`
+may still return the host's factual `/etc/os-release` version in machine-readable
+host diagnostics because hiding observed state would violate truthfulness; that
+fact is not a support or release promise.

@@ -26,7 +26,7 @@ current vertical slice.
 ./vortex adapters --json
 ./vortex artifact inspect ./scan.xml --type nmap-xml
 ./vortex plan "system health"
-./vortex plan "install package ripgrep" # simulation + root-required plan; no auto-sudo
+./vortex plan "install package ripgrep" # real preflight + root-required plan; no auto-sudo
 ./vortex "git status"
 
 # Optional desktop preview (same local sidecar; binds 0.0.0.0 for a dev preview)
@@ -53,14 +53,14 @@ VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
 | Real `shell=False` argv execution and process groups | Implemented + tested |
 | Redaction, output bounds, exit/signal evidence | Implemented + tested |
 | XDG local SQLite + tamper-evident audit chain | Implemented + tested |
-| Ubuntu/Debian context and factual tool probes | Implemented + tested |
+| Linux context and factual tool probes | Implemented + tested |
 | Engagement creation, canonical targets, scope gate | Implemented + tested |
 | Desktop planning/activity/reports/settings UI | Implemented + smoke-tested |
 | Python-owned local PTY sessions and cancellation | Implemented + tested |
 | Matrix binary rain and project-owned artwork | Implemented + accessible fallback |
 | Full PTY tabs/panes and shell integration | Planned |
 | Scoped nmap/curl planning and evidence parsers | Implemented + tested; tool availability varies |
-| Real apt preflight, impact parsing, and guarded package plans | Implemented + tested; Ubuntu VM mutation gate remains |
+| Real apt preflight, impact parsing, and guarded package plans | Implemented + tested; Linux VM mutation gate remains |
 | Systemd state parsing and guarded two-step mutation plans | Implemented + tested; host context varies |
 | Nuclei/content-discovery active adapters | Planned; reviewed templates/wordlists required |
 | Local model / specialist worker bus | Planned; provider disabled by default |
