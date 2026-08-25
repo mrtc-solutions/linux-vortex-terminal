@@ -1,0 +1,71 @@
+.TH VORTEX 1 "August 2026" "Linux Vortex Terminal 0.1.0" "User Commands"
+.SH NAME
+vortex \- local-first Linux cybersecurity and operations workbench
+.SH SYNOPSIS
+.B vortex
+.RI [ options ] " request"
+.br
+.B vortex plan
+.RI [ options ] " request"
+.br
+.B vortex run
+.RI plan-id
+.SH DESCRIPTION
+Linux Vortex Terminal turns a natural-language objective into a typed, inspectable
+plan. It probes the real tools installed on the host, requires explicit approval,
+and executes through one local process authority. It never treats model text as
+shell authority and never fabricates tool output or findings.
+.PP
+Active security operations require an authorized engagement and a declared scope.
+Credential attacks, exploitation, persistence, evasion, malware, exfiltration,
+denial of service, and unrestricted scanning are blocked.
+.SH COMMANDS
+.TP
+.BR ask
+Explain or diagnose without executing.
+.TP
+.BR plan
+Create and print a saved plan without executing.
+.TP
+.BR doctor
+Show factual Linux context and package/model availability.
+.TP
+.BR tools
+Probe installed tools and versions.
+.TP
+.BR engagement
+Create or list an authorization scope.
+.TP
+.BR run
+Run one approved plan, or an explicitly attributed direct argv after `--`.
+.SH OPTIONS
+.TP
+.BR --json
+Write schema-versioned machine output.
+.TP
+.BR --cwd=DIR
+Use DIR as the working-directory scope.
+.TP
+.BR --offline
+Disable model and outbound capabilities.
+.TP
+.BR --non-interactive
+Refuse unless exact plan digest and approval token are supplied.
+.TP
+.BR --allow-root
+Explicitly allow one invocation as UID 0; no password is captured.
+.SH FILES
+.TP
+.I ~/.config/vortex
+Configuration, owner-only.
+.TP
+.I ~/.local/share/vortex/vortex.db
+Local SQLite history and audit events, owner-only.
+.SH EXIT STATUS
+0 success, 1 general failure, 2 invalid usage, 3 unavailable, 4 policy denied,
+5 confirmation required/declined, 6 command non-zero, 7 interrupted, 8 timeout,
+9 integrity failure, and 10 incompatible state. See docs/EXIT_CODES.md.
+.SH SECURITY
+No automatic sudo, cloud model, telemetry, public listener, runtime plugin, or
+remote-control mode is provided. Use only on systems and targets you are
+authorized to administer or assess.
