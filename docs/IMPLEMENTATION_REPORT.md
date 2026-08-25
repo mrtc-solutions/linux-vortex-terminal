@@ -40,6 +40,9 @@
   parsing. Guarded mutations now stop when fresh preflight/state is missing or
   unsafe, and completed operations expose structured package/service facts to
   analysis and reports. No privileged mutation was run on the shared host.
+- Added real read-only Docker/Podman runtime detection and SSH effective-config
+  diagnostics. Missing runtimes produce no fabricated container state; SSH
+  diagnostics use `ssh -G` only and never connect or read private keys.
 - Added tests for planner honesty, shell metacharacters, target injection, missing
   tools, scope denial, audit tamper detection, real exit status, redaction,
   output caps, cancellation, offline mode, URL/port scope, plan tampering, and
@@ -51,7 +54,7 @@
 
 ```text
 python3 -m py_compile backend/vortex_backend.py cli/vortex.py
-python3 -m unittest discover -s tests -v  # 27 tests
+python3 -m unittest discover -s tests -v  # 30 tests
 ./vortex doctor --json
 ./vortex plan "system health"
 ./vortex run --yes -- /bin/echo hello

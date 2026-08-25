@@ -428,8 +428,8 @@ attributed `operator_direct`, approval-gated/logged, and can invoke a shell as a
 literal operator-selected executable.
 
 Remaining Priority 2 work is a complete adapter package layout, DNS/redirect
-revalidation, nmap XML/HTTP parsers, apt/systemd mutation adapters, parser fuzzing,
-and disposable-VM acceptance evidence.
+revalidation, stronger container/SSH output parsers, nmap XML/HTTP hardening,
+parser fuzzing, and disposable Linux acceptance evidence.
 
 ### Priority 2 — artifact parsing and evidence provenance
 
@@ -510,3 +510,13 @@ branding, and capability claims must not name a Linux release version. `doctor`
 may still return the host's factual `/etc/os-release` version in machine-readable
 host diagnostics because hiding observed state would violate truthfulness; that
 fact is not a support or release promise.
+
+### Priority 2 — Linux container and SSH diagnostics
+
+**Implemented in the current iteration.** Added factual Docker/Podman runtime
+selection with read-only `ps --all --no-trunc` inspection and explicit missing-
+runtime handling. Added read-only SSH effective-configuration resolution using
+`ssh -G`; it does not connect, authenticate, read private keys, or harvest agent
+secrets. Both adapters run only real installed host tools and are represented in
+the adapter registry. Full container log parsers, SSH connection diagnostics,
+and runtime-specific acceptance tests remain separate work.

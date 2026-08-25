@@ -96,6 +96,8 @@ TOOL_CATALOG: dict[str, dict[str, Any]] = {
     "dpkg-query": {"family": "packages", "probe": ["--version"], "role": "installed package facts"},
     "dpkg": {"family": "packages", "probe": ["--version"], "role": "dpkg consistency facts"},
     "apt-mark": {"family": "packages", "probe": ["--version"], "role": "held package facts"},
+    "docker": {"family": "containers", "probe": ["--version"], "role": "container inspection"},
+    "podman": {"family": "containers", "probe": ["--version"], "role": "container inspection"},
 }
 
 
@@ -107,6 +109,8 @@ ADAPTER_MANIFESTS: dict[str, dict[str, Any]] = {
     "linux.systemd.inspect": {"version": "1", "family": "systemd", "tool": "systemctl+journalctl", "risk": "low", "network_class": "no-network", "operation": "read-only unit and journal facts", "limits": {"journal_lines": 80, "timeout_seconds": 30}},
     "linux.systemd.mutate": {"version": "1", "family": "systemd", "tool": "systemctl", "risk": "high", "network_class": "no-network", "operation": "guarded service mutation", "privilege": "root-required", "limits": {"timeout_seconds": 60}},
     "linux.packages.apt": {"version": "1", "family": "packages", "tool": "apt-get+apt-cache+dpkg-query+dpkg+apt-mark", "risk": "high", "network_class": "outbound-mutation", "operation": "guarded apt package operation", "privilege": "root-required", "limits": {"timeout_seconds": 900}},
+    "linux.containers.inspect": {"version": "1", "family": "containers", "tool": "docker+podman", "risk": "low", "network_class": "loopback-only", "operation": "read-only container inspection", "limits": {"output_cap_bytes": 524288, "timeout_seconds": 30}},
+    "linux.ssh.config": {"version": "1", "family": "ssh-diagnostics", "tool": "ssh", "risk": "low", "network_class": "no-network", "operation": "read-only SSH configuration resolution", "limits": {"timeout_seconds": 15}},
     "security.nmap.discovery": {"version": "1", "family": "authorized-reconnaissance", "tool": "nmap", "risk": "high", "network_class": "outbound-read", "operation": "scoped service discovery", "limits": {"max_cidr_hosts": 256, "max_ports": 32, "timing": "T2", "timeout_seconds": 120}},
     "security.http.headers": {"version": "1", "family": "authorized-http", "tool": "curl", "risk": "high", "network_class": "outbound-read", "operation": "bounded HTTP/TLS header discovery", "limits": {"max_time_seconds": 15, "max_redirects": 0}},
 }
@@ -1110,6 +1114,34 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             notes.append(f"{argv[0]} would be invoked with {len(argv) - 1} argument(s). No command will be executed by ask or plan.")
         status = "clarified"
+    elif re.search(r"\bssh\b", lower) and any(word in lower for word in ("diagnos", "config", "connection", "connect")):
+        kind = "ssh_diagnostics"
+        target_match = (
+            re.search(r"\bssh\s+(?:config|diagnostics?|connection)\s+(?:for|to)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
+            or re.search(r"\bssh\s+(?:to|for)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
+            or re.search(r"\bssh\s+(?:config|diagnostics?|connection)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
+        )
+        target = target_match.group(1) if target_match else None
+        if not target:
+            status = "clarified"
+            notes.append("Provide one SSH host alias or hostname. Vortex will resolve configuration only and will not read key contents or connect.")
+        elif probe_executable("ssh")["state"] != "installed":
+            status = "unavailable"; missing.append("ssh"); notes.append("TOOL MISSING: ssh; no connection facts were observed.")
+        else:
+            specs.append(adapter_command("linux.ssh.config", "ssh", ["ssh", "-G", "--", target], cwd, required="ssh", explanation=f"Resolve the effective SSH configuration for {target}; -G does not open a network connection or authenticate."))
+            status = "planned"
+            notes += ["Read-only SSH configuration diagnostics; private key contents, passwords, and agent secrets are not read.", "This adapter does not connect to the target. A real connection requires a separate explicitly approved plan."]
+    elif any(word in lower for word in ("docker", "podman", "container")):
+        kind = "container_inspection"
+        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        if not runtime:
+            status = "unavailable"
+            missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"])
+            notes.append("TOOL MISSING: neither Docker nor Podman was found; no container state was observed.")
+        else:
+            specs.append(adapter_command("linux.containers.inspect", runtime, [runtime, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List real {runtime} containers without changing their state."))
+            status = "planned"
+            notes += [f"Detected runtime: {runtime}. The command is read-only and does not start, stop, remove, or prune containers.", "Container daemon output is observed only; no image or vulnerability conclusion is inferred."]
     elif parse_package_request(lower)[0]:
         package_operation, package_name = parse_package_request(lower)
         kind = "package_operation"
@@ -1339,7 +1371,7 @@ class ExecutionManager:
         plan = authoritative
         if plan["status"] != "planned":
             raise PolicyError("plan is not executable in its current state")
-        if offline and any(spec.get("network_class") != "no-network" for spec in plan.get("commands", [])):
+        if offline and any(spec.get("network_class") not in ("no-network", "loopback-only") for spec in plan.get("commands", [])):
             raise PolicyError("offline mode blocks this network-effecting plan")
         if any(spec.get("privilege") == "root-required" for spec in plan.get("commands", [])) and os.getuid() != 0:
             raise PermissionError("this plan requires root; rerun the reviewed plan with sudo vortex --allow-root run <plan-id>")

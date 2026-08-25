@@ -27,6 +27,24 @@ class VortexCoreTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_container_detection_never_fabricates_runtime_state(self):
+        plan = build_plan(self.store, 'inspect docker containers', self.tmp.name)
+        if not any(probe_executable(name)['state'] == 'installed' for name in ('docker', 'podman')):
+            self.assertEqual(plan['status'], 'unavailable')
+            self.assertEqual(plan['commands'], [])
+            self.assertIn('TOOL MISSING', ' '.join(plan['notes']))
+        else:
+            self.assertEqual(plan['commands'][0]['adapter_id'], 'linux.containers.inspect')
+            self.assertEqual(plan['commands'][0]['network_class'], 'loopback-only')
+
+    def test_ssh_config_adapter_is_read_only_and_non_networking(self):
+        plan = build_plan(self.store, 'show ssh config for labhost', self.tmp.name)
+        self.assertEqual(plan['status'], 'planned')
+        self.assertEqual(plan['kind'], 'ssh_diagnostics')
+        self.assertEqual(plan['commands'][0]['adapter_id'], 'linux.ssh.config')
+        self.assertEqual(plan['commands'][0]['argv'], ['ssh', '-G', '--', 'labhost'])
+        self.assertEqual(plan['commands'][0]['network_class'], 'no-network')
+
     def test_planner_is_deterministic_and_read_only(self):
         plan = build_plan(self.store, "system health", self.tmp.name)
         self.assertEqual(plan["source"], "deterministic")
