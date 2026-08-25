@@ -9,10 +9,13 @@ execution; the renderer is never allowed to spawn a process.
 from __future__ import annotations
 
 import argparse
+import errno
+import fcntl
 import hashlib
 import ipaddress
 import json
 import os
+import pty
 import queue
 import re
 import secrets
@@ -20,11 +23,14 @@ import shutil
 import signal
 import sqlite3
 import stat
+import struct
 import subprocess
 import sys
+import termios
 import threading
 import time
 import urllib.parse
+from collections import deque
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -390,8 +396,22 @@ class Store:
                 id TEXT PRIMARY KEY, operation_id TEXT, rating INTEGER, correction TEXT,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, shell TEXT NOT NULL,
+                cwd TEXT NOT NULL, command_json TEXT NOT NULL, pid INTEGER,
+                cols INTEGER NOT NULL, rows INTEGER NOT NULL, status TEXT NOT NULL,
+                started_at TEXT NOT NULL, ended_at TEXT, last_activity TEXT,
+                exit_code INTEGER, signal INTEGER, termination_reason TEXT
+            );
             INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', '1');
             """)
+    def mark_stale_sessions(self) -> None:
+        # A sidecar restart cannot prove that an old PTY is still alive. This is
+        # called by the session authority at startup, not by every read-only
+        # Store client, so a concurrent CLI inspection cannot invalidate a live
+        # desktop session.
+        with self.lock, self.connect() as db:
+            db.execute("UPDATE sessions SET status='unknown_after_crash', termination_reason='sidecar_restart' WHERE status IN ('starting','running')")
 
     def append_audit(self, event_type: str, payload: dict[str, Any]) -> str:
         with self.lock, self.connect() as db:
@@ -472,6 +492,23 @@ class Store:
             rows = db.execute("SELECT result_json FROM operations ORDER BY COALESCE(ended_at, started_at) DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def save_session(self, session: dict[str, Any]) -> None:
+        with self.lock, self.connect() as db:
+            db.execute("INSERT INTO sessions(id,name,shell,cwd,command_json,pid,cols,rows,status,started_at,ended_at,last_activity,exit_code,signal,termination_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (session["id"], session["name"], session["shell"], session["cwd"], canonical(session.get("command", [])), session.get("pid"), session["cols"], session["rows"], session["status"], session["started_at"], session.get("ended_at"), session.get("last_activity"), session.get("exit_code"), session.get("signal"), session.get("termination_reason")))
+
+    def update_session(self, session: dict[str, Any]) -> None:
+        with self.lock, self.connect() as db:
+            db.execute("UPDATE sessions SET name=?, shell=?, cwd=?, command_json=?, pid=?, cols=?, rows=?, status=?, started_at=?, ended_at=?, last_activity=?, exit_code=?, signal=?, termination_reason=? WHERE id=?", (session["name"], session["shell"], session["cwd"], canonical(session.get("command", [])), session.get("pid"), session["cols"], session["rows"], session["status"], session["started_at"], session.get("ended_at"), session.get("last_activity"), session.get("exit_code"), session.get("signal"), session.get("termination_reason"), session["id"]))
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM sessions ORDER BY started_at DESC LIMIT 100").fetchall()
+        return [{"id": r["id"], "name": r["name"], "shell": r["shell"], "cwd": r["cwd"], "command": json.loads(r["command_json"]), "pid": r["pid"], "cols": r["cols"], "rows": r["rows"], "status": r["status"], "started_at": r["started_at"], "ended_at": r["ended_at"], "last_activity": r["last_activity"], "exit_code": r["exit_code"], "signal": r["signal"], "termination_reason": r["termination_reason"]} for r in rows]
+
+    def get_session_record(self, session_id: str) -> dict[str, Any] | None:
+        return next((item for item in self.list_sessions() if item["id"] == session_id), None)
+
+
     def create_engagement(self, item: dict[str, Any]) -> None:
         with self.lock, self.connect() as db:
             db.execute("INSERT INTO engagements VALUES (?,?,?,?,?,?,?,?)", (item["id"], item["created_at"], item["expires_at"], item["name"], item["authorization"], canonical(item["targets"]), canonical(item["classes"]), item["status"]))
@@ -484,6 +521,269 @@ class Store:
 
     def get_engagement(self, engagement_id: str) -> dict[str, Any] | None:
         return next((x for x in self.list_engagements() if x["id"] == engagement_id), None)
+
+
+class SessionManager:
+    """Own Linux PTYs, process groups, live event buffers, and idle cleanup."""
+
+    def __init__(self, store: Store, idle_seconds: int | None = None):
+        self.store = store
+        self.store.mark_stale_sessions()
+        self.idle_seconds = idle_seconds if idle_seconds is not None else int(os.environ.get("VORTEX_SESSION_IDLE_SECONDS", "1800"))
+        self.sessions: dict[str, dict[str, Any]] = {}
+        self.events: dict[str, deque[dict[str, Any]]] = {}
+        self.conditions: dict[str, threading.Condition] = {}
+        self.lock = threading.RLock()
+        self._stop = threading.Event()
+        self._reaper = threading.Thread(target=self._reap_idle, name="vortex-session-reaper", daemon=True)
+        self._reaper.start()
+
+    @staticmethod
+    def _size(value: Any, default: int) -> int:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            value = default
+        return max(2, min(value, 500))
+
+    def _shell_path(self, requested: str | None) -> str:
+        value = requested or os.environ.get("SHELL") or "/bin/sh"
+        if not isinstance(value, str) or "\x00" in value:
+            raise PolicyError("invalid shell")
+        # Shells are executable identities, not shell text. Only a real
+        # installed executable can become the child argv[0].
+        identity = probe_executable(value)
+        if identity.get("state") != "installed" or not identity.get("realpath"):
+            raise PolicyError("requested shell is unavailable or blocked")
+        return identity["realpath"]
+
+    def create(self, name: str | None = None, cwd_raw: str | None = None, shell: str | None = None, cols: Any = 100, rows: Any = 30, command: list[str] | None = None) -> dict[str, Any]:
+        cwd = validate_cwd(cwd_raw)
+        shell_path = self._shell_path(shell)
+        cols_i, rows_i = self._size(cols, 100), self._size(rows, 30)
+        argv = command or [shell_path]
+        if not isinstance(argv, list) or not argv or any(not isinstance(arg, str) or "\x00" in arg for arg in argv):
+            raise PolicyError("invalid session argv")
+        if not os.path.isabs(argv[0]):
+            argv[0] = shell_path
+        identity = probe_executable(argv[0])
+        if identity.get("state") != "installed":
+            raise PolicyError("session executable is unavailable or blocked")
+        session_id = secrets.token_hex(16)
+        started = now_iso()
+        session: dict[str, Any] = {"id": session_id, "name": redact(str(name or "local shell"))[:120], "shell": shell_path, "cwd": str(cwd), "command": argv, "pid": None, "cols": cols_i, "rows": rows_i, "status": "starting", "started_at": started, "ended_at": None, "last_activity": started, "exit_code": None, "signal": None, "termination_reason": None}
+        # pty.fork creates a controlling terminal for the child. The child
+        # executes immediately with argv/env and never interprets a command
+        # string; the parent retains the master for streaming and resize.
+        env = minimal_env(True)
+        env.setdefault("TERM", "xterm-256color")
+        env["COLUMNS"], env["LINES"] = str(cols_i), str(rows_i)
+        pid, master = pty.fork()
+        if pid == 0:
+            try:
+                os.chdir(str(cwd))
+                os.execve(argv[0], argv, env)
+            except BaseException as exc:
+                try: os.write(2, (f"Vortex session exec failed: {exc}\n").encode("utf-8", "replace"))
+                except OSError: pass
+                os._exit(127)
+        os.set_blocking(master, False)
+        session["pid"] = pid
+        session["status"] = "running"
+        session["_pid"] = pid
+        session["_master"] = master
+        session["_event_seq"] = 0
+        with self.lock:
+            self.sessions[session_id] = session
+            self.events[session_id] = deque(maxlen=2000)
+            self.conditions[session_id] = threading.Condition(self.lock)
+            self.store.save_session(session)
+        self._resize_fd(master, cols_i, rows_i)
+        threading.Thread(target=self._read_loop, args=(session_id,), name=f"vortex-pty-read-{session_id[:6]}", daemon=True).start()
+        threading.Thread(target=self._wait_loop, args=(session_id,), name=f"vortex-pty-wait-{session_id[:6]}", daemon=True).start()
+        self.store.append_audit("session_started", {"session_id": session_id, "shell": shell_path, "cwd": str(cwd)})
+        return self.info(session_id)
+
+    def _resize_fd(self, fd: int, cols: int, rows: int) -> None:
+        try:
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        except OSError:
+            pass
+
+    def _append_event(self, session_id: str, text: str, stream: str = "pty") -> None:
+        text = redact(sanitize(text))
+        if not text:
+            return
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return
+            session["_event_seq"] += 1
+            session["last_activity"] = now_iso()
+            event = {"seq": session["_event_seq"], "at": session["last_activity"], "stream": stream, "data": text}
+            self.events[session_id].append(event)
+            self.store.update_session(session)
+            self.conditions[session_id].notify_all()
+
+    def _read_loop(self, session_id: str) -> None:
+        while True:
+            with self.lock:
+                session = self.sessions.get(session_id)
+                fd = session.get("_master") if session else None
+            if fd is None:
+                return
+            try:
+                raw = os.read(fd, 65536)
+                if not raw:
+                    return
+                self._append_event(session_id, raw.decode("utf-8", errors="replace"))
+            except OSError as exc:
+                if exc.errno in (errno.EIO, errno.EBADF):
+                    return
+                if exc.errno == errno.EAGAIN:
+                    time.sleep(0.02)
+                    continue
+                self._append_event(session_id, f"PTY read error: {exc}", "system")
+                return
+
+    def _wait_loop(self, session_id: str) -> None:
+        with self.lock:
+            session = self.sessions.get(session_id)
+            pid = session.get("_pid") if session else None
+        if not pid:
+            return
+        try:
+            _, wait_status = os.waitpid(pid, 0)
+            returncode = os.waitstatus_to_exitcode(wait_status)
+        except ChildProcessError:
+            returncode = 255
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return
+            session["ended_at"] = now_iso()
+            session["exit_code"] = returncode if returncode >= 0 else None
+            session["signal"] = -returncode if returncode < 0 else None
+            if session.get("termination_reason") == "cancelled":
+                session["status"] = "cancelled"
+            elif returncode == 0:
+                session["status"] = "succeeded"; session["termination_reason"] = "completed"
+            elif returncode < 0:
+                session["status"] = "interrupted"; session["termination_reason"] = "signal"
+            else:
+                session["status"] = "failed"; session["termination_reason"] = "non_zero_exit"
+            self.store.update_session(session)
+            self._append_event(session_id, f"\n[SESSION {session['status'].upper()}] exit={returncode}\n", "system")
+            fd = session.pop("_master", None)
+            session.pop("_pid", None)
+            if fd is not None:
+                try: os.close(fd)
+                except OSError: pass
+            self.conditions[session_id].notify_all()
+        self.store.append_audit("session_finished", {"session_id": session_id, "status": session["status"], "exit_code": session["exit_code"], "signal": session["signal"]})
+
+    def info(self, session_id: str) -> dict[str, Any] | None:
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if session:
+                return {key: value for key, value in session.items() if not key.startswith("_")}
+        return self.store.get_session_record(session_id)
+
+    def list(self) -> list[dict[str, Any]]:
+        persisted = {item["id"]: item for item in self.store.list_sessions()}
+        with self.lock:
+            for session_id in list(self.sessions):
+                item = self.info(session_id)
+                if item: persisted[session_id] = item
+        return sorted(persisted.values(), key=lambda x: x.get("started_at") or "", reverse=True)[:100]
+
+    def events_since(self, session_id: str, since: Any = 0) -> dict[str, Any]:
+        try: since_i = max(0, int(since))
+        except (TypeError, ValueError): since_i = 0
+        with self.lock:
+            if session_id not in self.sessions:
+                record = self.store.get_session_record(session_id)
+                return {"session": record, "events": [], "next_seq": 0} if record else {"session": None, "events": [], "next_seq": 0}
+            session = self.sessions[session_id]
+            return {"session": self.info(session_id), "events": [event for event in self.events[session_id] if event["seq"] > since_i], "next_seq": session["_event_seq"]}
+
+    def write(self, session_id: str, data: str) -> dict[str, Any]:
+        if not isinstance(data, str) or len(data) > 65536 or "\x00" in data:
+            raise PolicyError("session input must be text under 64 KiB")
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if not session or session.get("status") != "running" or session.get("_master") is None:
+                raise PolicyError("session is not running")
+            try:
+                os.write(session["_master"], data.encode("utf-8"))
+            except OSError as exc:
+                raise PolicyError(f"session input failed: {exc}") from exc
+            session["last_activity"] = now_iso()
+            self.store.update_session(session)
+            return self.info(session_id)  # type: ignore[return-value]
+
+    def resize(self, session_id: str, cols: Any, rows: Any) -> dict[str, Any]:
+        cols_i, rows_i = self._size(cols, 100), self._size(rows, 30)
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if not session or session.get("_master") is None:
+                raise PolicyError("session is not available")
+            self._resize_fd(session["_master"], cols_i, rows_i)
+            session["cols"], session["rows"] = cols_i, rows_i
+            self.store.update_session(session)
+            return self.info(session_id)  # type: ignore[return-value]
+
+    def kill(self, session_id: str) -> bool:
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if not session or session.get("status") != "running":
+                return False
+            session["termination_reason"] = "cancelled"
+            pid = session.get("_pid") or session.get("pid")
+            if pid:
+                try: os.killpg(pid, signal.SIGINT)
+                except ProcessLookupError: pass
+            self.store.update_session(session)
+        # Interactive shells commonly handle SIGINT as an input event instead
+        # of exiting. Escalate the whole session group so kill/idle cleanup never
+        # leaves a descendant behind.
+        threading.Thread(target=self._escalate_kill, args=(session_id, pid), daemon=True).start()
+        return True
+
+    def _escalate_kill(self, session_id: str, pid: int | None) -> None:
+        if not pid:
+            return
+        for sig, delay in ((signal.SIGTERM, 0.4), (signal.SIGKILL, 0.8)):
+            time.sleep(delay)
+            with self.lock:
+                session = self.sessions.get(session_id)
+                if not session or session.get("status") != "running":
+                    return
+            try: os.killpg(pid, sig)
+            except ProcessLookupError: return
+
+    def _reap_idle(self) -> None:
+        while not self._stop.wait(15):
+            cutoff = time.time() - self.idle_seconds
+            for item in self.list():
+                if item.get("status") != "running":
+                    continue
+                try: last = datetime.fromisoformat(item["last_activity"]).timestamp()
+                except (KeyError, TypeError, ValueError): continue
+                if last < cutoff:
+                    self.kill(item["id"])
+                    self.store.append_audit("session_idle_reaped", {"session_id": item["id"]})
+
+    def shutdown(self) -> None:
+        self._stop.set()
+        active = [item["id"] for item in self.list() if item.get("status") == "running"]
+        for session_id in active:
+            self.kill(session_id)
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            if not any((self.info(session_id) or {}).get("status") == "running" for session_id in active):
+                break
+            time.sleep(.05)
 
 
 class PolicyError(ValueError):
@@ -984,6 +1284,7 @@ def parse_expiry(raw: Any, *, default_seconds: int) -> str:
 class VortexHandler(BaseHTTPRequestHandler):
     store: Store
     executor: ExecutionManager
+    sessions: SessionManager
     frontend: Path
     token: str | None = None
     server_version = "VortexSidecar/0.1"
@@ -1023,6 +1324,15 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/health": return self._json(200, {"ok": True, "version": APP_VERSION, "backend": "online"})
             if path == "/api/doctor": return self._json(200, {"doctor": detect_context()})
             if path == "/api/tools": return self._json(200, {"tools": [probe_executable(name) | {"family": meta["family"], "role": meta["role"]} for name, meta in TOOL_CATALOG.items()]})
+            if path == "/api/sessions": return self._json(200, {"sessions": self.sessions.list()})
+            if path.startswith("/api/sessions/"):
+                parts = path.split("/")
+                if len(parts) == 5 and parts[-1] == "events":
+                    query = urllib.parse.parse_qs(parsed.query)
+                    return self._json(200, self.sessions.events_since(parts[-2], query.get("since", [0])[0]))
+                if len(parts) == 4:
+                    session = self.sessions.info(parts[-1])
+                    return self._json(200 if session else 404, {"session": session} if session else {"error": {"code": "not_found", "message": "session not found"}})
             if path == "/api/history": return self._json(200, {"history": self.store.list_history()})
             if path == "/api/engagements": return self._json(200, {"engagements": self.store.list_engagements()})
             if path == "/api/audit/verify": return self._json(200, {"audit": self.store.verify_audit()})
@@ -1060,6 +1370,21 @@ class VortexHandler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         try:
             body = self._read_json()
+            if path == "/api/sessions":
+                session = self.sessions.create(body.get("name"), body.get("cwd"), body.get("shell"), body.get("cols", 100), body.get("rows", 30))
+                return self._json(201, {"session": session})
+            if path.startswith("/api/sessions/"):
+                parts = path.split("/")
+                if len(parts) == 5 and parts[-1] == "input":
+                    session = self.sessions.write(parts[-2], body.get("data"))
+                    return self._json(200, {"session": session})
+                if len(parts) == 5 and parts[-1] == "resize":
+                    session = self.sessions.resize(parts[-2], body.get("cols"), body.get("rows"))
+                    return self._json(200, {"session": session})
+                if len(parts) == 5 and parts[-1] == "kill":
+                    if not self.sessions.kill(parts[-2]):
+                        return self._json(404, {"error": {"code": "not_running", "message": "session is not running"}})
+                    return self._json(202, {"kill_requested": True, "session_id": parts[-2]})
             if path == "/api/plan":
                 request = body.get("request")
                 if not isinstance(request, str):
@@ -1105,12 +1430,18 @@ class VortexHandler(BaseHTTPRequestHandler):
 def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -> None:
     store = Store()
     handler = VortexHandler
-    handler.store = store; handler.executor = ExecutionManager(store); handler.frontend = Path(__file__).resolve().parent.parent / "frontend"; handler.token = token
+    handler.store = store; handler.executor = ExecutionManager(store); handler.sessions = SessionManager(store); handler.frontend = Path(__file__).resolve().parent.parent / "frontend"; handler.token = token
     server = ThreadingHTTPServer((host, port), handler)
+    def stop_on_term(_signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop_on_term)
+    signal.signal(signal.SIGHUP, stop_on_term)
     print(json.dumps({"backend": "online", "host": host, "port": server.server_port, "version": APP_VERSION}), flush=True)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
-    finally: server.server_close()
+    finally:
+        handler.sessions.shutdown()
+        server.server_close()
 
 
 if __name__ == "__main__":

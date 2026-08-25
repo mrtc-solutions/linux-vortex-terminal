@@ -50,12 +50,20 @@ bounded, and redacted.
 
 ## Process safety
 
-Commands are invoked with `subprocess.Popen(..., shell=False)`, `start_new_session`
-and `close_fds=True`. The environment is rebuilt from a small allowlist. The
-executor reads stdout and stderr concurrently, caps output, sends TERM then
-KILL to the process group on timeout, and records `exit_code`, `signal`, and
-`termination_reason` separately. PTY sessions and cgroup/systemd scopes are
-planned follow-up work, not claims of this slice.
+One-shot commands are invoked with `subprocess.Popen(..., shell=False)`,
+`start_new_session` and `close_fds=True`. The environment is rebuilt from a
+small allowlist. The executor reads stdout and stderr concurrently, caps output,
+sends TERM then KILL to the process group on timeout, and records `exit_code`,
+`signal`, and `termination_reason` separately.
+
+Priority 1 also adds `SessionManager`: Linux `pty.fork()` creates a controlling
+terminal, a dedicated process group, a bounded in-memory event ring, input,
+resize, cancellation escalation, and a reaper. Session output is sanitized and
+redacted before transport; input is never persisted. Session metadata is stored,
+but old `running` sessions become `unknown_after_crash` when a new sidecar owns
+the store. The desktop uses authenticated event polling over the sidecar API.
+PTY multiplexing, terminal escape rendering, cgroup/systemd scopes, and durable
+remote attach are separate follow-up work.
 
 ## Desktop security
 

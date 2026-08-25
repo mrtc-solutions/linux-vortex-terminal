@@ -1,6 +1,6 @@
 /* Vortex renderer. In Electron all requests go through the typed preload bridge;
    the relative fetch fallback keeps the local preview useful without Electron. */
-const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, matrix: 'medium', plain: false };
+const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, session: null, sessionSeq: 0, sessionTimer: null, matrix: 'medium', plain: false };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 const fmtDate = (value) => { if (!value) return '—'; try { return new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(value)); } catch { return value; } };
@@ -12,7 +12,7 @@ const api = async (path, options = {}) => {
   return payload;
 };
 function toast(message, bad = false) { const el = $('toast'); el.textContent = message; el.style.borderColor = bad ? 'var(--red)' : 'var(--cyan)'; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 4200); }
-function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); }
+function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions(); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); }
 function statusClass(status) { return ['succeeded','success'].includes(status) ? 'badge-green' : ['failed','timed_out','interrupted'].includes(status) ? 'badge-red' : status === 'planned' ? 'badge-amber' : 'badge-muted'; }
 function statusLabel(status) { return ({succeeded:'VERIFIED OK',failed:'FAILED',timed_out:'TIMED OUT',interrupted:'INTERRUPTED',unavailable:'TOOL MISSING',running:'RUNNING',started:'STARTED',planned:'CONFIRM REQUIRED',clarified:'PLAN ONLY',rejected:'BLOCKED',unknown_after_crash:'UNKNOWN AFTER CRASH'}[status] || String(status || 'STANDBY').toUpperCase()); }
 async function loadDoctor() { try { const data = await api('/api/doctor'); state.doctor = data.doctor; renderDoctor(); } catch (e) { $('side-context').textContent = 'backend offline'; toast(e.message, true); } }
@@ -40,5 +40,74 @@ function renderAnalysis(op) { const a = op.analysis || {}; const timeline = (a.c
 async function createEngagement() { const name = $('eng-name').value.trim(), authorization = $('eng-auth').value.trim(), target = $('eng-target').value.trim(); if (!name || !authorization || !target) return toast('Name, authorization reference, and target are required.', true); try { const data = await api('/api/engagements',{method:'POST',body:{name,authorization,targets:[target],classes:['reconnaissance','defensive-analysis']}}); state.engagements.unshift(data.engagement); state.activeEngagementId = data.engagement.id; renderEngagements(); $('engagement-form').hidden=true; toast('Engagement scope created. Targets are rechecked at execution.'); } catch(e) { toast(e.message,true); } }
 async function verifyAudit() { try { const data = await api('/api/audit/verify'); const el = $('audit-result'); el.className = `audit-strip ${data.audit.valid ? 'valid':'invalid'}`; el.innerHTML = `<span class="status-dot"></span> ${data.audit.valid ? `AUDIT CHAIN VERIFIED · ${data.audit.checked} event(s)` : `AUDIT CHAIN INVALID · ${esc(data.audit.error)}`}`; } catch(e) { toast(e.message,true); } }
 function setupMatrix() { const canvas = $('matrix'), ctx = canvas.getContext('2d'); let columns = [], frame = 0; function resize(){canvas.width=innerWidth;canvas.height=innerHeight;columns=Array(Math.ceil(canvas.width/17)).fill(0).map(()=>Math.random()*-40)} function tick(){ if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; } if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 4 : 2)) !== 0) return; ctx.fillStyle='rgba(10,10,12,.09)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.font='12px monospace';ctx.fillStyle='rgba(0,212,170,.54)';columns.forEach((y,i)=>{ctx.fillText(Math.random()>.5?'1':'0',i*17,y*17);if(y*17>canvas.height && Math.random()>.975)columns[i]=0;columns[i]++});} resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
-function init() { setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown',e=>{if(e.key==='Enter'){ $('request-input').value=e.target.value;makePlan(e.target.value); }}); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function renderSessionState() {
+  const session = state.session;
+  const running = session?.status === 'running';
+  $('session-status').textContent = session ? statusLabel(session.status) : 'NO PTY SESSION';
+  $('session-status').className = `session-status ${running ? 'live' : session ? 'ended' : ''}`;
+  $('open-session').hidden = running;
+  $('kill-session').hidden = !running;
+  $('terminal-input').disabled = !running;
+  $('terminal-input').placeholder = running ? 'Type into the active local PTY…' : 'Open a shell to type into the real PTY…';
+  $('terminal-hint').textContent = running ? 'ENTER TO SEND · CTRL-C INTERRUPTS' : 'OPEN SESSION FIRST';
+}
+function appendTerminal(data) {
+  if (!data) return;
+  const output = $('terminal-output');
+  output.textContent += data;
+  output.scrollTop = output.scrollHeight;
+}
+async function loadSessions() {
+  try {
+    const data = await api('/api/sessions');
+    if (!state.session) {
+      const running = data.sessions.find(s => s.status === 'running');
+      if (running) { state.session = running; state.sessionSeq = 0; $('terminal-output').textContent = ''; }
+    }
+    renderSessionState();
+    if (state.session?.status === 'running') pollSession();
+  } catch (e) { toast(e.message, true); }
+}
+async function pollSession() {
+  if (state.sessionTimer || !state.session) return;
+  const tick = async () => {
+    state.sessionTimer = null;
+    if (!state.session) return;
+    try {
+      const data = await api(`/api/sessions/${encodeURIComponent(state.session.id)}/events?since=${state.sessionSeq}`);
+      (data.events || []).forEach(event => { appendTerminal(event.data); state.sessionSeq = Math.max(state.sessionSeq, event.seq); });
+      if (data.session) state.session = data.session;
+      renderSessionState();
+      if (state.session?.status === 'running') state.sessionTimer = setTimeout(tick, 220);
+    } catch (e) { toast(e.message, true); }
+  };
+  await tick();
+}
+async function openSession() {
+  $('open-session').disabled = true;
+  try {
+    const data = await api('/api/sessions', {method:'POST', body:{name:'local shell', cwd:state.doctor?.cwd || undefined, cols:100, rows:30}});
+    state.session = data.session; state.sessionSeq = 0; $('terminal-output').textContent = '';
+    renderSessionState(); pollSession(); $('terminal-input').focus();
+    toast('Real local PTY opened. Input stays inside the Python sidecar.');
+  } catch (e) { toast(e.message, true); }
+  finally { $('open-session').disabled = false; renderSessionState(); }
+}
+async function writeSession(data) {
+  if (!state.session || state.session.status !== 'running') return toast('Open a local PTY session first.', true);
+  try { await api(`/api/sessions/${encodeURIComponent(state.session.id)}/input`, {method:'POST', body:{data}}); }
+  catch (e) { toast(e.message, true); }
+}
+async function killSession() {
+  if (!state.session) return;
+  try { await api(`/api/sessions/${encodeURIComponent(state.session.id)}/kill`, {method:'POST', body:{}}); toast('PTY group cancellation requested.'); }
+  catch (e) { toast(e.message, true); }
+}
+async function resizeSession() {
+  if (!state.session || state.session.status !== 'running') return;
+  try { await api(`/api/sessions/${encodeURIComponent(state.session.id)}/resize`, {method:'POST', body:{cols:Math.max(40, Math.min(220, Math.floor(innerWidth / 8))), rows:30}}); }
+  catch (_) { /* resize is best effort while a PTY is closing */ }
+}
+
+function init() { setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown',e=>{if(e.ctrlKey && e.key.toLowerCase()==='c'){e.preventDefault();writeSession('\u0003');return;} if(e.key==='Enter'){e.preventDefault();const value=e.target.value;e.target.value='';writeSession(value+'\n'); }}); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);

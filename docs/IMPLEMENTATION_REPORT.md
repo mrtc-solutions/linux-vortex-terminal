@@ -20,6 +20,11 @@
   security boundary, and a branded renderer with optional binary matrix rain,
   project-owned artwork, plan approval, host context, tools, engagements,
   activity, reports, settings, and analysis timeline.
+- Implemented Priority 1 session foundations: Python-owned Linux PTYs with
+  controlling terminals, session metadata, bounded sanitized event polling,
+  input, resize, process-group cancellation with TERM/KILL escalation, idle
+  reaping, stale-session crash states, authenticated session endpoints, and a
+  desktop open/stop local-shell flow.
 - Added tests for planner honesty, shell metacharacters, target injection, missing
   tools, scope denial, audit tamper detection, real exit status, redaction,
   output caps, cancellation, offline mode, URL/port scope, plan tampering, and

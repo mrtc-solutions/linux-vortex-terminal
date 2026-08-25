@@ -8,11 +8,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import select
 import sys
 import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from backend.vortex_backend import (EXIT_CODES, ExecutionManager, Store, build_plan, detect_context, digest, now_iso, probe_executable, command_spec, validate_cwd, plan_digest)
+from backend.vortex_backend import (EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, detect_context, digest, now_iso, probe_executable, command_spec, validate_cwd, plan_digest)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps({"schema_version": 1, **value}, sort_keys=True, indent=2))
@@ -64,10 +65,30 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'run'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
+
+def attach_foreground_session(manager, session_id):
+    sequence = 0
+    while True:
+        payload = manager.events_since(session_id, sequence)
+        for event in payload.get('events', []):
+            sys.stdout.write(event.get('data', ''))
+            sys.stdout.flush()
+            sequence = max(sequence, event.get('seq', sequence))
+        session = payload.get('session')
+        if session and session.get('status') not in ('starting', 'running'):
+            return session
+        readable, _, _ = select.select([sys.stdin], [], [], 0.05)
+        if readable:
+            data = os.read(sys.stdin.fileno(), 65536)
+            if not data:
+                manager.kill(session_id)
+                return manager.info(session_id)
+            manager.write(session_id, data.decode('utf-8', errors='replace'))
+
 
 def main(argv=None):
     argv = _normalize_args(sys.argv[1:] if argv is None else argv)
@@ -94,6 +115,7 @@ def main(argv=None):
     rprt = sub.add_parser('report'); rprt.add_argument('history_id')
     c = sub.add_parser('completion'); c.add_argument('shell', choices=['bash','zsh','fish'])
     t = sub.add_parser('theme'); t.add_argument('action', choices=['show','preview','export','install','uninstall'], nargs='?', default='show')
+    sess = sub.add_parser('session'); sess.add_argument('action', choices=['new','list','attach','kill'], nargs='?', default='new'); sess.add_argument('session_id', nargs='?'); sess.add_argument('--shell')
     e = sub.add_parser('engagement'); e.add_argument('action', choices=['list','create']); e.add_argument('--name'); e.add_argument('--authorization'); e.add_argument('--target', action='append')
     n = sub.add_parser('_request', help=argparse.SUPPRESS); n.add_argument('request', nargs='+')
     sub._choices_actions = [action for action in sub._choices_actions if action.dest != '_request']
@@ -105,6 +127,27 @@ def main(argv=None):
     try:
         if args.subcommand == 'doctor': emit({'doctor': detect_context()}, args.as_json); return EXIT_CODES['success']
         if args.subcommand == 'tools': emit({'tools': [{**probe_executable(n), 'family': m['family'], 'role': m['role']} for n,m in __import__('backend.vortex_backend', fromlist=['TOOL_CATALOG']).TOOL_CATALOG.items()]}, args.as_json); return 0
+        if args.subcommand == 'session':
+            if args.action == 'list':
+                emit({'sessions': store.list_sessions()}, args.as_json); return 0
+            if args.action in ('attach', 'kill'):
+                raise ValueError('session attach/kill requires the owning Vortex desktop sidecar; use the desktop session controls')
+            if not sys.stdin.isatty() and not args.non_interactive:
+                raise PermissionError('session new requires an interactive TTY')
+            sessions = SessionManager(store)
+            session = sessions.create(name='cli shell', cwd_raw=args.cwd, shell=args.shell)
+            if args.as_json:
+                print(json.dumps({'schema_version': 1, 'session': session}, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"[SESSION {session['id']}] real PTY attached", file=sys.stderr)
+            try:
+                result = attach_foreground_session(sessions, session['id'])
+            except KeyboardInterrupt:
+                sessions.kill(session['id']); raise
+            finally:
+                sessions.shutdown()
+            if args.as_json: emit({'session': result}, True)
+            return EXIT_CODES['success'] if result and result.get('status') == 'succeeded' else EXIT_CODES['command_failed']
         if args.subcommand == 'history':
             history = store.list_history()
             if args.action == 'show': history = [x for x in history if x['id'] == args.query]

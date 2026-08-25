@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from backend.vortex_backend import (
-    ExecutionManager, PolicyError, Store, build_plan, command_spec,
+    ExecutionManager, PolicyError, SessionManager, Store, build_plan, command_spec,
     digest, make_analysis, normalize_target, probe_executable, plan_digest, target_in_engagement,
 )
 
@@ -176,6 +176,30 @@ class VortexCoreTests(unittest.TestCase):
         result = self.store.get_operation(op["id"])
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(result["analysis"]["lifecycle"], "CANCELLED")
+
+    def test_real_pty_session_streams_resizes_and_kills(self):
+        cwd = Path(self.tmp.name)
+        sessions = SessionManager(self.store, idle_seconds=120)
+        try:
+            session = sessions.create(name="test-pty", cwd_raw=str(cwd), shell="/bin/sh", cols=80, rows=24, command=["/bin/sh", "-c", "printf pty-ready; sleep 10"])
+            self.assertEqual(session["status"], "running")
+            for _ in range(100):
+                events = sessions.events_since(session["id"])["events"]
+                if any("pty-ready" in event["data"] for event in events):
+                    break
+                time.sleep(.02)
+            self.assertTrue(any("pty-ready" in event["data"] for event in events))
+            self.assertEqual(sessions.resize(session["id"], 120, 40)["cols"], 120)
+            self.assertTrue(sessions.kill(session["id"]))
+            for _ in range(150):
+                result = sessions.info(session["id"])
+                if result and result["status"] not in ("starting", "running"):
+                    break
+                time.sleep(.02)
+            self.assertEqual(result["status"], "cancelled")
+            self.assertEqual(result["termination_reason"], "cancelled")
+        finally:
+            sessions.shutdown()
 
     def test_analysis_does_not_invent_findings(self):
         op = {"status": "succeeded", "commands": [], "workers": []}

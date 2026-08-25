@@ -392,3 +392,20 @@ clearly distinguishes real capability from proposal.
 5. Keep the optional TUI excluded; desktop UI is retained by the binding direction,
    but no browser or cloud product is introduced.
 6. Ship signed `.deb` first; add other package formats only after dedicated tests.
+
+## 12. Implementation progress log
+
+### Priority 1 — real terminal/session layer
+
+**Started and implemented in the current iteration.** The Python sidecar now owns
+Linux controlling PTYs, process groups, session metadata, bounded sanitized event
+polling, input, resize, cancellation with TERM/KILL escalation, idle cleanup,
+stale-session recovery states, authenticated session routes, and explicit desktop
+open/stop controls. The CLI can create and attach to a foreground local PTY in an
+interactive terminal; the desktop sidecar supports session listing, event attach,
+input, resize, and kill.
+
+Remaining Priority 1 work is full terminal rendering/multiplexing: xterm-quality
+ANSI handling, tabs, panes, reconnectable daemon-owned attach, SSH/tmux/non-TTY
+compatibility tests, and a durable session/job protocol. These must be completed
+before marking the complete terminal workspace acceptance gate passed.

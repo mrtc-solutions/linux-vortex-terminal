@@ -50,11 +50,12 @@ VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
 | XDG local SQLite + tamper-evident audit chain | Implemented + tested |
 | Ubuntu/Debian context and factual tool probes | Implemented + tested |
 | Engagement creation, canonical targets, scope gate | Implemented + tested |
-| Desktop terminal/plans/activity/reports/settings UI | Implemented + smoke-tested |
+| Desktop planning/activity/reports/settings UI | Implemented + smoke-tested |
+| Python-owned local PTY sessions and cancellation | Implemented + tested |
 | Matrix binary rain and project-owned artwork | Implemented + accessible fallback |
+| Full PTY tabs/panes and shell integration | Planned |
 | nmap/nuclei/HTTP active adapters | Planned; tool missing/adapter hardening required |
 | apt/systemd mutation adapters | Planned; read-only plans are available |
-| PTY tabs, persistent sessions, shell integration | Planned |
 | Local model / specialist worker bus | Planned; provider disabled by default |
 | Signed knowledge packages and `.deb` release | Planned |
 | Cloud API, remote control, attack automation, telemetry | Explicitly unsupported |
