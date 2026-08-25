@@ -268,7 +268,7 @@ fresh facts, exact identifiers, an impact card, and confirmation.
 
 Apt must probe apt-get/apt-cache/dpkg-query/sudo, validate package grammar,
 show installed/candidate version, architecture, origin, held state, dependency
-changes and removals from a fresh `apt-get -s` simulation, dpkg/lock/reboot state,
+changes and removals from a fresh `apt-get -s` preflight, dpkg/lock/reboot state,
 and signature policy. No unauthenticated flags, trust bypasses, PPAs, curl-piped
 installers, or arbitrary `.deb` files. Systemd validates unit names and user bus
 context, bounds journals, and never performs vacuum/mask/default-target changes
@@ -323,7 +323,7 @@ is stored, and dry-run/declined operations change nothing.
 
 ### Phase 3 — Core Linux and authorized security skills
 
-Add apt simulation/source/lock handling, systemd semantic adapters, filesystem,
+Add apt preflight/source/lock handling, systemd semantic adapters, filesystem,
 process/resource, Git, container, DNS/SSH, nmap and reviewed HTTP/content
 adapters, target normalization, artifact hashes/parsers, tool-specific negative
 and disposable Linux tests. No mutation is released without fresh facts and
@@ -463,7 +463,7 @@ and parser fuzzing in disposable Linux CI.
 includes typed package-operation plans for apt install/remove/upgrade and typed
 systemd start/stop/restart/enable/disable plans. Package plans validate package
 names, probe apt/dpkg tools, inspect lock availability, check dpkg state, show
-candidate/source/package facts, run a fresh `apt-get -s` simulation immediately
+candidate/source/package facts, run a fresh `apt-get -s` preflight immediately
 before the mutation, and require a root-only final command. Systemd plans validate
 unit names, probe systemd availability, show fresh unit state immediately before
 the action, and mark persistent enable/disable changes. Forbidden repository
@@ -482,21 +482,21 @@ flows, and rollback/recovery metadata.
 
 ### Priority 3 — apt/systemd factual result parsing
 
-**Implemented in the current iteration.** Apt simulation output is now parsed for
+**Implemented in the current iteration.** Apt preflight output is now parsed for
 upgrade/new/remove/not-upgraded counts, package lists, held/kept-back markers,
 reboot hints, and lock/error states. Systemd `show` and bounded journal output
 are parsed into unit load/active/substate/persistence fields and bounded failure
 line observations. Adapter facts are attached to completed operation analysis.
 
 Before a guarded mutation, the executor now requires fresh successful facts:
-changed apt simulations that report removals for install/upgrade are blocked, a
+changed apt preflights that report removals for install/upgrade are blocked, a
 remove with no observed removal is blocked, and missing/not-found systemd units
 are blocked before the action command. The normal-user root gate remains in
 place. Current tests use fake output and do not mutate the shared host.
 
 The remaining acceptance work is a disposable supported Linux VM for real apt
 install/remove and service actions, user-bus semantics, held/reboot edge cases,
-and rollback metadata. The production path has no fake simulation mode; apt
+and rollback metadata. The production path has no fake preflight mode; apt
 `-s` is a real package-manager read-only preflight. Mutating operations pause
 with the observed preflight facts and require a second exact approval before the
 real mutation command runs.

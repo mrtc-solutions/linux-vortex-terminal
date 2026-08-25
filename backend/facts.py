@@ -32,7 +32,7 @@ def _items_after_heading(lines: list[str], heading: str) -> list[str]:
     return values[:500]
 
 
-def parse_apt_simulation(text: str, exit_code: int | None = 0) -> dict[str, Any]:
+def parse_apt_preflight(text: str, exit_code: int | None = 0) -> dict[str, Any]:
     safe = clean(text)
     result: dict[str, Any] = {
         "state": "tool_error" if exit_code not in (None, 0) else "inconclusive",
@@ -60,7 +60,7 @@ def parse_apt_simulation(text: str, exit_code: int | None = 0) -> dict[str, Any]
         result["errors"] = errors[:20]
         result["state"] = "tool_error"
     if not summary and exit_code in (None, 0):
-        result["errors"] = ["apt simulation summary was not observed"]
+        result["errors"] = ["apt preflight summary was not observed"]
     return result
 
 
@@ -116,7 +116,7 @@ def parse_journal(text: str, exit_code: int | None = 0) -> dict[str, Any]:
 
 
 def parse_package_facts(results: list[dict[str, Any]]) -> dict[str, Any]:
-    facts: dict[str, Any] = {"state": "observed", "dpkg": None, "policy": None, "metadata": None, "simulation": None, "impact": {"upgraded": 0, "newly_installed": 0, "removed": 0, "not_upgraded": 0}}
+    facts: dict[str, Any] = {"state": "observed", "dpkg": None, "policy": None, "metadata": None, "preflight": None, "impact": {"upgraded": 0, "newly_installed": 0, "removed": 0, "not_upgraded": 0}}
     for item in results:
         argv = item.get("argv", [])
         output = item.get("stdout", "") + item.get("stderr", "")
@@ -126,8 +126,8 @@ def parse_package_facts(results: list[dict[str, Any]]) -> dict[str, Any]:
         elif item.get("executable") == "apt-cache" and "policy" in argv: facts["policy"] = parse_apt_policy(output, exit_code)
         elif item.get("executable") == "apt-cache" and "show" in argv: facts["metadata"] = parse_apt_show(output, exit_code)
         elif item.get("executable") == "apt-get" and "-s" in argv:
-            facts["simulation"] = parse_apt_simulation(output, exit_code)
-            for key in facts["impact"]: facts["impact"][key] = facts["simulation"].get(key, 0)
+            facts["preflight"] = parse_apt_preflight(output, exit_code)
+            for key in facts["impact"]: facts["impact"][key] = facts["preflight"].get(key, 0)
     return facts
 
 

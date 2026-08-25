@@ -324,7 +324,7 @@ def detect_context() -> dict[str, Any]:
     wsl = bool(os.environ.get("WSL_INTEROP")) or "microsoft" in kernel_text
     distro_id = os_release.get("ID", "unknown").lower()
     distro_like = set(os_release.get("ID_LIKE", "").lower().split())
-    if distro_id in {"kali", "debian", "ubuntu", "linuxmint", "pop"} or "debian" in distro_like:
+    if distro_id in {"kali", "debian", "linuxmint", "pop"} or "debian" in distro_like or Path("/etc/debian_version").exists():
         support_tier = "linux-debian-family"
     else:
         support_tier = "linux-best-effort"
@@ -1132,18 +1132,18 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "show", package_name], cwd, required="apt-cache", explanation=f"Show package metadata and declared dependencies for {package_name}.", privilege="user"))
                 specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}.", privilege="user"))
             if package_operation == "install":
-                simulation = ["apt-get", "-s", "--no-remove", "install", package_name]
+                preflight = ["apt-get", "-s", "--no-remove", "install", package_name]
                 mutation = ["apt-get", "--assume-yes", "--no-remove", "install", package_name]
             elif package_operation == "remove":
-                simulation = ["apt-get", "-s", "remove", package_name]
+                preflight = ["apt-get", "-s", "remove", package_name]
                 mutation = ["apt-get", "--assume-yes", "remove", package_name]
             else:
-                simulation = ["apt-get", "-s", "--no-remove", "upgrade"]
+                preflight = ["apt-get", "-s", "--no-remove", "upgrade"]
                 mutation = ["apt-get", "--assume-yes", "--no-remove", "upgrade"]
-            specs.append(adapter_command("linux.packages.apt", "apt-get", simulation, cwd, required="apt-get", explanation="Run a fresh apt simulation immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
-            specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding simulation and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
+            specs.append(adapter_command("linux.packages.apt", "apt-get", preflight, cwd, required="apt-get", explanation="Run a fresh apt preflight immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
+            specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding preflight and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
             status = "planned"
-            notes += ["Package source, candidate/installed version, dependency impact, held state, and simulation output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
+            notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
     elif parse_systemd_mutation(lower):
         action, unit = parse_systemd_mutation(lower) or ("", "")
         kind = "systemd_mutation"
@@ -1537,17 +1537,17 @@ class ExecutionManager:
         adapters = {spec.get("adapter_id") for spec in plan.get("commands", [])}
         if "linux.packages.apt" in adapters:
             facts = parse_package_facts(op.get("commands", []))
-            simulation = facts.get("simulation") or {}
-            if simulation.get("state") != "observed":
-                return "fresh apt simulation was not observed; mutation was not run"
-            # Install/upgrade simulations explicitly carry --no-remove. If a
+            preflight = facts.get("preflight") or {}
+            if preflight.get("state") != "observed":
+                return "fresh apt preflight was not observed; mutation was not run"
+            # Install/upgrade preflights explicitly carry --no-remove. If a
             # backend nevertheless reports removals, stop rather than accepting
             # a changed dependency impact after approval.
             mutation = plan.get("commands", [])[-1].get("argv", [])
-            if any(action in mutation for action in ("install", "upgrade")) and simulation.get("removed", 0) > 0:
-                return "fresh apt simulation reported removals; mutation was not run"
-            if mutation and "remove" in mutation and simulation.get("removed", 0) == 0:
-                return "fresh apt simulation reported no package removal; mutation was not run"
+            if any(action in mutation for action in ("install", "upgrade")) and preflight.get("removed", 0) > 0:
+                return "fresh apt preflight reported removals; mutation was not run"
+            if mutation and "remove" in mutation and preflight.get("removed", 0) == 0:
+                return "fresh apt preflight reported no package removal; mutation was not run"
         if "linux.systemd.mutate" in adapters:
             facts = parse_systemd_facts(op.get("commands", []))
             unit = facts.get("unit") or {}
@@ -1617,9 +1617,9 @@ class ExecutionManager:
                     break
                 if len(op["commands"]) < len(plan.get("commands", [])):
                     completed_spec = plan["commands"][len(op["commands"]) - 1]
-                    is_fresh_apt_simulation = completed_spec.get("adapter_id") == "linux.packages.apt" and completed_spec.get("executable") == "apt-get" and "-s" in completed_spec.get("argv", [])
+                    is_fresh_apt_preflight = completed_spec.get("adapter_id") == "linux.packages.apt" and completed_spec.get("executable") == "apt-get" and "-s" in completed_spec.get("argv", [])
                     is_fresh_systemd_state = completed_spec.get("adapter_id") == "linux.systemd.mutate" and completed_spec.get("executable") == "systemctl" and "show" in completed_spec.get("argv", [])
-                    if is_fresh_apt_simulation or is_fresh_systemd_state:
+                    if is_fresh_apt_preflight or is_fresh_systemd_state:
                         gate_error = self._preflight_gate(plan, op)
                         if gate_error:
                             op["execution_gate"] = {"state": "blocked", "reason": gate_error}

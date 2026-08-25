@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
-from backend.facts import parse_apt_simulation, parse_package_facts, parse_systemd_show
+from backend.facts import parse_apt_preflight, parse_package_facts, parse_systemd_show
 from backend.vortex_backend import (
     ExecutionManager, PolicyError, SessionManager, Store, build_plan, command_spec,
     apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, probe_executable, plan_digest, target_in_engagement,
@@ -206,22 +206,22 @@ class VortexCoreTests(unittest.TestCase):
         finally:
             sessions.shutdown()
 
-    def test_apt_simulation_parser_extracts_impact_counts(self):
+    def test_apt_preflight_parser_extracts_impact_counts(self):
         output = '''The following NEW packages will be installed:
   ripgrep
 The following packages will be upgraded:
   libc6
 0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.
 '''
-        facts = parse_apt_simulation(output, 0)
+        facts = parse_apt_preflight(output, 0)
         self.assertEqual(facts['state'], 'observed')
         self.assertEqual(facts['newly_installed'], 1)
         self.assertEqual(facts['upgraded'], 0)
         self.assertEqual(facts['removed'], 0)
         self.assertIn('ripgrep', facts['packages_new'])
 
-    def test_apt_simulation_parser_never_treats_error_as_success(self):
-        facts = parse_apt_simulation('E: Could not get lock /var/lib/dpkg/lock-frontend', 100)
+    def test_apt_preflight_parser_never_treats_error_as_success(self):
+        facts = parse_apt_preflight('E: Could not get lock /var/lib/dpkg/lock-frontend', 100)
         self.assertEqual(facts['state'], 'tool_error')
         self.assertTrue(facts['errors'])
 
@@ -241,7 +241,7 @@ The following packages will be upgraded:
         facts = parse_package_facts(results)
         self.assertEqual(facts['state'], 'observed')
         self.assertEqual(facts['policy']['candidate'], '1:2.39.2')
-        self.assertEqual(facts['simulation']['removed'], 0)
+        self.assertEqual(facts['preflight']['removed'], 0)
 
     def test_mutation_requires_a_second_approval_after_fresh_preflight(self):
         plan = build_plan(self.store, 'restart nginx', self.tmp.name)

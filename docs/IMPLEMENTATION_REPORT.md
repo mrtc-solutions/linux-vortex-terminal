@@ -36,8 +36,8 @@
   `/api/adapters`. Explicit operator PTY/direct commands remain available for
   the user’s full Linux capability and are clearly attributed outside AI adapter
   validation.
-- Implemented deterministic apt simulation parsing and systemd state/journal
-  parsing. Guarded mutations now stop when fresh simulation/state is missing or
+- Implemented deterministic apt preflight parsing and systemd state/journal
+  parsing. Guarded mutations now stop when fresh preflight/state is missing or
   unsafe, and completed operations expose structured package/service facts to
   analysis and reports. No privileged mutation was run on the shared host.
 - Added tests for planner honesty, shell metacharacters, target injection, missing
