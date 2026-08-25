@@ -427,9 +427,8 @@ Direct commands are still shell-free at the Vortex boundary, explicitly
 attributed `operator_direct`, approval-gated/logged, and can invoke a shell as a
 literal operator-selected executable.
 
-Remaining Priority 2 work is a complete adapter package layout, DNS/redirect
-revalidation, stronger container/SSH output parsers, nmap XML/HTTP hardening,
-parser fuzzing, and disposable Linux acceptance evidence.
+Remaining Priority 2 work is deeper Nmap/HTTP execution policy, runtime-specific
+output schemas, parser fuzzing, and disposable Linux acceptance evidence.
 
 ### Priority 2 — artifact parsing and evidence provenance
 
@@ -519,8 +518,8 @@ selection with read-only `ps --all --no-trunc` inspection and explicit missing-
 runtime handling. Added read-only SSH effective-configuration resolution using
 `ssh -G`; it does not connect, authenticate, read private keys, or harvest agent
 secrets. Both adapters run only real installed host tools and are represented in
-the adapter registry. Full container log parsers, SSH connection diagnostics,
-and runtime-specific acceptance tests remain separate work.
+the adapter registry. Runtime-specific acceptance tests and deeper output
+schemas remain separate work.
 
 ### Priority 1 — terminal workspace progress
 

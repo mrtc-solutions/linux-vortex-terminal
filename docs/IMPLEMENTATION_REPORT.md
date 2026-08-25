@@ -26,12 +26,14 @@
   reaping, stale-session crash states, authenticated session endpoints, and a
   desktop open/stop local-shell flow.
 - Completed the current terminal workspace slice with real session tabs, a
-  two-pane split view, safe SGR color/bold rendering, per-key control/navigation
-  forwarding, and explicit idempotent shell integration with preview, backup,
-  install, and uninstall.
+  two-pane split view, SGR/cursor/erase/scrollback/alternate-screen rendering,
+  per-key control/navigation forwarding, and explicit idempotent shell
+  integration with preview, backup, install, and uninstall.
 - Started Priority 2 with a versioned adapter registry and manifests for local
   health, filesystem usage, sockets, Git status, systemd inspection, scoped
-  nmap discovery, and bounded curl headers.
+  nmap discovery, bounded curl headers, container runtimes, and SSH diagnostics.
+  Registry data is now separated into `adapter_registry.py`; network, facts, and
+  artifact parsing remain separate modules.
 - Implemented bounded evidence parsing for Nmap XML and HTTP headers, including
   source path/operation provenance, SHA-256, parser version, observed versus
   inconclusive/tool-error states, redacted observations, artifact persistence,
@@ -44,10 +46,9 @@
   parsing. Guarded mutations now stop when fresh preflight/state is missing or
   unsafe, and completed operations expose structured package/service facts to
   analysis and reports. No privileged mutation was run on the shared host.
-- Added real read-only Docker/Podman runtime detection, bounded container log
-  collection, and SSH effective-config/connection diagnostics. Missing runtimes produce no fabricated container state; SSH
-  diagnostics use `ssh -G` only and never connect or read private keys.
-- Added bounded Docker/Podman log collection, scoped SSH connectivity checks
+- Added real read-only Docker/Podman runtime detection and bounded container
+  log collection. Missing runtimes produce no fabricated container state.
+- Added scoped SSH connectivity checks
   using BatchMode and strict host-key verification, and DNS resolution facts
   compared again at execution so changed targets invalidate a plan. HTTP
   redirects are observed but never followed automatically.
