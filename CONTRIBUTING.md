@@ -25,7 +25,7 @@ commit messages such as `feat: add bounded system health planner`.
 - Preserve versioned JSON, exit codes, plan expiry, exact approval, redaction,
   and truthful failure/unavailable states.
 - Do not add a cloud endpoint, runtime plugin loader, automatic sudo, package
-  install, shell RC mutation, or simulated result without a new threat review.
+  install, shell RC mutation, or fabricated result without a new threat review.
 - Clearly mark fixture/practice/reference data; never mix it with live evidence.
 
 Pull requests must explain the threat-model impact, tests run, data retention,

@@ -9,8 +9,8 @@
 > desktop-agent direction supersedes earlier “CLI-only/no GUI” wording: the
 > product is a Linux-native Electron desktop workbench with a Python sidecar,
 > while the sidecar remains the sole authority that can execute a real command.
-> It is not a browser SaaS product, a remote-control service, or a simulated
-> terminal. The UI is optional; the local sidecar and `vortex` CLI are useful on
+> It is not a browser SaaS product, a remote-control service, or a terminal that fabricates
+> execution. The UI is optional; the local sidecar and `vortex` CLI are useful on
 > their own.
 
 ## 1. Product direction
@@ -492,7 +492,7 @@ Before a guarded mutation, the executor now requires fresh successful facts:
 changed apt preflights that report removals for install/upgrade are blocked, a
 remove with no observed removal is blocked, and missing/not-found systemd units
 are blocked before the action command. The normal-user root gate remains in
-place. Current tests use fake output and do not mutate the shared host.
+place. Current tests use controlled test doubles only; production never fabricates output and no shared host is mutated.
 
 The remaining acceptance work is a disposable supported Linux VM for real apt
 install/remove and service actions, user-bus semantics, held/reboot edge cases,

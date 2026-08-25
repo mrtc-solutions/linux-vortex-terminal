@@ -302,7 +302,7 @@ The following packages will be upgraded:
         error = ExecutionManager(self.store)._preflight_gate(plan, operation)
         self.assertIn('not loaded', error)
 
-    def test_apt_plan_is_simulated_before_root_mutation(self):
+    def test_apt_plan_requires_real_preflight_before_root_mutation(self):
         if not apt_tools_ready()[0]:
             self.skipTest('apt/dpkg unavailable')
         plan = build_plan(self.store, 'install package git', self.tmp.name)
