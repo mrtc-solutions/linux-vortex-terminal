@@ -148,7 +148,7 @@ def sanitize_pty(text: str) -> str:
     control strings, and unknown escapes are removed so PTY output cannot set a
     title, open a hyperlink, copy clipboard data, or inject terminal commands.
     """
-    allowed_finals = set("mABCDEFGHfJKsuUlG@`")
+    allowed_finals = set("mABCDEFGHfJKsuUlG@`hrPXLM")
     out: list[str] = []
     i = 0
     while i < len(text):

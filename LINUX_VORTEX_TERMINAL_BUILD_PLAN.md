@@ -405,9 +405,9 @@ open/stop controls. The CLI can create and attach to a foreground local PTY in a
 interactive terminal; the desktop sidecar supports session listing, event attach,
 input, resize, and kill.
 
-Remaining Priority 1 work is full terminal rendering/multiplexing: xterm-quality
-ANSI handling, tabs, panes, reconnectable daemon-owned attach, SSH/tmux/non-TTY
-compatibility tests, and a durable session/job protocol. These must be completed
+Remaining Priority 1 work is complete xterm compatibility, reconnectable daemon-owned
+attach across sidecar restarts, SSH/tmux/non-TTY compatibility tests, and a durable
+session/job protocol. These must be completed
 before marking the complete terminal workspace acceptance gate passed.
 
 ### Priority 2 — real adapter registry
@@ -525,13 +525,14 @@ and runtime-specific acceptance tests remain separate work.
 ### Priority 1 — terminal workspace progress
 
 **Current slice implemented.** The desktop workspace now provides real session tabs,
-a two-pane split view, safe SGR color/bold rendering, direct control/navigation
-key forwarding, and explicit shell integration preview/install/uninstall. Shell
-integration writes only a Vortex-owned idempotent block, creates a timestamped
-backup, requires `--yes`, and removes only that block on uninstall. No shell RC
-file is changed implicitly.
+a two-pane split view, a dependency-free terminal buffer with SGR/cursor/erase,
+scrollback and alternate-screen support, direct control/navigation key forwarding,
+and explicit shell integration preview/install/uninstall. Shell integration writes
+only a Vortex-owned idempotent block, creates a timestamped backup, requires
+`--yes`, and removes only that block on uninstall. No shell RC file is changed
+implicitly.
 
 The native PTY and direct operator command paths retain full Linux capability.
-The remaining terminal work is full cursor/erase terminal emulation, complete
-alternate-screen/TUI behavior, reconnectable attach across sidecar restarts,
-PTY history replay, and tmux/SSH/non-TTY acceptance evidence.
+The remaining terminal work is complete xterm compatibility, robust alternate-
+screen/TUI behavior across real applications, reconnectable attach across
+sidecar restarts, PTY history replay, and tmux/SSH/non-TTY acceptance evidence.

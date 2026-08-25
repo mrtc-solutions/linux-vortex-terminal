@@ -220,7 +220,7 @@ class VortexCoreTests(unittest.TestCase):
         cwd = Path(self.tmp.name)
         sessions = SessionManager(self.store, idle_seconds=120)
         try:
-            session = sessions.create(name="test-pty", cwd_raw=str(cwd), shell="/bin/sh", cols=80, rows=24, command=["/bin/sh", "-c", "printf pty-ready; sleep 10"])
+            session = sessions.create(name="test-pty", cwd_raw=str(cwd), shell="/bin/sh", cols=80, rows=24, command=["/bin/sh", "-c", "printf '\\033[31mpty-ready\\033[0m'; sleep 10"])
             self.assertEqual(session["status"], "running")
             for _ in range(100):
                 events = sessions.events_since(session["id"])["events"]
@@ -228,6 +228,7 @@ class VortexCoreTests(unittest.TestCase):
                     break
                 time.sleep(.02)
             self.assertTrue(any("pty-ready" in event["data"] for event in events))
+            self.assertTrue(any('\x1b[31m' in event['data'] for event in events))
             self.assertEqual(sessions.resize(session["id"], 120, 40)["cols"], 120)
             self.assertTrue(sessions.kill(session["id"]))
             for _ in range(150):

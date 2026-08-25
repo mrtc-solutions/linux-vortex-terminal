@@ -59,7 +59,7 @@
 
 ```text
 python3 -m py_compile backend/vortex_backend.py cli/vortex.py
-python3 -m unittest discover -s tests -v  # 33 tests
+python3 -m unittest discover -s tests -v  # 33 Python tests; npm test also runs the JS emulator test
 ./vortex doctor --json
 ./vortex plan "system health"
 ./vortex run --yes -- /bin/echo hello

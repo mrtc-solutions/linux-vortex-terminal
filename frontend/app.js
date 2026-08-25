@@ -65,39 +65,10 @@ async function verifyAudit() { try { const data = await api('/api/audit/verify')
 function setupMatrix() { const canvas = $('matrix'), ctx = canvas.getContext('2d'); let columns = [], frame = 0; function resize(){canvas.width=innerWidth;canvas.height=innerHeight;columns=Array(Math.ceil(canvas.width/17)).fill(0).map(()=>Math.random()*-40)} function tick(){ if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; } if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 4 : 2)) !== 0) return; ctx.fillStyle='rgba(10,10,12,.09)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.font='12px monospace';ctx.fillStyle='rgba(0,212,170,.54)';columns.forEach((y,i)=>{ctx.fillText(Math.random()>.5?'1':'0',i*17,y*17);if(y*17>canvas.height && Math.random()>.975)columns[i]=0;columns[i]++});} resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
 function activeSession() { return state.sessions.find(session => session.id === state.activeSessionId) || null; }
 function sessionOutput(sessionId) { return Array.from(document.querySelectorAll('[data-session-output]')).find(element => element.dataset.sessionOutput === sessionId) || null; }
-function appendAnsiText(element, text, ansi) {
-  if (!text) return;
-  const span = document.createElement('span');
-  span.className = ansi.bold ? 'ansi-bold' : '';
-  if (ansi.color) span.style.color = ansi.color;
-  span.textContent = text;
-  element.appendChild(span);
-}
 function appendAnsi(element, data) {
-  const ansi = element._ansiState || {bold:false,color:null};
-  // Only SGR is rendered. Cursor/erase/unknown CSI sequences are discarded;
-  // OSC and other unsafe controls were already removed by the sidecar.
-  const token = /\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[\x20-\x2f]*[@-~]/g;
-  let cursor = 0; let match;
-  while ((match = token.exec(data))) {
-    appendAnsiText(element, data.slice(cursor, match.index), ansi);
-    if (match[0].endsWith('m')) {
-      const codes = match[1] ? match[1].split(';').map(Number) : [0];
-      for (let i = 0; i < codes.length; i++) {
-        const code = codes[i];
-        if (code === 0) { ansi.bold = false; ansi.color = null; }
-        else if (code === 1) ansi.bold = true;
-        else if (code === 22) ansi.bold = false;
-        else if (code === 39) ansi.color = null;
-        else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) ansi.color = ['#101015','#cc5555','#23a049','#e6a817','#5f8cff','#9b8cff','#00d4aa','#f0f0f4'][code >= 90 ? code - 90 : code - 30];
-        else if (code === 38 && codes[i + 1] === 5 && Number.isInteger(codes[i + 2])) { ansi.color = ['#101015','#cc0000','#23a049','#e6a817','#5f8cff','#9b8cff','#00d4aa','#f0f0f4','#5d5f70','#ef7777','#58d47b','#f0c94d','#86a6ff','#c0b8ff','#42e8c4','#ffffff'][codes[i + 2] % 16]; i += 2; }
-      }
-    }
-    cursor = token.lastIndex;
-  }
-  appendAnsiText(element, data.slice(cursor), ansi);
-  element._ansiState = ansi;
-  element.scrollTop = element.scrollHeight;
+  if (!element._vortexTerminal) element._vortexTerminal = new window.VortexTerminal(100, 30, 5000);
+  element._vortexTerminal.feed(data);
+  element._vortexTerminal.render(element);
 }
 function ensureSessionPane(sessionId) {
   const host = $('terminal-panes');
@@ -211,7 +182,7 @@ async function killSession() {
 async function resizeSession() {
   const session = activeSession();
   if (!session || session.status !== 'running') return;
-  try { await api(`/api/sessions/${encodeURIComponent(session.id)}/resize`, {method:'POST', body:{cols:Math.max(40, Math.min(220, Math.floor(innerWidth / 8))), rows:30}}); }
+  try { const cols = Math.max(40, Math.min(220, Math.floor(innerWidth / 8))); await api(`/api/sessions/${encodeURIComponent(session.id)}/resize`, {method:'POST', body:{cols, rows:30}}); const output = sessionOutput(session.id); if (output?._vortexTerminal) { output._vortexTerminal.resize(cols, 30); output._vortexTerminal.render(output); } }
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
