@@ -496,4 +496,7 @@ place. Current tests use fake output and do not mutate the shared host.
 
 The remaining acceptance work is a disposable Ubuntu 24.04 VM for real apt
 install/remove and service actions, user-bus semantics, held/reboot edge cases,
-rollback metadata, and an interactive post-simulation confirmation flow.
+and rollback metadata. The production path has no fake simulation mode; apt
+`-s` is a real package-manager read-only preflight. Mutating operations pause
+with the observed preflight facts and require a second exact approval before the
+real mutation command runs.

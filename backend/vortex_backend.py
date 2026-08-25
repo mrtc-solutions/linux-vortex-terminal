@@ -195,7 +195,7 @@ def read_os_release() -> dict[str, str]:
 def _is_user_writable_directory(path: Path, st: os.stat_result | None = None) -> bool:
     st = st or path.stat()
     mode = stat.S_IMODE(st.st_mode)
-    return bool(mode & 0o022) or (st.st_uid == os.getuid() and bool(mode & 0o200))
+    return bool(mode & 0o022) or (os.getuid() != 0 and st.st_uid == os.getuid() and bool(mode & 0o200))
 
 
 def _safe_executable_dirs() -> tuple[list[str], list[str]]:
@@ -1030,6 +1030,7 @@ def plan_digest(plan: dict[str, Any]) -> str:
         "knowledge_version": plan.get("knowledge_version"),
         "source": plan.get("source"),
         "risk": plan.get("risk"),
+        "rollback": plan.get("rollback", {}),
         "expires_at": plan.get("expires_at"),
     })
 
@@ -1046,6 +1047,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     kind = "plan"
     risk = "low"
     authorization = "local diagnostic capability"
+    rollback: dict[str, Any] = {"available": False, "advice": "No automatic rollback metadata is available for this plan."}
     engagement = store.get_engagement(engagement_id) if engagement_id else None
 
     if lower.startswith("explain ") or lower.startswith("what does ") or lower.startswith("why does "):
@@ -1066,6 +1068,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         kind = "package_operation"
         risk = "high"
         authorization = "privileged package operation"
+        if package_operation == "install" and package_name:
+            rollback = {"available": True, "strategy": "fresh-plan-required", "inverse": ["remove", package_name], "warning": "Removal may not restore dependency state; create and review a fresh plan."}
+        elif package_operation == "remove" and package_name:
+            rollback = {"available": True, "strategy": "fresh-plan-required", "inverse": ["install", package_name], "warning": "The original version/source may not be restored."}
+        else:
+            rollback = {"available": False, "strategy": "snapshot-or-distro-recovery", "warning": "Upgrades have no automatic rollback; use a tested snapshot or package downgrade plan."}
         ready, apt_missing = apt_tools_ready()
         locks = apt_lock_state()
         if not ready:
@@ -1103,6 +1111,8 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         kind = "systemd_mutation"
         risk = "high"
         authorization = "privileged service operation"
+        inverse = {"start": "stop", "stop": "start", "enable": "disable", "disable": "enable"}.get(action)
+        rollback = {"available": bool(inverse), "strategy": "fresh-plan-required", "inverse": [inverse, unit] if inverse else [], "warning": "Restart has no automatic inverse; inspect service state and create a fresh plan." if not inverse else "Inverse action still requires a fresh plan and confirmation."}
         if not detect_context()["systemd"] or probe_executable("systemctl")["state"] != "installed":
             status = "unavailable"
             missing.append("systemd")
@@ -1236,6 +1246,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "kind": kind,
         "risk": risk,
         "authorization": authorization,
+        "rollback": rollback,
         "commands": specs,
         "notes": notes,
         "missing_tools": sorted(set(missing)),
@@ -1305,7 +1316,7 @@ class ExecutionManager:
         op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "output_digest": None, "analysis": None}
         self.store.save_operation(op)
         self.store.append_audit("operation_started", {"operation_id": op["id"], "plan_id": plan["id"], "digest": plan["digest"], "privilege": "root-override" if allow_root else "user"})
-        thread = threading.Thread(target=self._run, args=(plan, op), daemon=True)
+        thread = threading.Thread(target=self._run, args=(plan, op, 0), daemon=True)
         with self.lock:
             self.threads[op["id"]] = thread
             self.cancel_events[op["id"]] = threading.Event()
@@ -1319,6 +1330,16 @@ class ExecutionManager:
             process = self.processes.get(operation_id)
         if not event:
             return False
+        operation = self.store.get_operation(operation_id)
+        if operation and operation.get("status") == "awaiting_confirmation":
+            event.set()
+            operation["status"] = "cancelled"
+            operation["ended_at"] = now_iso()
+            operation["analysis"] = make_analysis({}, operation)
+            self.store.update_operation(operation)
+            with self.lock: self.cancel_events.pop(operation_id, None)
+            self.store.append_audit("operation_cancelled", {"operation_id": operation_id, "reason": "preflight_declined"})
+            return True
         event.set()
         if process and process.poll() is None:
             try:
@@ -1327,6 +1348,53 @@ class ExecutionManager:
                 pass
         self.store.append_audit("operation_cancel_requested", {"operation_id": operation_id})
         return True
+
+    @staticmethod
+    def _has_guarded_mutation(plan: dict[str, Any]) -> bool:
+        return any(spec.get("privilege") == "root-required" and spec.get("adapter_id") in ("linux.packages.apt", "linux.systemd.mutate") for spec in plan.get("commands", []))
+
+    def approve_preflight(self, operation_id: str, confirm: bool, approval_token: str | None, preflight_digest: str | None) -> dict[str, Any]:
+        if not confirm:
+            raise PermissionError("mutation confirmation required")
+        operation = self.store.get_operation(operation_id)
+        if not operation:
+            raise PolicyError("operation not found")
+        if operation.get("status") != "awaiting_confirmation":
+            raise PolicyError("operation is not awaiting mutation confirmation")
+        plan = self.store.get_plan(operation["plan_id"])
+        if not plan:
+            raise PolicyError("plan not found")
+        if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
+            raise TimeoutError("plan expired before mutation approval")
+        for spec in plan.get("commands", []):
+            current = probe_executable(spec["executable"])
+            identity = spec.get("executable_identity", {})
+            if current.get("state") != "installed" or current.get("sha256") != identity.get("sha256") or current.get("device") != identity.get("device") or current.get("inode") != identity.get("inode"):
+                raise PolicyError(f"executable identity changed for {spec['executable']}; fresh plan required")
+        if plan.get("engagement_id"):
+            engagement = self.store.get_engagement(plan["engagement_id"])
+            if not engagement or engagement.get("status") != "active":
+                raise PolicyError("engagement is unavailable or closed")
+            if time.time() > datetime.fromisoformat(engagement["expires_at"]).timestamp():
+                raise TimeoutError("engagement expired before mutation approval")
+        if not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
+            raise PolicyError("exact approval token is required for mutation confirmation")
+        if not preflight_digest or not secrets.compare_digest(preflight_digest, operation.get("preflight_digest", "")):
+            raise PolicyError("fresh preflight digest does not match this operation")
+        with self.lock:
+            if operation_id in self.threads:
+                raise PolicyError("operation is already resuming")
+            event = self.cancel_events.get(operation_id)
+            if not event or event.is_set():
+                raise PolicyError("operation has been cancelled")
+            operation["status"] = "started"
+            operation["mutation_approval"] = {"at": now_iso(), "preflight_digest": operation["preflight_digest"]}
+            self.store.update_operation(operation)
+            self.store.append_audit("mutation_approved", {"operation_id": operation_id, "plan_id": plan["id"], "preflight_digest": operation["preflight_digest"]})
+            thread = threading.Thread(target=self._run, args=(plan, operation, len(operation.get("commands", []))), daemon=True)
+            self.threads[operation_id] = thread
+            thread.start()
+        return operation
 
     def _run_one(self, spec: dict[str, Any], operation_id: str) -> dict[str, Any]:
         started = now_iso(); started_mono = time.monotonic()
@@ -1497,10 +1565,11 @@ class ExecutionManager:
                 artifacts.append(artifact)
         return artifacts
 
-    def _run(self, plan: dict[str, Any], op: dict[str, Any]) -> None:
+    def _run(self, plan: dict[str, Any], op: dict[str, Any], start_index: int = 0) -> None:
         try:
             op["status"] = "running"; self.store.update_operation(op)
-            for spec in plan["commands"]:
+            for index in range(start_index, len(plan["commands"])):
+                spec = plan["commands"][index]
                 if self.cancel_events.get(op["id"], threading.Event()).is_set():
                     break
                 result = self._run_one(spec, op["id"])
@@ -1517,6 +1586,17 @@ class ExecutionManager:
                         if gate_error:
                             op["execution_gate"] = {"state": "blocked", "reason": gate_error}
                             break
+                        if self._has_guarded_mutation(plan):
+                            op["facts"] = self._collect_adapter_facts(plan, op)
+                            op["preflight_digest"] = hashlib.sha256(canonical(op["commands"]).encode()).hexdigest()
+                            op["preflight"] = {"state": "ready", "next_command": plan["commands"][len(op["commands"])] ["display"], "digest": op["preflight_digest"]}
+                            op["status"] = "awaiting_confirmation"
+                            op["analysis"] = make_analysis(plan, op)
+                            self.store.update_operation(op)
+                            self.store.append_audit("preflight_ready", {"operation_id": op["id"], "plan_id": plan["id"], "preflight_digest": op["preflight_digest"]})
+                            with self.lock:
+                                self.threads.pop(op["id"], None)
+                            return
             statuses = [x["status"] for x in op["commands"]]
             if op.get("execution_gate", {}).get("state") == "blocked": op["status"] = "failed"
             elif self.cancel_events.get(op["id"], threading.Event()).is_set(): op["status"] = "cancelled"
@@ -1545,13 +1625,14 @@ def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
         lines = [line for line in (command.get("stdout", "") + command.get("stderr", "")).splitlines() if line.strip()]
         facts.append({"command": command["display"], "status": command["status"], "observed_lines": len(lines), "evidence_digest": command.get("evidence_digest"), "summary": (lines[0][:220] if lines else "No output was observed; this is not evidence of a clean result.")})
     return {
-        "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "cancelled": "CANCELLED", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
+        "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "cancelled": "CANCELLED", "awaiting_confirmation": "PREFLIGHT COMPLETE", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
         "fact": f"{len(op['commands'])} real command(s) reached an observed terminal outcome." if op["commands"] else "No command was run.",
         "inference": "Output summaries are bounded and redacted. They are observations, not a security guarantee.",
         "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule.",
         "commands": facts,
         "adapter_facts": op.get("facts", {}),
         "execution_gate": op.get("execution_gate"),
+        "rollback": plan.get("rollback"),
         "artifacts": [{"artifact_id": item.get("artifact_id"), "kind": item.get("kind"), "state": item.get("state"), "sha256": item.get("sha256"), "summary": item.get("summary"), "observations": item.get("observations", [])[:20]} for item in op.get("artifacts", [])],
         "next_steps": [{"label": "explain", "text": "Review the observed command timeline and evidence digests."}, {"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."}],
         "workers": op["workers"],
@@ -1707,6 +1788,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 expires = parse_expiry(body.get("expires_at"), default_seconds=24 * 3600)
                 item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": redact(str(body.get("name") or "Authorized assessment"))[:160], "authorization": redact(str(body.get("authorization") or "operator-declared authorization"))[:500], "targets": targets, "classes": [redact(x)[:80] for x in raw_classes[:20]], "status": "active"}
                 self.store.create_engagement(item); return self._json(201, {"engagement": item})
+            if path.startswith("/api/operations/") and path.endswith("/approve"):
+                operation_id = path.split("/")[-2]
+                operation = self.executor.approve_preflight(operation_id, bool(body.get("confirm")), body.get("approval_token"), body.get("preflight_digest"))
+                return self._json(202, {"operation": operation})
             if path.startswith("/api/operations/") and path.endswith("/cancel"):
                 operation_id = path.split("/")[-2]
                 if not self.executor.cancel(operation_id):

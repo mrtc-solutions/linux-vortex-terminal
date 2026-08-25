@@ -60,8 +60,8 @@ VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
 | Matrix binary rain and project-owned artwork | Implemented + accessible fallback |
 | Full PTY tabs/panes and shell integration | Planned |
 | Scoped nmap/curl planning and evidence parsers | Implemented + tested; tool availability varies |
-| Apt simulation, impact parsing, and guarded package plans | Implemented + tested; Ubuntu VM mutation gate remains |
-| Systemd state parsing and guarded mutation plans | Implemented + tested; host context varies |
+| Real apt preflight, impact parsing, and guarded package plans | Implemented + tested; Ubuntu VM mutation gate remains |
+| Systemd state parsing and guarded two-step mutation plans | Implemented + tested; host context varies |
 | Nuclei/content-discovery active adapters | Planned; reviewed templates/wordlists required |
 | Local model / specialist worker bus | Planned; provider disabled by default |
 | Signed knowledge packages and `.deb` release | Planned |

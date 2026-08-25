@@ -123,7 +123,7 @@ def main(argv=None):
     e = sub.add_parser('engagement'); e.add_argument('action', choices=['list','create']); e.add_argument('--name'); e.add_argument('--authorization'); e.add_argument('--target', action='append')
     n = sub.add_parser('_request', help=argparse.SUPPRESS); n.add_argument('request', nargs='+')
     sub._choices_actions = [action for action in sub._choices_actions if action.dest != '_request']
-    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs=argparse.REMAINDER)
+    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--preflight-digest'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     args.as_json = args.as_json or args.format == 'json'
     is_natural_request = args.subcommand == '_request'
@@ -243,6 +243,17 @@ def main(argv=None):
                 return EXIT_CODES['confirmation_required']
         if non_interactive and (not getattr(args, 'digest', None) or not getattr(args, 'approval_token', None) or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
         manager=ExecutionManager(store); op=manager.start(plan,True,getattr(args, 'approval_token', None) or plan['approval_token'],getattr(args, 'allow_root', False), getattr(args, 'offline', False)); op=wait_operation(store,manager,op['id'])
+        if op.get('status') == 'awaiting_confirmation':
+            if not yes:
+                print('\nFresh preflight completed. Review the observed facts before approving the mutation:', file=sys.stderr)
+                print(json.dumps(op.get('facts', {}), sort_keys=True, indent=2), file=sys.stderr)
+                print('Type APPROVE to execute the mutation: ', end='', file=sys.stderr)
+                if sys.stdin.readline().strip() != 'APPROVE':
+                    manager.cancel(op['id'])
+                    return EXIT_CODES['confirmation_required']
+            preflight_digest = getattr(args, 'preflight_digest', None) or op.get('preflight_digest')
+            op = manager.approve_preflight(op['id'], True, getattr(args, 'approval_token', None) or plan['approval_token'], preflight_digest)
+            op = wait_operation(store, manager, op['id'])
         if args.as_json:
             emit({'plan': plan, 'operation': op} if is_natural_request else {'operation': op}, True)
         else: print(f"[{op['status'].upper()}] operation {op['id']}")

@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from unittest.mock import patch
 import unittest
 from pathlib import Path
 
@@ -241,6 +242,41 @@ The following packages will be upgraded:
         self.assertEqual(facts['state'], 'observed')
         self.assertEqual(facts['policy']['candidate'], '1:2.39.2')
         self.assertEqual(facts['simulation']['removed'], 0)
+
+    def test_mutation_requires_a_second_approval_after_fresh_preflight(self):
+        plan = build_plan(self.store, 'restart nginx', self.tmp.name)
+        if plan['status'] != 'planned':
+            self.skipTest('systemd is unavailable in this environment')
+        manager = ExecutionManager(self.store)
+        def observed_run(spec, _operation_id):
+            is_show = 'show' in spec['argv']
+            return {
+                'argv': spec['argv'], 'display': spec['display'], 'executable': 'systemctl',
+                'adapter_id': spec['adapter_id'], 'adapter_version': spec['adapter_version'],
+                'cwd': spec['cwd'], 'started_at': now_iso(), 'stdout': 'Id=nginx.service\nLoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\n' if is_show else '',
+                'stderr': '', 'exit_code': 0, 'signal': None, 'termination_reason': 'completed',
+                'status': 'succeeded', 'version': 'test-systemctl', 'evidence_digest': 'observed',
+            }
+        manager._run_one = observed_run
+        with patch('backend.vortex_backend.os.getuid', return_value=0):
+            operation = manager.start(plan, True, plan['approval_token'], allow_root=True)
+            for _ in range(100):
+                operation = self.store.get_operation(operation['id'])
+                if operation['status'] == 'awaiting_confirmation':
+                    break
+                time.sleep(.02)
+            self.assertEqual(operation['status'], 'awaiting_confirmation')
+            self.assertEqual(len(operation['commands']), 1)
+            self.assertTrue(operation['preflight_digest'])
+            resumed = manager.approve_preflight(operation['id'], True, plan['approval_token'], operation['preflight_digest'])
+            self.assertIn(resumed['status'], ('started', 'running'))
+            for _ in range(100):
+                result = self.store.get_operation(operation['id'])
+                if result['status'] not in ('started', 'running'):
+                    break
+                time.sleep(.02)
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(len(result['commands']), 2)
 
     def test_preflight_gate_blocks_changed_apt_impact(self):
         plan = {
