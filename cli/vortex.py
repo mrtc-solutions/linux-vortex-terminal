@@ -167,7 +167,8 @@ def main(argv=None):
         non_interactive = getattr(args, 'non_interactive', False)
         if not yes:
             if non_interactive: return EXIT_CODES['confirmation_required']
-            answer=input('\nApprove this exact plan? Type APPROVE to continue: ').strip()
+            print('\nApprove this exact plan? Type APPROVE to continue: ', end='', file=sys.stderr)
+            answer=sys.stdin.readline().strip()
             if answer != 'APPROVE': return EXIT_CODES['confirmation_required']
         if non_interactive and (not getattr(args, 'digest', None) or not getattr(args, 'approval_token', None) or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
         manager=ExecutionManager(store); op=manager.start(plan,True,getattr(args, 'approval_token', None) or plan['approval_token'],getattr(args, 'allow_root', False)); op=wait_operation(store,op['id'])
