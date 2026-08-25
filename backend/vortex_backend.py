@@ -94,6 +94,8 @@ TOOL_CATALOG: dict[str, dict[str, Any]] = {
     "apt-get": {"family": "packages", "probe": ["--version"], "role": "package planning and mutation"},
     "apt-cache": {"family": "packages", "probe": ["--version"], "role": "package metadata"},
     "dpkg-query": {"family": "packages", "probe": ["--version"], "role": "installed package facts"},
+    "dpkg": {"family": "packages", "probe": ["--version"], "role": "dpkg consistency facts"},
+    "apt-mark": {"family": "packages", "probe": ["--version"], "role": "held package facts"},
 }
 
 
@@ -104,7 +106,7 @@ ADAPTER_MANIFESTS: dict[str, dict[str, Any]] = {
     "linux.development.git-status": {"version": "1", "family": "development", "tool": "git", "risk": "low", "network_class": "no-network", "operation": "read-only repository facts", "limits": {"timeout_seconds": 30}},
     "linux.systemd.inspect": {"version": "1", "family": "systemd", "tool": "systemctl+journalctl", "risk": "low", "network_class": "no-network", "operation": "read-only unit and journal facts", "limits": {"journal_lines": 80, "timeout_seconds": 30}},
     "linux.systemd.mutate": {"version": "1", "family": "systemd", "tool": "systemctl", "risk": "high", "network_class": "no-network", "operation": "guarded service mutation", "privilege": "root-required", "limits": {"timeout_seconds": 60}},
-    "linux.packages.apt": {"version": "1", "family": "packages", "tool": "apt-get+apt-cache+dpkg-query", "risk": "high", "network_class": "outbound-mutation", "operation": "guarded apt package operation", "privilege": "root-required", "limits": {"timeout_seconds": 900}},
+    "linux.packages.apt": {"version": "1", "family": "packages", "tool": "apt-get+apt-cache+dpkg-query+dpkg+apt-mark", "risk": "high", "network_class": "outbound-mutation", "operation": "guarded apt package operation", "privilege": "root-required", "limits": {"timeout_seconds": 900}},
     "security.nmap.discovery": {"version": "1", "family": "authorized-reconnaissance", "tool": "nmap", "risk": "high", "network_class": "outbound-read", "operation": "scoped service discovery", "limits": {"max_cidr_hosts": 256, "max_ports": 32, "timing": "T2", "timeout_seconds": 120}},
     "security.http.headers": {"version": "1", "family": "authorized-http", "tool": "curl", "risk": "high", "network_class": "outbound-read", "operation": "bounded HTTP/TLS header discovery", "limits": {"max_time_seconds": 15, "max_redirects": 0}},
 }
@@ -351,7 +353,7 @@ def detect_context() -> dict[str, Any]:
         "pid1": shutil.which("ps") and _pid1_name(),
         "systemd": systemd,
         "cgroup": cgroup,
-        "package_manager": {name: probe_executable(name)["state"] for name in ("apt-get", "apt-cache", "dpkg-query", "sudo")},
+        "package_manager": {name: probe_executable(name)["state"] for name in ("apt-get", "apt-cache", "dpkg-query", "dpkg", "apt-mark", "sudo")},
         "model": {"state": "disabled by default", "endpoint": None},
     }
 
@@ -1031,9 +1033,16 @@ def apt_lock_state() -> dict[str, Any]:
 
 
 def apt_tools_ready() -> tuple[bool, list[str]]:
-    required = ["apt-get", "apt-cache", "dpkg-query"]
+    required = ["apt-get", "apt-cache", "dpkg-query", "dpkg"]
     missing = [tool for tool in required if probe_executable(tool)["state"] != "installed"]
     return not missing, missing
+
+
+def reboot_required_state() -> dict[str, Any]:
+    marker = Path("/var/run/reboot-required")
+    packages = Path("/var/run/reboot-required.pkgs")
+    required = marker.exists()
+    return {"required": required, "packages": packages.read_text(encoding="utf-8", errors="replace").splitlines()[:50] if packages.exists() else [], "source": str(marker)}
 
 
 def parse_service(text: str) -> str | None:
@@ -1114,6 +1123,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             rollback = {"available": False, "strategy": "snapshot-or-distro-recovery", "warning": "Upgrades have no automatic rollback; use a tested snapshot or package downgrade plan."}
         ready, apt_missing = apt_tools_ready()
         locks = apt_lock_state()
+        reboot = reboot_required_state()
         if not ready:
             status = "unavailable"
             missing.extend(apt_missing)
@@ -1126,11 +1136,16 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             status = "clarified"
             notes.append(f"Tell Vortex the exact package to {package_operation}; package names are parsed, not concatenated shell text.")
         else:
-            specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "--audit"], cwd, required="dpkg-query", explanation="Check for incomplete dpkg state before any package operation.", privilege="user"))
+            specs.append(adapter_command("linux.packages.apt", "dpkg", ["dpkg", "--audit"], cwd, required="dpkg", explanation="Check for incomplete dpkg state before any package operation.", privilege="user"))
             if package_name:
                 specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "policy", package_name], cwd, required="apt-cache", explanation=f"Show the installed/candidate version, architecture, and repository policy for {package_name}.", privilege="user"))
                 specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "show", package_name], cwd, required="apt-cache", explanation=f"Show package metadata and declared dependencies for {package_name}.", privilege="user"))
-                specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}.", privilege="user"))
+                specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}; a missing installed package is informational.", privilege="user"))
+                specs[-1]["allow_failure"] = True
+            if probe_executable("apt-mark")["state"] == "installed":
+                specs.append(adapter_command("linux.packages.apt", "apt-mark", ["apt-mark", "showhold"], cwd, required="apt-mark", explanation="Report held packages that may affect the requested operation.", privilege="user"))
+            if package_operation != "install" and probe_executable("apt-mark")["state"] == "installed":
+                specs.append(adapter_command("linux.packages.apt", "apt-mark", ["apt-mark", "showhold"], cwd, required="apt-mark", explanation="Report held packages that may affect the requested operation.", privilege="user"))
             if package_operation == "install":
                 preflight = ["apt-get", "-s", "--no-remove", "install", package_name]
                 mutation = ["apt-get", "--assume-yes", "--no-remove", "install", package_name]
@@ -1143,7 +1158,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.packages.apt", "apt-get", preflight, cwd, required="apt-get", explanation="Run a fresh apt preflight immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
             specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding preflight and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
             status = "planned"
-            notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
+            notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
     elif parse_systemd_mutation(lower):
         action, unit = parse_systemd_mutation(lower) or ("", "")
         kind = "systemd_mutation"
@@ -1613,7 +1628,8 @@ class ExecutionManager:
                 result = self._run_one(spec, op["id"])
                 op["commands"].append(result)
                 self.store.update_operation(op)
-                if result["status"] != "succeeded":
+                current_spec = plan["commands"][index]
+                if result["status"] != "succeeded" and not current_spec.get("allow_failure", False):
                     break
                 if len(op["commands"]) < len(plan.get("commands", [])):
                     completed_spec = plan["commands"][len(op["commands"]) - 1]

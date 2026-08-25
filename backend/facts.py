@@ -116,13 +116,14 @@ def parse_journal(text: str, exit_code: int | None = 0) -> dict[str, Any]:
 
 
 def parse_package_facts(results: list[dict[str, Any]]) -> dict[str, Any]:
-    facts: dict[str, Any] = {"state": "observed", "dpkg": None, "policy": None, "metadata": None, "preflight": None, "impact": {"upgraded": 0, "newly_installed": 0, "removed": 0, "not_upgraded": 0}}
+    facts: dict[str, Any] = {"state": "observed", "dpkg": None, "held": [], "policy": None, "metadata": None, "preflight": None, "impact": {"upgraded": 0, "newly_installed": 0, "removed": 0, "not_upgraded": 0}}
     for item in results:
         argv = item.get("argv", [])
         output = item.get("stdout", "") + item.get("stderr", "")
         exit_code = item.get("exit_code")
         if item.get("status") != "succeeded": facts["state"] = "tool_error"
-        if item.get("executable") == "dpkg-query" and "--audit" in argv: facts["dpkg"] = parse_dpkg_audit(output, exit_code)
+        if item.get("executable") == "dpkg" and "--audit" in argv: facts["dpkg"] = parse_dpkg_audit(output, exit_code)
+        elif item.get("executable") == "apt-mark" and "showhold" in argv: facts["held"] = [line.strip() for line in output.splitlines() if line.strip()][:100]
         elif item.get("executable") == "apt-cache" and "policy" in argv: facts["policy"] = parse_apt_policy(output, exit_code)
         elif item.get("executable") == "apt-cache" and "show" in argv: facts["metadata"] = parse_apt_show(output, exit_code)
         elif item.get("executable") == "apt-get" and "-s" in argv:

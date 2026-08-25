@@ -234,7 +234,7 @@ The following packages will be upgraded:
 
     def test_apt_package_facts_join_command_evidence(self):
         results = [
-            {'executable':'dpkg-query','argv':['dpkg-query','--audit'],'stdout':'','exit_code':0,'status':'succeeded'},
+            {'executable':'dpkg','argv':['dpkg','--audit'],'stdout':'','exit_code':0,'status':'succeeded'},
             {'executable':'apt-cache','argv':['apt-cache','policy','git'],'stdout':'Installed: 1:2.39.2\nCandidate: 1:2.39.2\n', 'exit_code':0,'status':'succeeded'},
             {'executable':'apt-get','argv':['apt-get','-s','install','git'],'stdout':'0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n','exit_code':0,'status':'succeeded'},
         ]
@@ -314,6 +314,13 @@ The following packages will be upgraded:
         if os.getuid() != 0:
             with self.assertRaises(PermissionError):
                 ExecutionManager(self.store).start(plan, True, plan['approval_token'])
+
+    def test_package_probe_failure_is_informational_but_mutation_is_not(self):
+        plan = build_plan(self.store, 'install package git', self.tmp.name)
+        self.assertEqual(plan['commands'][0]['executable'], 'dpkg')
+        query = next(command for command in plan['commands'] if command['executable'] == 'dpkg-query' and '-W' in command['argv'])
+        self.assertTrue(query['allow_failure'])
+        self.assertTrue(any(command['executable'] == 'apt-get' and '-s' in command['argv'] for command in plan['commands']))
 
     def test_systemd_mutation_is_guarded_and_unit_typed(self):
         plan = build_plan(self.store, 'restart nginx', self.tmp.name)
