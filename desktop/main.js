@@ -14,7 +14,7 @@ const capability = crypto.randomBytes(32).toString('hex');
 function startSidecar() {
   return new Promise((resolve, reject) => {
     const root = path.resolve(__dirname, '..');
-    sidecar = spawn(process.env.PYTHON || 'python3', [path.join(root, 'backend', 'vortex_backend.py'), '--host', '127.0.0.1', '--port', '0', '--token', capability], {
+    sidecar = spawn(process.env.PYTHON || 'python3', [path.join(root, 'backend', 'vortex_backend.py'), '--host', '127.0.0.1', '--port', '0'], {
       cwd: root,
       env: { ...process.env, VORTEX_SIDECAR_TOKEN: capability },
       stdio: ['ignore', 'pipe', 'pipe']

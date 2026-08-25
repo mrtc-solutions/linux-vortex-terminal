@@ -9,8 +9,8 @@ execution; the renderer is never allowed to spawn a process.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
+import ipaddress
 import json
 import os
 import queue
@@ -22,7 +22,6 @@ import sqlite3
 import stat
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.parse
@@ -30,7 +29,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 SCHEMA_VERSION = 1
 APP_VERSION = "0.1.0"
@@ -39,6 +38,7 @@ REDACTION_RE = re.compile(
 )
 ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-_])")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+BIDI_RE = re.compile(r"[\u202a-\u202e\u2066-\u2069]")
 UNIT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@:-]*\.service$")
 PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?$")
 HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
@@ -56,6 +56,8 @@ EXIT_CODES = {
     "integrity_failure": 9,
     "incompatible_state": 10,
 }
+
+CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 TOOL_CATALOG: dict[str, dict[str, Any]] = {
     "git": {"family": "development", "probe": ["--version"], "role": "version-control"},
@@ -94,6 +96,7 @@ def sanitize(text: str) -> str:
     """Make terminal output safe for display and storage."""
     text = ANSI_RE.sub("", text)
     text = CONTROL_RE.sub("", text)
+    text = BIDI_RE.sub("[BIDI]", text)
     return text.replace("\r", "")
 
 
@@ -150,8 +153,51 @@ def read_os_release() -> dict[str, str]:
     return result
 
 
+def _is_user_writable_directory(path: Path, st: os.stat_result | None = None) -> bool:
+    st = st or path.stat()
+    mode = stat.S_IMODE(st.st_mode)
+    return bool(mode & 0o022) or (st.st_uid == os.getuid() and bool(mode & 0o200))
+
+
+def _safe_executable_dirs() -> tuple[list[str], list[str]]:
+    """Return PATH directories safe for managed plans and rejected entries.
+
+    An empty PATH component means the current directory and is deliberately
+    never accepted for managed execution. User-writable directories are also
+    excluded to reduce PATH replacement risk.
+    """
+    safe: list[str] = []
+    rejected: list[str] = []
+    raw_path = os.environ.get("PATH") or CONTROLLED_PATH
+    for raw in raw_path.split(os.pathsep):
+        directory = raw or "."
+        try:
+            resolved = Path(directory).expanduser().resolve(strict=True)
+            st = resolved.stat()
+            mode = stat.S_IMODE(st.st_mode)
+            if not resolved.is_dir() or _is_user_writable_directory(resolved, st):
+                rejected.append(str(resolved))
+            else:
+                safe.append(str(resolved))
+        except OSError:
+            rejected.append(directory)
+    return safe, rejected
+
+
 def probe_executable(name: str) -> dict[str, Any]:
-    found = shutil.which(name)
+    if not name or "\x00" in name or (not os.path.isabs(name) and os.sep in name):
+        return {"name": name, "state": "blocked", "path": None, "version": None, "security_flags": ["invalid-executable-name"]}
+    if os.path.isabs(name):
+        found = name
+    else:
+        safe_dirs, rejected_dirs = _safe_executable_dirs()
+        found = shutil.which(name, path=os.pathsep.join(safe_dirs)) if safe_dirs else None
+        if not found:
+            # Distinguish absence from a tool that only exists in an unsafe PATH
+            # location; callers must not silently execute the latter.
+            unsafe_found = shutil.which(name)
+            if unsafe_found and rejected_dirs:
+                return {"name": name, "state": "blocked", "path": unsafe_found, "version": None, "security_flags": ["unsafe-path-directory"]}
     if not found:
         return {"name": name, "state": "absent", "path": None, "version": None}
     path = Path(found)
@@ -160,6 +206,12 @@ def probe_executable(name: str) -> dict[str, Any]:
         st = real.stat()
         mode = stat.S_IMODE(st.st_mode)
         security_flags: list[str] = []
+        parent = real.parent
+        try:
+            if _is_user_writable_directory(parent):
+                security_flags.append("writable-parent-directory")
+        except OSError:
+            security_flags.append("parent-stat-failed")
         if mode & 0o022:
             security_flags.append("writable-by-group-or-other")
         if st.st_mode & (stat.S_ISUID | stat.S_ISGID):
@@ -188,8 +240,8 @@ def probe_executable(name: str) -> dict[str, Any]:
                 env = minimal_env(False)
                 proc = subprocess.run([str(real), *spec["probe"]], capture_output=True, text=True, timeout=2, env=env)
                 version_line = (proc.stdout or proc.stderr).splitlines()
-                item["version"] = version_line[0][:180] if version_line else "version-unknown"
-            except (OSError, subprocess.SubprocessError):
+                item["version"] = redact(version_line[0][:180]) if version_line else "version-unknown"
+            except (OSError, subprocess.SubprocessError, UnicodeError):
                 item["version"] = "version-unknown"
         return item
     except OSError as exc:
@@ -201,9 +253,12 @@ def minimal_env(tty: bool, additions: dict[str, str] | None = None) -> dict[str,
     if tty:
         allowed.add("TERM")
     env = {key: value for key, value in os.environ.items() if key in allowed}
-    env.setdefault("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+    # Never inherit a user-controlled PATH into a managed child.
+    env["PATH"] = CONTROLLED_PATH
     if additions:
         for key, value in additions.items():
+            if key == "PATH":
+                continue
             if re.fullmatch(r"[A-Z_][A-Z0-9_]{0,63}", key) and "=" not in value and "\x00" not in value:
                 env[key] = value
     return env
@@ -280,7 +335,10 @@ def validate_cwd(raw: str | None) -> Path:
 
 def quote_argv(argv: list[str]) -> str:
     import shlex
-    return " ".join(shlex.quote(x) for x in argv)
+    # Display escaping is intentionally separate from execution argv. Newlines,
+    # tabs, and bidi markers must never reshape a plan card or terminal log.
+    safe = [sanitize(x).replace("\n", "\\n").replace("\t", "\\t") for x in argv]
+    return " ".join(shlex.quote(x) for x in safe)
 
 
 class Store:
@@ -353,7 +411,10 @@ class Store:
             rows = db.execute("SELECT * FROM audit_events ORDER BY sequence").fetchall()
         previous = "0" * 64
         for row in rows:
-            payload = json.loads(row["payload_json"])
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                return {"valid": False, "checked": row["sequence"], "error": "audit payload is not valid JSON"}
             body = {"event_id": row["event_id"], "at": row["at"], "event_type": row["event_type"], "payload": payload, "previous_hash": previous}
             expected = hashlib.sha256((previous + canonical(body)).encode()).hexdigest()
             if row["previous_hash"] != previous or row["event_hash"] != expected:
@@ -368,8 +429,16 @@ class Store:
 
     def get_plan(self, plan_id: str) -> dict[str, Any] | None:
         with self.connect() as db:
-            row = db.execute("SELECT plan_json FROM plans WHERE id=?", (plan_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+            row = db.execute("SELECT id, digest, status, approval_token, plan_json FROM plans WHERE id=?", (plan_id,)).fetchone()
+        if not row:
+            return None
+        plan = json.loads(row["plan_json"])
+        if plan.get("id") != row["id"] or plan.get("digest") != row["digest"] or plan.get("approval_token") != row["approval_token"] or plan_digest(plan) != row["digest"]:
+            raise sqlite3.IntegrityError("plan integrity mismatch")
+        # The normalized JSON is immutable; lifecycle status lives in the
+        # relational column so a claimed plan cannot be replayed via stale JSON.
+        plan["status"] = row["status"]
+        return plan
 
     def claim_plan(self, plan_id: str) -> tuple[bool, str]:
         with self.lock, self.connect() as db:
@@ -426,34 +495,60 @@ def normalize_target(raw: str) -> str:
     if not value or any(c in value for c in "\x00\n\r;|&`$()<>\\"):
         raise PolicyError("target contains unsafe characters")
     if value.lower().startswith(("http://", "https://")):
-        value = value.lower()
         parsed = urllib.parse.urlparse(value)
-        if parsed.hostname is None or parsed.username or parsed.password or parsed.fragment:
-            raise PolicyError("URL must have a host and no credentials or fragment")
-        if parsed.path == "":
-            value += "/"
-        return value
-    if "/" in value and not value.startswith(("http://", "https://")):
-        # bounded CIDR notation, not arbitrary path input
-        host, _, prefix = value.partition("/")
-        if not prefix.isdigit() or int(prefix) < 0 or int(prefix) > 128:
-            raise PolicyError("invalid CIDR target")
-        value = f"{host}/{int(prefix)}"
-    if not (HOST_RE.fullmatch(value) or re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", value) or re.fullmatch(r"[0-9a-fA-F:]+", value)):
+        if parsed.scheme.lower() not in {"http", "https"} or parsed.hostname is None or parsed.username or parsed.password or parsed.fragment:
+            raise PolicyError("URL must have an HTTP(S) host and no credentials or fragment")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise PolicyError("URL has an invalid port") from exc
+        hostname = parsed.hostname.lower()
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+        netloc = hostname + (f":{port}" if port is not None else "")
+        return urllib.parse.urlunparse((parsed.scheme.lower(), netloc, parsed.path or "/", "", parsed.query, ""))
+    if "/" in value:
+        # Validate CIDR with the standard library instead of accepting arbitrary
+        # numeric-looking strings or an IPv4 /128.
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError as exc:
+            raise PolicyError("invalid IP/CIDR target") from exc
+        return str(network)
+    try:
+        address = ipaddress.ip_address(value)
+        return str(address)
+    except ValueError:
+        pass
+    if not HOST_RE.fullmatch(value) or ".." in value or any(len(label) > 63 or label.startswith("-") or label.endswith("-") for label in value.split(".")):
         raise PolicyError("target is not a hostname, IP, or URL")
     return value.lower()
 
 
 def target_in_engagement(target: str, engagement: dict[str, Any]) -> bool:
     normalized = normalize_target(target)
+    parsed_target = urllib.parse.urlparse(normalized)
+    target_host = parsed_target.hostname if parsed_target.scheme else normalized.split("/", 1)[0]
+    target_port = parsed_target.port if parsed_target.scheme else None
     for allowed in engagement["targets"]:
         allowed_n = normalize_target(str(allowed))
+        parsed_allowed = urllib.parse.urlparse(allowed_n)
+        allowed_host = parsed_allowed.hostname if parsed_allowed.scheme else allowed_n.split("/", 1)[0]
+        allowed_port = parsed_allowed.port if parsed_allowed.scheme else None
         if normalized == allowed_n:
             return True
+        if target_host != allowed_host:
+            continue
+        # An explicitly scoped URL port must remain the same. A bare hostname
+        # intentionally leaves the port open for a declared host assessment.
+        if parsed_target.scheme and parsed_allowed.scheme and target_port != allowed_port:
+            continue
         # A declared bare domain authorizes subdomains, but not an unrelated suffix.
-        if not normalized.startswith(("http://", "https://")) and normalized.endswith("." + allowed_n):
+        if not parsed_target.scheme and not parsed_allowed.scheme and target_host.endswith("." + allowed_host):
             return True
-        if normalized.startswith(("http://", "https://")) and urllib.parse.urlparse(normalized).hostname == urllib.parse.urlparse(allowed_n).hostname:
+        if parsed_target.scheme and parsed_allowed.scheme:
+            return True
+        if parsed_target.scheme and not parsed_allowed.scheme:
             return True
     return False
 
@@ -473,7 +568,7 @@ def command_spec(executable: str, argv: list[str], cwd: Path, *, risk: str = "lo
     return {
         "executable": executable,
         "argv": argv,
-        "display": quote_argv(argv),
+        "display": redact(quote_argv(argv)),
         "cwd": str(cwd),
         "env_additions": {},
         "stdin_policy": "closed",
@@ -495,7 +590,20 @@ def parse_service(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagement_id: str | None = None) -> dict[str, Any]:
+def plan_digest(plan: dict[str, Any]) -> str:
+    return digest({
+        "commands": plan.get("commands", []),
+        "cwd": plan.get("cwd"),
+        "scope": plan.get("scope", {}),
+        "policy_version": plan.get("policy_version"),
+        "knowledge_version": plan.get("knowledge_version"),
+        "source": plan.get("source"),
+        "risk": plan.get("risk"),
+        "expires_at": plan.get("expires_at"),
+    })
+
+
+def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagement_id: str | None = None, offline: bool = False) -> dict[str, Any]:
     request = (request or "").strip()
     if not request:
         raise ValueError("request is required")
@@ -528,7 +636,10 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         authorization = "active engagement required"
         tool = next((name for name in ("nmap", "nuclei", "ffuf", "nikto", "amass") if name in lower), "nmap")
         targets = re.findall(r"https?://[^\s,]+|\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b", request)
-        if not engagement:
+        if offline:
+            status = "unavailable"
+            notes += ["OFFLINE mode blocks outbound network operations; no assessment command was planned."]
+        elif not engagement:
             status = "clarified"
             notes += ["Active cybersecurity work requires an engagement before a target or network tool can run.", "Create an engagement with an owner/authorization reference, canonical targets, limits, and an expiry."]
         elif not targets:
@@ -612,7 +723,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "id": secrets.token_hex(32),
         "created_at": created,
         "expires_at": expires,
-        "request": request,
+        "request": redact(request),
         "cwd": str(cwd),
         "status": status,
         "kind": kind,
@@ -621,6 +732,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "commands": specs,
         "notes": notes,
         "missing_tools": sorted(set(missing)),
+        "engagement_id": engagement_id,
         "scope": {"cwd": str(cwd), "engagement_id": engagement_id, "targets": specs[0].get("scope", []) if specs else []},
         "workers": [{"id": "vortex-deterministic-planner", "state": "responded", "evidence_used": bool(specs), "role": "reviewed local adapter"}, {"id": "local-model", "state": "disabled", "evidence_used": False, "role": "advisory only"}],
         "approval_required": bool(specs),
@@ -629,7 +741,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "policy_version": "safe-v1",
         "knowledge_version": "builtin-v1",
     }
-    plan["digest"] = digest({"commands": plan["commands"], "cwd": plan["cwd"], "scope": plan["scope"], "policy_version": plan["policy_version"], "expires_at": plan["expires_at"]})
+    plan["digest"] = plan_digest(plan)
     plan["approval_token"] = secrets.token_urlsafe(32)
     store.save_plan(plan)
     return plan
@@ -639,17 +751,38 @@ class ExecutionManager:
     def __init__(self, store: Store):
         self.store = store
         self.threads: dict[str, threading.Thread] = {}
+        self.cancel_events: dict[str, threading.Event] = {}
+        self.processes: dict[str, subprocess.Popen[bytes]] = {}
         self.lock = threading.Lock()
 
-    def start(self, plan: dict[str, Any], confirm: bool, approval_token: str | None = None, allow_root: bool = False) -> dict[str, Any]:
+    def start(self, plan: dict[str, Any], confirm: bool, approval_token: str | None = None, allow_root: bool = False, offline: bool = False) -> dict[str, Any]:
         if not confirm:
             raise PermissionError("confirmation required")
+        # Re-read the canonical row. A caller must not be able to mutate an
+        # in-memory plan or substitute a different command after planning.
+        authoritative = self.store.get_plan(str(plan.get("id", "")))
+        if not authoritative:
+            raise PolicyError("plan not found")
+        if authoritative.get("digest") != plan.get("digest") or plan_digest(plan) != plan.get("digest"):
+            raise PolicyError("plan digest does not match its command and execution context")
+        plan = authoritative
         if plan["status"] != "planned":
             raise PolicyError("plan is not executable in its current state")
+        if offline and any(spec.get("network_class") != "no-network" for spec in plan.get("commands", [])):
+            raise PolicyError("offline mode blocks this network-effecting plan")
         if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
             raise TimeoutError("plan expired")
-        if approval_token is not None and not secrets.compare_digest(approval_token, plan["approval_token"]):
-            raise PolicyError("approval token does not match this plan")
+        if plan.get("engagement_id"):
+            engagement = self.store.get_engagement(plan["engagement_id"])
+            if not engagement or engagement.get("status") != "active":
+                raise PolicyError("engagement is unavailable or closed")
+            if time.time() > datetime.fromisoformat(engagement["expires_at"]).timestamp():
+                raise TimeoutError("engagement expired")
+            for target in plan.get("scope", {}).get("targets", []):
+                if not target_in_engagement(target, engagement):
+                    raise PolicyError("plan target is no longer inside the engagement scope")
+        if not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
+            raise PolicyError("exact approval token is required for this plan")
         if os.getuid() == 0 and not allow_root:
             raise PermissionError("refusing UID 0 execution without an explicit root override")
         for spec in plan["commands"]:
@@ -659,21 +792,49 @@ class ExecutionManager:
         claimed, reason = self.store.claim_plan(plan["id"])
         if not claimed:
             raise PolicyError(reason)
+        self.store.append_audit("plan_approved", {"plan_id": plan["id"], "digest": plan["digest"]})
         op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "output_digest": None, "analysis": None}
         self.store.save_operation(op)
         self.store.append_audit("operation_started", {"operation_id": op["id"], "plan_id": plan["id"], "digest": plan["digest"], "privilege": "root-override" if allow_root else "user"})
         thread = threading.Thread(target=self._run, args=(plan, op), daemon=True)
         with self.lock:
             self.threads[op["id"]] = thread
+            self.cancel_events[op["id"]] = threading.Event()
         thread.start()
         return op
 
-    def _run_one(self, spec: dict[str, Any]) -> dict[str, Any]:
+    def cancel(self, operation_id: str) -> bool:
+        """Request cancellation and interrupt the currently running group."""
+        with self.lock:
+            event = self.cancel_events.get(operation_id)
+            process = self.processes.get(operation_id)
+        if not event:
+            return False
+        event.set()
+        if process and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
+        self.store.append_audit("operation_cancel_requested", {"operation_id": operation_id})
+        return True
+
+    def _run_one(self, spec: dict[str, Any], operation_id: str) -> dict[str, Any]:
         started = now_iso(); started_mono = time.monotonic()
         argv = list(spec["argv"])
-        record: dict[str, Any] = {"argv": argv, "display": spec["display"], "executable": spec["executable"], "cwd": spec["cwd"], "started_at": started, "stdout": "", "stderr": "", "exit_code": None, "signal": None, "termination_reason": None, "status": "running", "version": spec["executable_identity"].get("version"), "evidence_digest": None}
+        execution_argv = list(argv)
+        identity_path = spec.get("executable_identity", {}).get("realpath")
+        if identity_path:
+            execution_argv[0] = identity_path
+        record: dict[str, Any] = {"argv": [redact(arg) for arg in argv], "display": redact(spec["display"]), "executable": spec["executable"], "cwd": spec["cwd"], "started_at": started, "stdout": "", "stderr": "", "exit_code": None, "signal": None, "termination_reason": None, "status": "running", "version": spec["executable_identity"].get("version"), "evidence_digest": None}
+        cancel_event = self.cancel_events.get(operation_id)
         try:
-            proc = subprocess.Popen(argv, cwd=spec["cwd"], env=minimal_env(False, spec.get("env_additions")), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, start_new_session=True, close_fds=True)
+            proc = subprocess.Popen(execution_argv, cwd=spec["cwd"], env=minimal_env(False, spec.get("env_additions")), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, start_new_session=True, close_fds=True)
+            with self.lock:
+                self.processes[operation_id] = proc
+            if cancel_event and cancel_event.is_set():
+                try: os.killpg(proc.pid, signal.SIGINT)
+                except ProcessLookupError: pass
         except FileNotFoundError:
             record.update(status="unavailable", termination_reason="tool_missing", ended_at=now_iso())
             return record
@@ -683,7 +844,10 @@ class ExecutionManager:
         chunks: queue.Queue[tuple[str, bytes]] = queue.Queue()
         def reader(stream: Any, label: str) -> None:
             try:
-                for chunk in iter(stream.readline, b""):
+                while True:
+                    chunk = stream.read(65536)
+                    if not chunk:
+                        break
                     chunks.put((label, chunk))
             finally:
                 stream.close()
@@ -691,6 +855,15 @@ class ExecutionManager:
         for t in threads: t.start()
         total = 0; truncated = False
         while proc.poll() is None or any(t.is_alive() for t in threads) or not chunks.empty():
+            if cancel_event and cancel_event.is_set() and proc.poll() is None:
+                record["termination_reason"] = "cancelled"
+                try: os.killpg(proc.pid, signal.SIGINT)
+                except ProcessLookupError: pass
+                time.sleep(0.15)
+                if proc.poll() is None:
+                    try: os.killpg(proc.pid, signal.SIGTERM)
+                    except ProcessLookupError: pass
+                break
             try:
                 label, raw = chunks.get(timeout=0.05)
             except queue.Empty:
@@ -723,11 +896,15 @@ class ExecutionManager:
                 except ProcessLookupError: pass
                 proc.wait()
         for t in threads: t.join(timeout=1)
+        with self.lock:
+            self.processes.pop(operation_id, None)
         record["exit_code"] = proc.returncode if proc.returncode is not None and proc.returncode >= 0 else None
         record["signal"] = -proc.returncode if proc.returncode is not None and proc.returncode < 0 else None
         record["ended_at"] = now_iso()
         if truncated:
             record["status"] = "timed_out"; record["termination_reason"] = "output_truncated"
+        elif record["termination_reason"] == "cancelled" or (cancel_event and cancel_event.is_set()):
+            record["status"] = "cancelled"; record["termination_reason"] = "cancelled"
         elif record["termination_reason"] == "timeout":
             record["status"] = "timed_out"
         elif record["signal"] in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
@@ -744,13 +921,16 @@ class ExecutionManager:
         try:
             op["status"] = "running"; self.store.update_operation(op)
             for spec in plan["commands"]:
-                result = self._run_one(spec)
+                if self.cancel_events.get(op["id"], threading.Event()).is_set():
+                    break
+                result = self._run_one(spec, op["id"])
                 op["commands"].append(result)
                 self.store.update_operation(op)
                 if result["status"] != "succeeded":
                     break
             statuses = [x["status"] for x in op["commands"]]
-            if any(s == "timed_out" for s in statuses): op["status"] = "timed_out"
+            if self.cancel_events.get(op["id"], threading.Event()).is_set(): op["status"] = "cancelled"
+            elif any(s == "timed_out" for s in statuses): op["status"] = "timed_out"
             elif any(s == "interrupted" for s in statuses): op["status"] = "interrupted"
             elif any(s == "unavailable" for s in statuses): op["status"] = "unavailable"
             elif all(s == "succeeded" for s in statuses) and statuses: op["status"] = "succeeded"
@@ -762,6 +942,9 @@ class ExecutionManager:
         op["analysis"] = make_analysis(plan, op)
         self.store.update_operation(op)
         self.store.append_audit("operation_finished", {"operation_id": op["id"], "plan_id": plan["id"], "status": op["status"], "output_digest": op["output_digest"]})
+        with self.lock:
+            self.cancel_events.pop(op["id"], None)
+            self.threads.pop(op["id"], None)
 
 
 def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
@@ -770,7 +953,7 @@ def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
         lines = [line for line in (command.get("stdout", "") + command.get("stderr", "")).splitlines() if line.strip()]
         facts.append({"command": command["display"], "status": command["status"], "observed_lines": len(lines), "evidence_digest": command.get("evidence_digest"), "summary": (lines[0][:220] if lines else "No output was observed; this is not evidence of a clean result.")})
     return {
-        "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
+        "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "cancelled": "CANCELLED", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
         "fact": f"{len(op['commands'])} real command(s) reached an observed terminal outcome." if op["commands"] else "No command was run.",
         "inference": "Output summaries are bounded and redacted. They are observations, not a security guarantee.",
         "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule.",
@@ -778,6 +961,24 @@ def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
         "next_steps": [{"label": "explain", "text": "Review the observed command timeline and evidence digests."}, {"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."}],
         "workers": op["workers"],
     }
+
+
+def parse_expiry(raw: Any, *, default_seconds: int) -> str:
+    if raw is None or raw == "":
+        value = datetime.fromtimestamp(time.time() + default_seconds, tz=timezone.utc)
+    elif not isinstance(raw, str):
+        raise ValueError("expires_at must be an ISO-8601 string")
+    else:
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("expires_at must be valid ISO-8601") from exc
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        value = value.astimezone(timezone.utc)
+    if value.timestamp() <= time.time():
+        raise ValueError("expires_at must be in the future")
+    return value.isoformat(timespec="milliseconds")
 
 
 class VortexHandler(BaseHTTPRequestHandler):
@@ -839,8 +1040,15 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not asset.is_file(): asset = (self.frontend.parent / "assets" / relative).resolve()
                 allowed = (self.frontend.resolve(), (self.frontend.parent / "assets").resolve())
                 mime = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png"}.get(asset.suffix, "application/octet-stream")
-                if any(str(asset).startswith(str(root)) for root in allowed) and asset.is_file(): return self._static(asset, mime)
+                def is_under(candidate: Path, root: Path) -> bool:
+                    try:
+                        return os.path.commonpath((str(candidate), str(root))) == str(root)
+                    except ValueError:
+                        return False
+                if any(is_under(asset, root) for root in allowed) and asset.is_file(): return self._static(asset, mime)
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
+        except (sqlite3.IntegrityError, sqlite3.DatabaseError) as exc:
+            return self._json(409, {"error": {"code": "persistence_integrity", "message": redact(str(exc)), "exit_code": EXIT_CODES["integrity_failure"]}})
         except Exception as exc:
             return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
 
@@ -853,17 +1061,31 @@ class VortexHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
             if path == "/api/plan":
-                plan = build_plan(self.store, str(body.get("request", "")), body.get("cwd"), body.get("engagement_id")); return self._json(200, {"plan": plan})
+                request = body.get("request")
+                if not isinstance(request, str):
+                    raise ValueError("request must be a string")
+                plan = build_plan(self.store, request, body.get("cwd"), body.get("engagement_id"), bool(body.get("offline", False))); return self._json(200, {"plan": plan})
             if path == "/api/execute":
                 plan = self.store.get_plan(str(body.get("plan_id", "")))
                 if not plan: return self._json(404, {"error": {"code": "not_found", "message": "plan not found"}})
-                op = self.executor.start(plan, bool(body.get("confirm")), body.get("approval_token"), bool(body.get("allow_root", False))); return self._json(202, {"operation": op})
+                op = self.executor.start(plan, bool(body.get("confirm")), body.get("approval_token"), bool(body.get("allow_root", False)), bool(body.get("offline", False))); return self._json(202, {"operation": op})
             if path == "/api/engagements":
-                targets = [normalize_target(str(x)) for x in body.get("targets", [])]
-                if not targets: raise PolicyError("at least one canonical target is required")
-                expires = body.get("expires_at") or datetime.fromtimestamp(time.time() + 24 * 3600, tz=timezone.utc).isoformat(timespec="milliseconds")
-                item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": str(body.get("name") or "Authorized assessment"), "authorization": str(body.get("authorization") or "operator-declared authorization"), "targets": targets, "classes": body.get("classes") or ["reconnaissance"], "status": "active"}
+                raw_targets = body.get("targets", [])
+                if not isinstance(raw_targets, list):
+                    raise ValueError("targets must be a list")
+                targets = [normalize_target(str(x)) for x in raw_targets]
+                if not targets or len(targets) > 100: raise PolicyError("provide between 1 and 100 canonical targets")
+                raw_classes = body.get("classes") or ["reconnaissance"]
+                if not isinstance(raw_classes, list) or not all(isinstance(x, str) and x for x in raw_classes):
+                    raise ValueError("classes must be a list of non-empty strings")
+                expires = parse_expiry(body.get("expires_at"), default_seconds=24 * 3600)
+                item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": redact(str(body.get("name") or "Authorized assessment"))[:160], "authorization": redact(str(body.get("authorization") or "operator-declared authorization"))[:500], "targets": targets, "classes": [redact(x)[:80] for x in raw_classes[:20]], "status": "active"}
                 self.store.create_engagement(item); return self._json(201, {"engagement": item})
+            if path.startswith("/api/operations/") and path.endswith("/cancel"):
+                operation_id = path.split("/")[-2]
+                if not self.executor.cancel(operation_id):
+                    return self._json(404, {"error": {"code": "not_running", "message": "operation is not running"}})
+                return self._json(202, {"cancel_requested": True, "operation_id": operation_id})
             if path == "/api/feedback":
                 rating = int(body.get("rating", 0)); correction = redact(str(body.get("correction", "")))[:2000]
                 self.store.append_audit("feedback_recorded", {"operation_id": body.get("operation_id"), "rating": max(1, min(5, rating)), "correction": correction}); return self._json(201, {"saved": True})
@@ -874,6 +1096,8 @@ class VortexHandler(BaseHTTPRequestHandler):
             return self._json(409, {"error": {"code": "expired", "message": str(exc), "exit_code": EXIT_CODES["timeout"]}})
         except (ValueError, PolicyError, json.JSONDecodeError) as exc:
             return self._json(422, {"error": {"code": "invalid_plan", "message": redact(str(exc)), "exit_code": EXIT_CODES["policy_denied"]}})
+        except (sqlite3.IntegrityError, sqlite3.DatabaseError) as exc:
+            return self._json(409, {"error": {"code": "persistence_integrity", "message": redact(str(exc)), "exit_code": EXIT_CODES["integrity_failure"]}})
         except Exception as exc:
             return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
 

@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from backend.vortex_backend import (EXIT_CODES, ExecutionManager, Store, build_plan, detect_context, digest, now_iso, probe_executable, command_spec, validate_cwd)
+from backend.vortex_backend import (EXIT_CODES, ExecutionManager, Store, build_plan, detect_context, digest, now_iso, probe_executable, command_spec, validate_cwd, plan_digest)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps({"schema_version": 1, **value}, sort_keys=True, indent=2))
@@ -29,17 +29,21 @@ def plan_text(plan):
     if plan['approval_required']:
         print(f"\nConfirmation phrase: {plan['approval_phrase']}")
 
-def wait_operation(store, op_id):
-    while True:
-        op = store.get_operation(op_id)
-        if op and op['status'] not in ('started', 'running'): return op
-        time.sleep(.15)
+def wait_operation(store, manager, op_id):
+    try:
+        while True:
+            op = store.get_operation(op_id)
+            if op and op['status'] not in ('started', 'running'): return op
+            time.sleep(.15)
+    except KeyboardInterrupt:
+        manager.cancel(op_id)
+        raise
 
 def _normalize_args(raw):
     # Accept global presentation/scope flags in the conventional position
     # before or after a subcommand, while keeping `--` opaque for direct mode.
     raw = list(raw)
-    global_flags = {'--json', '--offline', '--no-color', '--non-interactive', '--allow-root', '--dry-run'}
+    global_flags = {'--json', '--offline', '--no-color', '--non-interactive', '--allow-root', '--dry-run', '--yes'}
     prefix, cleaned, i = [], [], 0
     while i < len(raw):
         item = raw[i]
@@ -75,6 +79,7 @@ def main(argv=None):
     parser.add_argument('--non-interactive', action='store_true')
     parser.add_argument('--allow-root', action='store_true', help='explicitly allow one UID 0 invocation')
     parser.add_argument('--dry-run', action='store_true', help='print a plan without executing it')
+    parser.add_argument('--yes', action='store_true', help='skip the interactive prompt only for a policy-valid plan')
     parser.add_argument('--format', choices=('text', 'json', 'md'), default='text', help='output format')
     parser.add_argument('--profile', choices=('safe', 'standard', 'expert'), default='safe', help='policy friction profile')
     parser.add_argument('--version', action='version', version='vortex 0.1.0')
@@ -92,9 +97,10 @@ def main(argv=None):
     e = sub.add_parser('engagement'); e.add_argument('action', choices=['list','create']); e.add_argument('--name'); e.add_argument('--authorization'); e.add_argument('--target', action='append')
     n = sub.add_parser('_request', help=argparse.SUPPRESS); n.add_argument('request', nargs='+')
     sub._choices_actions = [action for action in sub._choices_actions if action.dest != '_request']
-    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--yes', action='store_true'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs=argparse.REMAINDER)
+    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     args.as_json = args.as_json or args.format == 'json'
+    is_natural_request = args.subcommand == '_request'
     store = Store()
     try:
         if args.subcommand == 'doctor': emit({'doctor': detect_context()}, args.as_json); return EXIT_CODES['success']
@@ -111,7 +117,7 @@ def main(argv=None):
         if args.subcommand == 'audit':
             result = {'audit': store.verify_audit()}; emit(result, args.as_json); return 0 if result['audit']['valid'] else EXIT_CODES['integrity_failure']
         if args.subcommand == 'explain':
-            plan = build_plan(store, 'explain ' + ' '.join(args.request), args.cwd)
+            plan = build_plan(store, 'explain ' + ' '.join(args.request), args.cwd, offline=args.offline)
             plan['approval_required'] = False
             emit({'explanation': plan}, args.as_json)
             return 0
@@ -141,40 +147,48 @@ def main(argv=None):
             direct = args.direct_mode or args.direct
             if direct and direct[0] == '--': direct = direct[1:]
             if not direct: raise ValueError('direct command is empty')
-            cwd=validate_cwd(args.cwd); spec=command_spec(direct[0],direct,cwd,risk='high',explanation='Explicit operator-direct command; not AI-validated.')
+            cwd=validate_cwd(args.cwd); spec=command_spec(direct[0],direct,cwd,risk='high',network='unknown',explanation='Explicit operator-direct command; not AI-validated.')
             plan={'schema_version':1,'id':__import__('secrets').token_hex(32),'created_at':now_iso(),'expires_at':now_iso(),'request':'operator direct command','cwd':str(cwd),'status':'planned','kind':'operator_direct','risk':'high','authorization':'operator_direct','commands':[spec],'notes':['Direct operator command. Shell interpolation is disabled and source attribution is operator_direct.'],'missing_tools':[],'scope':{'cwd':str(cwd)},'workers':[],'approval_required':True,'approval_phrase':'APPROVE '+spec['display'],'source':'operator_direct','policy_version':'safe-v1','knowledge_version':'builtin-v1','approval_token':__import__('secrets').token_urlsafe(32)}
-            plan['expires_at']=__import__('datetime').datetime.fromtimestamp(time.time()+900,__import__('datetime').timezone.utc).isoformat(); plan['digest']=digest({'commands':plan['commands'],'cwd':plan['cwd']}); store.save_plan(plan)
+            plan['expires_at']=__import__('datetime').datetime.fromtimestamp(time.time()+900,__import__('datetime').timezone.utc).isoformat(); plan['digest']=plan_digest(plan); store.save_plan(plan)
         elif args.subcommand in ('ask','plan'):
-            plan=build_plan(store,args.request,args.cwd)
+            plan=build_plan(store,args.request,args.cwd, offline=args.offline)
             if args.subcommand == 'ask': plan['approval_required']=False
             if args.as_json: emit({'plan':plan},True)
             else: plan_text(plan)
             return 0
         elif args.subcommand == '_request':
             request = ' '.join(args.request)
-            plan = build_plan(store, request, args.cwd)
-            if args.as_json: emit({'plan': plan}, True)
-            else: plan_text(plan)
+            plan = build_plan(store, request, args.cwd, offline=args.offline)
+            if not args.as_json: plan_text(plan)
         else:
             request = ' '.join(args.direct) if args.direct else ' '.join(parser.parse_known_args(argv)[1]) if argv else ''
             if not request: parser.print_help(); return EXIT_CODES['invalid_usage']
-            plan=build_plan(store,request,args.cwd)
+            plan=build_plan(store,request,args.cwd, offline=args.offline)
             if args.as_json: emit({'plan':plan},True)
             else: plan_text(plan)
-        if not plan.get('commands'): return EXIT_CODES['unavailable'] if plan['status']=='unavailable' else 0
-        if args.dry_run: return 0
+        if not plan.get('commands'):
+            if is_natural_request and args.as_json: emit({'plan': plan}, True)
+            return EXIT_CODES['unavailable'] if plan['status']=='unavailable' else 0
+        if args.dry_run:
+            if is_natural_request and args.as_json: emit({'plan': plan}, True)
+            return 0
         yes = getattr(args, 'yes', False)
         non_interactive = getattr(args, 'non_interactive', False)
         if not yes:
-            if non_interactive: return EXIT_CODES['confirmation_required']
+            if non_interactive:
+                if is_natural_request and args.as_json: emit({'plan': plan, 'error': {'code': 'confirmation_required'}}, True)
+                return EXIT_CODES['confirmation_required']
             print('\nApprove this exact plan? Type APPROVE to continue: ', end='', file=sys.stderr)
             answer=sys.stdin.readline().strip()
-            if answer != 'APPROVE': return EXIT_CODES['confirmation_required']
+            if answer != 'APPROVE':
+                if is_natural_request and args.as_json: emit({'plan': plan, 'error': {'code': 'confirmation_declined'}}, True)
+                return EXIT_CODES['confirmation_required']
         if non_interactive and (not getattr(args, 'digest', None) or not getattr(args, 'approval_token', None) or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
-        manager=ExecutionManager(store); op=manager.start(plan,True,getattr(args, 'approval_token', None) or plan['approval_token'],getattr(args, 'allow_root', False)); op=wait_operation(store,op['id'])
-        if args.as_json: emit({'operation':op},True)
+        manager=ExecutionManager(store); op=manager.start(plan,True,getattr(args, 'approval_token', None) or plan['approval_token'],getattr(args, 'allow_root', False), getattr(args, 'offline', False)); op=wait_operation(store,manager,op['id'])
+        if args.as_json:
+            emit({'plan': plan, 'operation': op} if is_natural_request else {'operation': op}, True)
         else: print(f"[{op['status'].upper()}] operation {op['id']}")
-        return EXIT_CODES['success'] if op['status']=='succeeded' else EXIT_CODES['command_failed']
+        return {'succeeded': EXIT_CODES['success'], 'cancelled': EXIT_CODES['interrupted'], 'interrupted': EXIT_CODES['interrupted'], 'timed_out': EXIT_CODES['timeout'], 'unavailable': EXIT_CODES['unavailable']}.get(op['status'], EXIT_CODES['command_failed'])
     except KeyboardInterrupt: return EXIT_CODES['interrupted']
     except PermissionError as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['confirmation_required']
     except Exception as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['failure']

@@ -21,17 +21,28 @@
   project-owned artwork, plan approval, host context, tools, engagements,
   activity, reports, settings, and analysis timeline.
 - Added tests for planner honesty, shell metacharacters, target injection, missing
-  tools, scope denial, audit tamper detection, real exit status, and redaction.
+  tools, scope denial, audit tamper detection, real exit status, redaction,
+  output caps, cancellation, offline mode, URL/port scope, plan tampering, and
+  exact approval-token enforcement.
 
 ## Commands run
 
 ```text
 python3 -m py_compile backend/vortex_backend.py cli/vortex.py
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v  # 13 tests
 ./vortex doctor --json
 ./vortex plan "system health"
 ./vortex run --yes -- /bin/echo hello
 ```
+
+## Review fixes made during verification
+
+The full review revalidated stored plan digests before execution, made approval
+tokens mandatory, tightened PATH and user-writable executable checks, enforced
+offline network blocking, canonicalized IP/CIDR and URL targets, bounded stream
+reads to avoid giant-line memory growth, added process-group cancellation, kept
+JSON natural-request output as one valid envelope, redacted prompts/argv/version
+strings, validated engagement payloads, and added persistence-integrity errors.
 
 ## Known limitations
 
