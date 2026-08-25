@@ -10,6 +10,10 @@ repository and `/tmp` are never data stores. Backup/export must offer explicit
 redaction and must not claim encryption at rest until an OS keyring/passphrase
 recovery design is implemented.
 
-`PRAGMA integrity_check` and a safe SQLite backup/recovery flow are Phase 4
-work. The existing `audit verify` detects ordinary hash-chain alteration. It does
-not protect data from a user/root account that an attacker already owns.
+`vortex db integrity` runs SQLite integrity and audit checks. `vortex backup
+PATH` creates a mode-0600 SQLite backup and refuses to overwrite an existing
+file without `--force`; the destination must be in an operator-owned directory.
+`vortex migrate` reports the current compatible schema and is a no-op until a
+real migration exists. The existing `audit verify` detects ordinary hash-chain
+alteration. None of these controls protect data from a user/root account that
+an attacker already owns.

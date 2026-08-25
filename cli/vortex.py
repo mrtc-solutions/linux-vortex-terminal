@@ -6,15 +6,21 @@ ExecutionManager, preserving the one-authority rule for local commands.
 """
 from __future__ import annotations
 import argparse
+import datetime
+import difflib
 import json
 import os
 import select
+import shutil
+import tempfile
+import urllib.error
+import urllib.request
 import sys
 import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.artifacts import ArtifactError, analyze_path
-from backend.vortex_backend import (ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, detect_context, digest, now_iso, probe_executable, command_spec, validate_cwd, plan_digest)
+from backend.vortex_backend import (ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, build_undo_plan, detect_context, digest, now_iso, probe_executable, command_spec, report_markdown, runtime_root, validate_cwd, plan_digest)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps({"schema_version": 1, **value}, sort_keys=True, indent=2))
@@ -66,10 +72,119 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
+
+SHELL_START = "# >>> vortex shell integration >>>"
+SHELL_END = "# <<< vortex shell integration <<<"
+
+
+def shell_rc_path(shell, home=None):
+    home = Path(home or Path.home())
+    return {'bash': home / '.bashrc', 'zsh': home / '.zshrc', 'fish': home / '.config' / 'fish' / 'config.fish'}[shell]
+
+
+def shell_block(shell):
+    if shell == 'fish':
+        return f"{SHELL_START}\nfunction vortex-plan\n    command vortex plan $argv\nend\n{SHELL_END}\n"
+    return f"{SHELL_START}\nvortex-plan() {{ command vortex plan \"$@\"; }}\n{SHELL_END}\n"
+
+
+def shell_proposal(shell, current, install):
+    start = current.find(SHELL_START)
+    end = current.find(SHELL_END)
+    if start >= 0 and end >= start:
+        end += len(SHELL_END)
+        if end < len(current) and current[end] == '\n': end += 1
+        base = current[:start] + current[end:]
+    else:
+        base = current
+    if install:
+        if base and not base.endswith('\n'): base += '\n'
+        base += shell_block(shell)
+    return base
+
+
+def shell_command(shell, action, yes, as_json):
+    rc = shell_rc_path(shell)
+    current = rc.read_text(encoding='utf-8', errors='replace') if rc.exists() else ''
+    proposed = shell_proposal(shell, current, action != 'uninstall')
+    diff = ''.join(difflib.unified_diff(current.splitlines(True), proposed.splitlines(True), fromfile=str(rc), tofile=str(rc) + ' (Vortex proposal)'))
+    if action == 'preview':
+        payload = {'shell': {'shell': shell, 'path': str(rc), 'action': action, 'changes': bool(diff), 'diff': diff}}
+        if as_json: emit(payload, True)
+        else: print(diff or 'No Vortex shell changes would be made.')
+        return 0
+    if not yes:
+        if as_json: emit({'shell': {'shell': shell, 'path': str(rc), 'action': action, 'changes': bool(diff), 'diff': diff}, 'error': {'code':'confirmation_required'}}, True)
+        else:
+            print(diff or 'No Vortex shell changes would be made.', file=sys.stderr)
+            print('Re-run with --yes to apply only the Vortex-owned block.', file=sys.stderr)
+        return EXIT_CODES['confirmation_required']
+    if diff:
+        rc.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backup = None
+        if rc.exists():
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+            backup = rc.with_name(rc.name + '.vortex.bak-' + stamp)
+            shutil.copy2(rc, backup)
+        fd, temp_name = tempfile.mkstemp(prefix='.vortex-shell-', dir=str(rc.parent), text=True)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='') as handle: handle.write(proposed)
+            os.chmod(temp_name, 0o600)
+            os.replace(temp_name, rc)
+        finally:
+            if os.path.exists(temp_name): os.unlink(temp_name)
+        Store().append_audit('shell_integration_' + action, {'shell': shell, 'path': str(rc), 'backup': str(backup) if backup else None})
+    result = {'shell': {'shell': shell, 'path': str(rc), 'action': action, 'changed': bool(diff)}}
+    if as_json: emit(result, True)
+    else: print(f"[{('INSTALLED' if action == 'install' else 'UNINSTALLED')}] {shell} integration {'updated' if diff else 'already clean'}: {rc}")
+    return 0
+
+
+def runtime_metadata():
+    path = runtime_root() / 'sidecar.json'
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        pid = int(data.get('pid', 0))
+        if pid and pid != os.getpid():
+            try: os.kill(pid, 0)
+            except OSError: return None
+        return data
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def remote_request(metadata, route, body=None):
+    host = metadata.get('host')
+    if host in ('0.0.0.0', '::', ''): host = '127.0.0.1'
+    url = f"http://{host}:{int(metadata['port'])}{route}"
+    request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, headers={'Content-Type':'application/json', **({'X-Vortex-Token': metadata['token']} if metadata.get('token') else {})})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=10) as response:
+        payload = json.loads(response.read())
+    if 'error' in payload and not payload.get('ok', False): raise RuntimeError(payload['error'].get('message', 'sidecar request failed'))
+    return payload
+
+
+def attach_remote_session(metadata, session_id, as_json=False):
+    sequence = 0
+    while True:
+        payload = remote_request(metadata, f"/api/sessions/{session_id}/events?since={sequence}")
+        for event in payload.get('events', []):
+            stream = sys.stderr if as_json else sys.stdout
+            stream.write(event.get('data', '')); stream.flush(); sequence = max(sequence, int(event.get('seq', sequence)))
+        session = payload.get('session')
+        if session and session.get('status') not in ('starting', 'running'): return session
+        readable, _, _ = select.select([sys.stdin], [], [], .05)
+        if readable:
+            data = os.read(sys.stdin.fileno(), 65536)
+            if not data:
+                remote_request(metadata, f"/api/sessions/{session_id}/kill", {}); return payload.get('session')
+            remote_request(metadata, f"/api/sessions/{session_id}/input", {'data': data.decode('utf-8', errors='replace')})
+
 
 def attach_foreground_session(manager, session_id):
     sequence = 0
@@ -113,6 +228,13 @@ def main(argv=None):
     sub.add_parser('tools')
     sub.add_parser('adapters')
     art = sub.add_parser('artifact'); art.add_argument('action', choices=['inspect','analyze'], nargs='?', default='inspect'); art.add_argument('path'); art.add_argument('--type', choices=['auto','nmap-xml','http-headers','text'], default='auto')
+    b = sub.add_parser('backup'); b.add_argument('path'); b.add_argument('--force', action='store_true')
+    db = sub.add_parser('db'); db.add_argument('action', choices=['integrity'], nargs='?', default='integrity')
+    sub.add_parser('migrate')
+    u = sub.add_parser('undo'); u.add_argument('history_id')
+    rt = sub.add_parser('retention'); rt.add_argument('action', choices=['status','prune'], nargs='?', default='status'); rt.add_argument('--history-days', type=int, default=90); rt.add_argument('--output-days', type=int, default=30)
+    mdl = sub.add_parser('model'); mdl.add_argument('action', choices=['status','list','test','use'], nargs='?', default='status'); mdl.add_argument('provider', nargs='?')
+    sh = sub.add_parser('shell'); sh.add_argument('action', choices=['preview','install','uninstall']); sh.add_argument('shell', choices=['bash','zsh','fish'])
     h = sub.add_parser('history'); h.add_argument('action', choices=['list','show','search','replay'], nargs='?', default='list'); h.add_argument('query', nargs='?')
     x = sub.add_parser('explain'); x.add_argument('request', nargs='+')
     a = sub.add_parser('audit'); a.add_argument('action', choices=['verify'], nargs='?', default='verify')
@@ -123,7 +245,7 @@ def main(argv=None):
     e = sub.add_parser('engagement'); e.add_argument('action', choices=['list','create']); e.add_argument('--name'); e.add_argument('--authorization'); e.add_argument('--target', action='append')
     n = sub.add_parser('_request', help=argparse.SUPPRESS); n.add_argument('request', nargs='+')
     sub._choices_actions = [action for action in sub._choices_actions if action.dest != '_request']
-    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs=argparse.REMAINDER)
+    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--preflight-digest'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     args.as_json = args.as_json or args.format == 'json'
     is_natural_request = args.subcommand == '_request'
@@ -142,11 +264,60 @@ def main(argv=None):
             store.save_artifact(artifact)
             emit({'artifact': artifact}, args.as_json)
             return 0 if artifact.get('state') != 'tool_error' else EXIT_CODES['failure']
+        if args.subcommand == 'backup':
+            destination = store.backup(args.path, args.force)
+            emit({'backup': {'path': str(destination), 'mode': oct(destination.stat().st_mode & 0o777)}}, args.as_json)
+            return 0
+        if args.subcommand == 'db':
+            result = {'integrity': store.integrity_check()}
+            emit(result, args.as_json)
+            return 0 if result['integrity']['valid'] else EXIT_CODES['integrity_failure']
+        if args.subcommand == 'migrate':
+            result = {'migration': {'schema_version': 1, 'state': 'compatible', 'message': 'No irreversible schema migration is pending.'}}
+            emit(result, args.as_json); return 0
+        if args.subcommand == 'undo':
+            plan = build_undo_plan(store, args.history_id)
+            if args.as_json: emit({'plan': plan}, True)
+            else: plan_text(plan)
+            return 0
+        if args.subcommand == 'retention':
+            if args.action == 'status':
+                emit({'retention': {'history_days': 90, 'output_days': 30, 'policy': 'redacted local evidence; raw evidence is opt-in'}}, args.as_json); return 0
+            emit({'prune': store.prune(args.history_days, args.output_days)}, args.as_json); return 0
+        if args.subcommand == 'model':
+            model = {'state': 'disabled', 'providers': [], 'selected': None, 'network': 'disabled', 'message': 'No local model is configured; deterministic mode remains active.'}
+            if args.action == 'use': model['message'] = 'No provider selected. Configuration is not implemented in this offline-first build.'
+            emit({'model': model}, args.as_json)
+            return 0 if args.action in ('status', 'list') else EXIT_CODES['unavailable']
+        if args.subcommand == 'shell':
+            return shell_command(args.shell, args.action, getattr(args, 'yes', False), args.as_json)
         if args.subcommand == 'session':
+            metadata = runtime_metadata()
             if args.action == 'list':
+                if metadata:
+                    try: emit({'sessions': remote_request(metadata, '/api/sessions').get('sessions', [])}, args.as_json); return 0
+                    except Exception: pass
                 emit({'sessions': store.list_sessions()}, args.as_json); return 0
+            if metadata:
+                try:
+                    if args.action == 'attach':
+                        if not args.session_id: raise ValueError('session attach requires a session id')
+                        result = attach_remote_session(metadata, args.session_id, args.as_json)
+                        if args.as_json: emit({'session': result}, True)
+                        return EXIT_CODES['success'] if result and result.get('status') == 'succeeded' else EXIT_CODES['command_failed']
+                    if args.action == 'kill':
+                        if not args.session_id: raise ValueError('session kill requires a session id')
+                        remote_request(metadata, f"/api/sessions/{args.session_id}/kill", {})
+                        emit({'session_id': args.session_id, 'kill_requested': True}, args.as_json); return 0
+                    if args.action == 'new':
+                        created = remote_request(metadata, '/api/sessions', {'name':'cli shell','cwd':args.cwd,'shell':args.shell})['session']
+                        result = attach_remote_session(metadata, created['id'], args.as_json)
+                        if args.as_json: emit({'session': result}, True)
+                        return EXIT_CODES['success'] if result and result.get('status') == 'succeeded' else EXIT_CODES['command_failed']
+                except (urllib.error.URLError, RuntimeError):
+                    pass
             if args.action in ('attach', 'kill'):
-                raise ValueError('session attach/kill requires the owning Vortex desktop sidecar; use the desktop session controls')
+                raise ValueError('no live Vortex sidecar owns this session; start the desktop sidecar or use `vortex session new`')
             if not sys.stdin.isatty() and not args.non_interactive:
                 raise PermissionError('session new requires an interactive TTY')
             sessions = SessionManager(store)
@@ -184,10 +355,7 @@ def main(argv=None):
             if not operation: raise ValueError('history id not found')
             if args.format == 'json' or args.as_json: emit({'report': operation}, True)
             else:
-                print('# Vortex operation report')
-                print(f"\n- Status: **{operation['status']}**\n- Operation: `{operation['id']}`\n- Started: `{operation.get('started_at')}`\n- Ended: `{operation.get('ended_at')}`\n")
-                for command in operation.get('commands', []):
-                    print(f"## {command['display']}\n\nStatus: `{command['status']}`\n")
+                print(report_markdown(operation), end='')
             return 0
         if args.subcommand == 'completion':
             filename = {'bash':'assets/completions/vortex.bash','zsh':'assets/completions/vortex.zsh','fish':'assets/completions/vortex.fish'}[args.shell]
@@ -243,6 +411,17 @@ def main(argv=None):
                 return EXIT_CODES['confirmation_required']
         if non_interactive and (not getattr(args, 'digest', None) or not getattr(args, 'approval_token', None) or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
         manager=ExecutionManager(store); op=manager.start(plan,True,getattr(args, 'approval_token', None) or plan['approval_token'],getattr(args, 'allow_root', False), getattr(args, 'offline', False)); op=wait_operation(store,manager,op['id'])
+        if op.get('status') == 'awaiting_confirmation':
+            if not yes:
+                print('\nFresh preflight completed. Review the observed facts before approving the mutation:', file=sys.stderr)
+                print(json.dumps(op.get('facts', {}), sort_keys=True, indent=2), file=sys.stderr)
+                print('Type APPROVE to execute the mutation: ', end='', file=sys.stderr)
+                if sys.stdin.readline().strip() != 'APPROVE':
+                    manager.cancel(op['id'])
+                    return EXIT_CODES['confirmation_required']
+            preflight_digest = getattr(args, 'preflight_digest', None) or op.get('preflight_digest')
+            op = manager.approve_preflight(op['id'], True, getattr(args, 'approval_token', None) or plan['approval_token'], preflight_digest)
+            op = wait_operation(store, manager, op['id'])
         if args.as_json:
             emit({'plan': plan, 'operation': op} if is_natural_request else {'operation': op}, True)
         else: print(f"[{op['status'].upper()}] operation {op['id']}")

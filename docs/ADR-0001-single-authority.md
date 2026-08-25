@@ -11,5 +11,5 @@ and makes cancellation, exit evidence, redaction, policy, and audit reviewable
 at one boundary.
 
 The current sidecar intentionally uses the Python standard library for a clean
-Ubuntu bootstrap. FastAPI/Pydantic can become an adapter dependency when the
+Linux bootstrap. FastAPI/Pydantic can become an adapter dependency when the
 packaged desktop application needs it; they must not create a second authority.

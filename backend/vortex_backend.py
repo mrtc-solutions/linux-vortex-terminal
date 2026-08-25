@@ -2,7 +2,7 @@
 """Linux Vortex local sidecar.
 
 The sidecar is deliberately dependency-light: the checked-in implementation uses
-Python's standard library so a fresh Ubuntu installation can boot the product
+Python's standard library so a fresh Linux installation can boot the product
 before optional FastAPI/Electron packaging is installed.  It owns all command
 execution; the renderer is never allowed to spawn a process.
 """
@@ -39,9 +39,15 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from .artifacts import ArtifactError, analyze_operation_http, analyze_path
+    from .facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
+    from .network import resolve_targets, resolution_digest
 except ImportError:  # direct `python backend/vortex_backend.py`
+    from adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from artifacts import ArtifactError, analyze_operation_http, analyze_path
+    from facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
+    from network import resolve_targets, resolution_digest
 
 SCHEMA_VERSION = 1
 APP_VERSION = "0.1.0"
@@ -71,43 +77,6 @@ EXIT_CODES = {
 
 CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-TOOL_CATALOG: dict[str, dict[str, Any]] = {
-    "git": {"family": "development", "probe": ["--version"], "role": "version-control"},
-    "ss": {"family": "network", "probe": ["-V"], "role": "socket inspection"},
-    "ip": {"family": "network", "probe": ["-Version"], "role": "network facts"},
-    "systemctl": {"family": "systemd", "probe": ["--version"], "role": "service inspection"},
-    "journalctl": {"family": "systemd", "probe": ["--version"], "role": "bounded logs"},
-    "df": {"family": "filesystem", "probe": ["--version"], "role": "filesystem usage"},
-    "du": {"family": "filesystem", "probe": ["--version"], "role": "directory usage"},
-    "free": {"family": "system", "probe": ["--version"], "role": "memory facts"},
-    "uname": {"family": "system", "probe": ["-a"], "role": "kernel facts"},
-    "uptime": {"family": "system", "probe": ["--version"], "role": "load facts"},
-    "nmap": {"family": "authorized-reconnaissance", "probe": ["--version"], "role": "scoped service discovery"},
-    "nuclei": {"family": "authorized-assessment", "probe": ["-version"], "role": "reviewed template checks"},
-    "curl": {"family": "authorized-http", "probe": ["--version"], "role": "HTTP/TLS discovery"},
-    "ffuf": {"family": "authorized-content-discovery", "probe": ["-V"], "role": "bounded content discovery"},
-    "nikto": {"family": "authorized-assessment", "probe": ["-Version"], "role": "web server assessment"},
-    "amass": {"family": "passive-osint", "probe": ["-version"], "role": "passive domain discovery"},
-    "ssh": {"family": "ssh-diagnostics", "probe": ["-V"], "role": "connection diagnostics"},
-    "apt-get": {"family": "packages", "probe": ["--version"], "role": "package planning and mutation"},
-    "apt-cache": {"family": "packages", "probe": ["--version"], "role": "package metadata"},
-    "dpkg-query": {"family": "packages", "probe": ["--version"], "role": "installed package facts"},
-}
-
-
-ADAPTER_MANIFESTS: dict[str, dict[str, Any]] = {
-    "linux.system.health": {"version": "1", "family": "system", "tool": "multiple", "risk": "low", "network_class": "no-network", "operation": "read-only host facts", "limits": {"commands": 4, "timeout_seconds": 30}},
-    "linux.filesystem.usage": {"version": "1", "family": "filesystem", "tool": "df+du", "risk": "low", "network_class": "no-network", "operation": "read-only filesystem facts", "limits": {"depth": 1, "timeout_seconds": 30}},
-    "linux.network.sockets": {"version": "1", "family": "network", "tool": "ss", "risk": "low", "network_class": "no-network", "operation": "read-only local socket facts", "limits": {"timeout_seconds": 30}},
-    "linux.development.git-status": {"version": "1", "family": "development", "tool": "git", "risk": "low", "network_class": "no-network", "operation": "read-only repository facts", "limits": {"timeout_seconds": 30}},
-    "linux.systemd.inspect": {"version": "1", "family": "systemd", "tool": "systemctl+journalctl", "risk": "low", "network_class": "no-network", "operation": "read-only unit and journal facts", "limits": {"journal_lines": 80, "timeout_seconds": 30}},
-    "linux.systemd.mutate": {"version": "1", "family": "systemd", "tool": "systemctl", "risk": "high", "network_class": "no-network", "operation": "guarded service mutation", "privilege": "root-required", "limits": {"timeout_seconds": 60}},
-    "linux.packages.apt": {"version": "1", "family": "packages", "tool": "apt-get+apt-cache+dpkg-query", "risk": "high", "network_class": "outbound-mutation", "operation": "guarded apt package operation", "privilege": "root-required", "limits": {"timeout_seconds": 900}},
-    "security.nmap.discovery": {"version": "1", "family": "authorized-reconnaissance", "tool": "nmap", "risk": "high", "network_class": "outbound-read", "operation": "scoped service discovery", "limits": {"max_cidr_hosts": 256, "max_ports": 32, "timing": "T2", "timeout_seconds": 120}},
-    "security.http.headers": {"version": "1", "family": "authorized-http", "tool": "curl", "risk": "high", "network_class": "outbound-read", "operation": "bounded HTTP/TLS header discovery", "limits": {"max_time_seconds": 15, "max_redirects": 0}},
-}
-
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
@@ -131,6 +100,48 @@ def sanitize(text: str) -> str:
 def redact(text: str) -> str:
     text = sanitize(text)
     return REDACTION_RE.sub(lambda m: m.group(1) + "[REDACTED]", text)
+
+
+def sanitize_pty(text: str) -> str:
+    """Preserve only harmless terminal CSI controls for the local PTY renderer.
+
+    SGR/cursor/erase controls are kept for terminal presentation; OSC, device
+    control strings, and unknown escapes are removed so PTY output cannot set a
+    title, open a hyperlink, copy clipboard data, or inject terminal commands.
+    """
+    allowed_finals = set("mABCDEFGHfJKsuUlG@`hrPXLM")
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char != "\x1b":
+            if char in "\n\r\t\b" or ord(char) >= 0x20:
+                out.append(char)
+            i += 1
+            continue
+        if i + 1 >= len(text):
+            break
+        kind = text[i + 1]
+        if kind == "[":
+            end = i + 2
+            while end < len(text) and not ("@" <= text[end] <= "~"):
+                end += 1
+            if end < len(text) and text[end] in allowed_finals:
+                out.append(text[i:end + 1])
+            i = end + 1
+        elif kind == "]":
+            # OSC ends at BEL or ST; neither payload nor terminator is kept.
+            end = i + 2
+            while end < len(text):
+                if text[end] == "\x07":
+                    end += 1; break
+                if text[end] == "\x1b" and end + 1 < len(text) and text[end + 1] == "\\":
+                    end += 2; break
+                end += 1
+            i = end
+        else:
+            i += 2
+    return BIDI_RE.sub("[BIDI]", REDACTION_RE.sub(lambda m: m.group(1) + "[REDACTED]", "".join(out))).replace("\x00", "")
 
 
 def safe_json(value: Any) -> str:
@@ -178,6 +189,24 @@ def secure_path(path: Path) -> Path:
     return path
 
 
+def runtime_root() -> Path:
+    base = Path(os.environ.get("XDG_RUNTIME_DIR", str(data_root() / "runtime"))).expanduser()
+    root = base / "vortex"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try: root.chmod(0o700)
+    except OSError: pass
+    return root
+
+
+def write_runtime_metadata(host: str, port: int, token: str | None) -> Path:
+    path = runtime_root() / "sidecar.json"
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temp.write_text(canonical({"pid": os.getpid(), "host": host, "port": port, "token": token, "created_at": now_iso()}), encoding="utf-8")
+    temp.chmod(0o600)
+    os.replace(temp, path)
+    return path
+
+
 def read_os_release() -> dict[str, str]:
     result: dict[str, str] = {}
     try:
@@ -193,7 +222,7 @@ def read_os_release() -> dict[str, str]:
 def _is_user_writable_directory(path: Path, st: os.stat_result | None = None) -> bool:
     st = st or path.stat()
     mode = stat.S_IMODE(st.st_mode)
-    return bool(mode & 0o022) or (st.st_uid == os.getuid() and bool(mode & 0o200))
+    return bool(mode & 0o022) or (os.getuid() != 0 and st.st_uid == os.getuid() and bool(mode & 0o200))
 
 
 def _safe_executable_dirs() -> tuple[list[str], list[str]]:
@@ -301,6 +330,38 @@ def minimal_env(tty: bool, additions: dict[str, str] | None = None) -> dict[str,
     return env
 
 
+def systemd_user_bus_state() -> dict[str, Any]:
+    """Probe the current user's real systemd user bus without exposing env output."""
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+    bus = runtime / "bus"
+    result: dict[str, Any] = {"state": "absent", "socket": str(bus), "probe_exit": None}
+    try:
+        if not stat.S_ISSOCK(bus.stat().st_mode):
+            return result
+    except OSError:
+        return result
+    systemctl = probe_executable("systemctl")
+    if systemctl.get("state") != "installed":
+        result["state"] = "unavailable"
+        return result
+    env = minimal_env(False)
+    env["XDG_RUNTIME_DIR"] = str(runtime)
+    env["DBUS_SESSION_BUS_ADDRESS"] = os.environ.get("DBUS_SESSION_BUS_ADDRESS", f"unix:path={bus}")
+    try:
+        probe = subprocess.run([systemctl["realpath"], "--user", "--no-pager", "is-system-running"], capture_output=True, text=True, timeout=3, env=env)
+        result["probe_exit"] = probe.returncode
+        error_text = sanitize(probe.stderr or "")
+        if "failed to connect to bus" in error_text.lower() or "no medium found" in error_text.lower():
+            result["state"] = "unavailable"
+            result["error"] = error_text[:240]
+        else:
+            result["state"] = "available"
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        result["state"] = "unavailable"
+        result["error"] = redact(str(exc))[:240]
+    return result
+
+
 def detect_context() -> dict[str, Any]:
     os_release = read_os_release()
     cgroup = "unknown"
@@ -318,20 +379,20 @@ def detect_context() -> dict[str, Any]:
         except OSError:
             pass
     systemd = bool(shutil.which("systemctl")) and Path("/run/systemd/system").exists()
+    user_bus = systemd_user_bus_state()
     kernel_text = os.uname().release.lower()
     wsl = bool(os.environ.get("WSL_INTEROP")) or "microsoft" in kernel_text
-    distro_id = os_release.get("ID", "unknown")
-    if distro_id == "ubuntu" and os_release.get("VERSION_ID", "") == "24.04":
-        tier = "tier-1"
-    elif distro_id == "ubuntu" or distro_id == "debian":
-        tier = "tier-2"
-    elif distro_id in {"linuxmint", "pop", "kali"}:
-        tier = "tier-3"
+    distro_id = os_release.get("ID", "unknown").lower()
+    distro_like = set(os_release.get("ID_LIKE", "").lower().split())
+    if distro_id in {"kali", "debian", "linuxmint", "pop"} or "debian" in distro_like or Path("/etc/debian_version").exists():
+        support_tier = "linux-debian-family"
     else:
-        tier = "deferred"
+        support_tier = "linux-best-effort"
+    if sys.platform != "linux":
+        support_tier = "unsupported-non-linux"
     return {
         "distribution": {"id": distro_id, "version_id": os_release.get("VERSION_ID", "unknown"), "pretty_name": os_release.get("PRETTY_NAME", distro_id)},
-        "support_tier": tier,
+        "support_tier": support_tier,
         "kernel": os.uname().release,
         "architecture": os.uname().machine,
         "uid": os.getuid(),
@@ -349,8 +410,9 @@ def detect_context() -> dict[str, Any]:
         "confinement": {"flatpak": bool(os.environ.get("FLATPAK_ID")), "snap": bool(os.environ.get("SNAP"))},
         "pid1": shutil.which("ps") and _pid1_name(),
         "systemd": systemd,
+        "systemd_context": {"system_bus": "available" if systemd else "unavailable", "user_bus": user_bus},
         "cgroup": cgroup,
-        "package_manager": {name: probe_executable(name)["state"] for name in ("apt-get", "apt-cache", "dpkg-query", "sudo")},
+        "package_manager": {name: probe_executable(name)["state"] for name in ("apt-get", "apt-cache", "dpkg-query", "dpkg", "apt-mark", "sudo")},
         "model": {"state": "disabled by default", "endpoint": None},
     }
 
@@ -439,6 +501,12 @@ class Store:
                 source_json TEXT NOT NULL, size_bytes INTEGER NOT NULL,
                 sha256 TEXT NOT NULL, parser_json TEXT NOT NULL,
                 state TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS session_events (
+                session_id TEXT NOT NULL, seq INTEGER NOT NULL, at TEXT NOT NULL,
+                stream TEXT NOT NULL, data TEXT NOT NULL,
+                PRIMARY KEY (session_id, seq),
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
             INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', '1');
             """)
@@ -529,6 +597,82 @@ class Store:
             rows = db.execute("SELECT result_json FROM operations ORDER BY COALESCE(ended_at, started_at) DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def integrity_check(self) -> dict[str, Any]:
+        with self.connect() as db:
+            row = db.execute("PRAGMA integrity_check").fetchone()
+            result = str(row[0]) if row else "unknown"
+        audit = self.verify_audit()
+        return {"sqlite": result, "sqlite_valid": result.lower() == "ok", "audit": audit, "valid": result.lower() == "ok" and audit.get("valid", False)}
+
+    def backup(self, destination: str | Path, overwrite: bool = False) -> Path:
+        dest = Path(destination).expanduser()
+        if not dest.is_absolute():
+            dest = Path.cwd() / dest
+        dest = dest.resolve()
+        if dest == self.db_path.resolve():
+            raise ValueError("backup destination must differ from the active database")
+        if dest.parent.exists():
+            parent_stat = dest.parent.stat()
+            if not dest.parent.is_dir() or (os.getuid() != 0 and parent_stat.st_uid != os.getuid()):
+                raise PermissionError("backup parent directory is not operator-owned")
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if dest.exists() and not overwrite:
+            raise FileExistsError("backup destination exists; use --force to replace it")
+        if dest.exists() and dest.is_symlink():
+            raise ValueError("backup destination symlink is not accepted")
+        self.append_audit("database_backup_requested", {"destination": redact(str(dest))})
+        source = self.connect()
+        target = sqlite3.connect(dest)
+        try:
+            source.backup(target)
+            target.commit()
+        finally:
+            target.close()
+            source.close()
+        try:
+            dest.chmod(0o600)
+        except OSError:
+            pass
+        return dest
+
+    def save_session_event(self, session_id: str, event: dict[str, Any], keep: int = 5000) -> None:
+        with self.lock, self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO session_events(session_id,seq,at,stream,data) VALUES (?,?,?,?,?)", (session_id, event["seq"], event["at"], event.get("stream", "pty"), event.get("data", "")))
+            db.execute("DELETE FROM session_events WHERE session_id=? AND seq <= (SELECT MAX(seq)-? FROM session_events WHERE session_id=?)", (session_id, keep, session_id))
+
+    def list_session_events(self, session_id: str, since: int = 0) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute("SELECT seq,at,stream,data FROM session_events WHERE session_id=? AND seq>? ORDER BY seq LIMIT 5000", (session_id, max(0, int(since)))).fetchall()
+        return [{"seq": row["seq"], "at": row["at"], "stream": row["stream"], "data": row["data"]} for row in rows]
+
+    def prune(self, history_days: int = 90, output_days: int = 30) -> dict[str, Any]:
+        history_days = max(1, min(int(history_days), 3650)); output_days = max(1, min(int(output_days), 3650))
+        history_cutoff = datetime.fromtimestamp(time.time() - history_days * 86400, tz=timezone.utc).isoformat()
+        output_cutoff = datetime.fromtimestamp(time.time() - output_days * 86400, tz=timezone.utc).isoformat()
+        with self.lock, self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            output_rows = db.execute("SELECT id,result_json FROM operations WHERE ended_at IS NOT NULL AND ended_at < ?", (output_cutoff,)).fetchall()
+            output_pruned = 0
+            for row in output_rows:
+                item = json.loads(row["result_json"])
+                changed = False
+                for command in item.get("commands", []):
+                    if command.get("stdout") or command.get("stderr"):
+                        command["stdout"] = ""; command["stderr"] = ""; changed = True
+                if changed:
+                    db.execute("UPDATE operations SET result_json=? WHERE id=?", (canonical(item), row["id"])); output_pruned += 1
+            old_ops = [row[0] for row in db.execute("SELECT id FROM operations WHERE COALESCE(ended_at,started_at) < ?", (history_cutoff,)).fetchall()]
+            if old_ops:
+                db.executemany("DELETE FROM artifacts WHERE operation_id=?", [(item,) for item in old_ops])
+                db.executemany("DELETE FROM operations WHERE id=?", [(item,) for item in old_ops])
+            db.execute("DELETE FROM plans WHERE id NOT IN (SELECT plan_id FROM operations) AND created_at < ?", (history_cutoff,))
+            db.execute("DELETE FROM session_events WHERE at < ?", (history_cutoff,))
+            db.execute("COMMIT")
+        result = {"history_deleted": len(old_ops), "operation_outputs_redacted": output_pruned, "history_days": history_days, "output_days": output_days}
+        self.append_audit("retention_pruned", result)
+        return result
+
     def save_session(self, session: dict[str, Any]) -> None:
         with self.lock, self.connect() as db:
             db.execute("INSERT INTO sessions(id,name,shell,cwd,command_json,pid,cols,rows,status,started_at,ended_at,last_activity,exit_code,signal,termination_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (session["id"], session["name"], session["shell"], session["cwd"], canonical(session.get("command", [])), session.get("pid"), session["cols"], session["rows"], session["status"], session["started_at"], session.get("ended_at"), session.get("last_activity"), session.get("exit_code"), session.get("signal"), session.get("termination_reason")))
@@ -583,6 +727,7 @@ class SessionManager:
         self.sessions: dict[str, dict[str, Any]] = {}
         self.events: dict[str, deque[dict[str, Any]]] = {}
         self.conditions: dict[str, threading.Condition] = {}
+        self.reader_done: dict[str, threading.Event] = {}
         self.lock = threading.RLock()
         self._stop = threading.Event()
         self._reaper = threading.Thread(target=self._reap_idle, name="vortex-session-reaper", daemon=True)
@@ -647,6 +792,7 @@ class SessionManager:
             self.sessions[session_id] = session
             self.events[session_id] = deque(maxlen=2000)
             self.conditions[session_id] = threading.Condition(self.lock)
+            self.reader_done[session_id] = threading.Event()
             self.store.save_session(session)
         self._resize_fd(master, cols_i, rows_i)
         threading.Thread(target=self._read_loop, args=(session_id,), name=f"vortex-pty-read-{session_id[:6]}", daemon=True).start()
@@ -661,7 +807,7 @@ class SessionManager:
             pass
 
     def _append_event(self, session_id: str, text: str, stream: str = "pty") -> None:
-        text = redact(sanitize(text))
+        text = sanitize_pty(text)
         if not text:
             return
         with self.lock:
@@ -672,29 +818,36 @@ class SessionManager:
             session["last_activity"] = now_iso()
             event = {"seq": session["_event_seq"], "at": session["last_activity"], "stream": stream, "data": text}
             self.events[session_id].append(event)
+            self.store.save_session_event(session_id, event)
             self.store.update_session(session)
             self.conditions[session_id].notify_all()
 
     def _read_loop(self, session_id: str) -> None:
-        while True:
-            with self.lock:
-                session = self.sessions.get(session_id)
-                fd = session.get("_master") if session else None
-            if fd is None:
-                return
-            try:
-                raw = os.read(fd, 65536)
-                if not raw:
+        try:
+            while True:
+                with self.lock:
+                    session = self.sessions.get(session_id)
+                    fd = session.get("_master") if session else None
+                if fd is None:
                     return
-                self._append_event(session_id, raw.decode("utf-8", errors="replace"))
-            except OSError as exc:
-                if exc.errno in (errno.EIO, errno.EBADF):
+                try:
+                    raw = os.read(fd, 65536)
+                    if not raw:
+                        return
+                    self._append_event(session_id, raw.decode("utf-8", errors="replace"))
+                except OSError as exc:
+                    if exc.errno in (errno.EIO, errno.EBADF):
+                        return
+                    if exc.errno == errno.EAGAIN:
+                        time.sleep(0.02)
+                        continue
+                    self._append_event(session_id, f"PTY read error: {exc}", "system")
                     return
-                if exc.errno == errno.EAGAIN:
-                    time.sleep(0.02)
-                    continue
-                self._append_event(session_id, f"PTY read error: {exc}", "system")
-                return
+        finally:
+            done = self.reader_done.get(session_id)
+            if done:
+                done.set()
+
 
     def _wait_loop(self, session_id: str) -> None:
         with self.lock:
@@ -707,6 +860,9 @@ class SessionManager:
             returncode = os.waitstatus_to_exitcode(wait_status)
         except ChildProcessError:
             returncode = 255
+        reader_done = self.reader_done.get(session_id)
+        if reader_done:
+            reader_done.wait(timeout=1.0)
         with self.lock:
             session = self.sessions.get(session_id)
             if not session:
@@ -726,6 +882,7 @@ class SessionManager:
             self._append_event(session_id, f"\n[SESSION {session['status'].upper()}] exit={returncode}\n", "system")
             fd = session.pop("_master", None)
             session.pop("_pid", None)
+            self.reader_done.pop(session_id, None)
             if fd is not None:
                 try: os.close(fd)
                 except OSError: pass
@@ -756,9 +913,11 @@ class SessionManager:
         with self.lock:
             if session_id not in self.sessions:
                 record = self.store.get_session_record(session_id)
-                return {"session": record, "events": [], "next_seq": 0} if record else {"session": None, "events": [], "next_seq": 0}
+                events = self.store.list_session_events(session_id, since_i) if record else []
+                return {"session": record, "events": events, "next_seq": events[-1]["seq"] if events else 0, "replay": True} if record else {"session": None, "events": [], "next_seq": 0, "replay": False}
             session = self.sessions[session_id]
-            return {"session": self.info(session_id), "events": [event for event in self.events[session_id] if event["seq"] > since_i], "next_seq": session["_event_seq"]}
+            events = [event for event in self.events[session_id] if event["seq"] > since_i]
+            return {"session": self.info(session_id), "events": events, "next_seq": session["_event_seq"], "replay": False}
 
     def write(self, session_id: str, data: str) -> dict[str, Any]:
         if not isinstance(data, str) or len(data) > 65536 or "\x00" in data:
@@ -991,9 +1150,16 @@ def apt_lock_state() -> dict[str, Any]:
 
 
 def apt_tools_ready() -> tuple[bool, list[str]]:
-    required = ["apt-get", "apt-cache", "dpkg-query"]
+    required = ["apt-get", "apt-cache", "dpkg-query", "dpkg"]
     missing = [tool for tool in required if probe_executable(tool)["state"] != "installed"]
     return not missing, missing
+
+
+def reboot_required_state() -> dict[str, Any]:
+    marker = Path("/var/run/reboot-required")
+    packages = Path("/var/run/reboot-required.pkgs")
+    required = marker.exists()
+    return {"required": required, "packages": packages.read_text(encoding="utf-8", errors="replace").splitlines()[:50] if packages.exists() else [], "source": str(marker)}
 
 
 def parse_service(text: str) -> str | None:
@@ -1001,10 +1167,11 @@ def parse_service(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def parse_systemd_mutation(text: str) -> tuple[str, str] | None:
+def parse_systemd_mutation(text: str) -> tuple[str, str, bool] | None:
     if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
         raise PolicyError("systemd request contains unsafe shell syntax")
-    match = re.search(r"\b(restart|start|stop|enable|disable)\s+([^\s,;|&`$()<>]+)", text, re.I)
+    user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", text, re.I))
+    match = re.search(r"(?:--user\s+)?\b(restart|start|stop|enable|disable)\s+(?:--user\s+)?([^\s,;|&`$()<>]+)", text, re.I)
     if not match:
         return None
     action, raw_unit = match.group(1).lower(), match.group(2)
@@ -1016,7 +1183,7 @@ def parse_systemd_mutation(text: str) -> tuple[str, str] | None:
         raise PolicyError("invalid systemd unit name; path-like units are not allowed")
     if not UNIT_RE.fullmatch(unit):
         raise PolicyError("invalid systemd unit name")
-    return action, unit
+    return action, unit, user_mode
 
 
 def plan_digest(plan: dict[str, Any]) -> str:
@@ -1028,6 +1195,8 @@ def plan_digest(plan: dict[str, Any]) -> str:
         "knowledge_version": plan.get("knowledge_version"),
         "source": plan.get("source"),
         "risk": plan.get("risk"),
+        "rollback": plan.get("rollback", {}),
+        "network_facts": plan.get("network_facts", {}),
         "expires_at": plan.get("expires_at"),
     })
 
@@ -1044,6 +1213,8 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     kind = "plan"
     risk = "low"
     authorization = "local diagnostic capability"
+    rollback: dict[str, Any] = {"available": False, "advice": "No automatic rollback metadata is available for this plan."}
+    network_facts: dict[str, Any] = {}
     engagement = store.get_engagement(engagement_id) if engagement_id else None
 
     if lower.startswith("explain ") or lower.startswith("what does ") or lower.startswith("why does "):
@@ -1059,13 +1230,77 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             notes.append(f"{argv[0]} would be invoked with {len(argv) - 1} argument(s). No command will be executed by ask or plan.")
         status = "clarified"
+    elif re.search(r"\bssh\b", lower) and any(word in lower for word in ("diagnos", "config", "connection", "connect")):
+        kind = "ssh_diagnostics"
+        active_connection = bool(re.search(r"\b(?:test|check|diagnose)\b.*\bssh\b.*\b(?:connection|connect|connectivity)\b", lower) or re.search(r"\bssh\s+connectivity\b", lower))
+        target_match = (
+            re.search(r"\bssh\s+(?:config|diagnostics?|connection)\s+(?:for|to)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
+            or re.search(r"\bssh\s+(?:to|for)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
+            or re.search(r"\bssh\s+(?:config|diagnostics?|connection)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
+        )
+        target = target_match.group(1) if target_match else None
+        if not target:
+            status = "clarified"
+            notes.append("Provide one SSH host alias or hostname. Vortex will not read key contents or guess a target.")
+        elif probe_executable("ssh")["state"] != "installed":
+            status = "unavailable"; missing.append("ssh"); notes.append("TOOL MISSING: ssh; no SSH facts were observed.")
+        elif active_connection:
+            risk = "high"; authorization = "authorized SSH diagnostic required"
+            if offline:
+                status = "unavailable"; notes.append("OFFLINE mode blocks outbound SSH diagnostics; no connection was attempted.")
+            elif not engagement:
+                status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex never bypasses host verification."]
+            elif not target_in_engagement(target, engagement):
+                status = "rejected"; notes.append("SSH target is outside the active engagement scope: " + target)
+            else:
+                network_facts = resolve_targets([target])
+                if network_facts["state"] != "observed":
+                    status = "unavailable"; notes.append("SSH target DNS could not be resolved; no connection was attempted.")
+                else:
+                    specs.append(adapter_command("linux.ssh.connection", "ssh", ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ConnectionAttempts=1", "-o", "StrictHostKeyChecking=yes", "--", target, "true"], cwd, required="ssh", scope=[target], explanation=f"Perform a bounded, non-interactive SSH connectivity check to {target}; no password prompt or host-key bypass is allowed."))
+                    status = "planned"
+                    notes += ["This is an outbound connectivity diagnostic and requires explicit approval.", "BatchMode prevents password capture; StrictHostKeyChecking=yes prevents host-verification bypass."]
+        else:
+            specs.append(adapter_command("linux.ssh.config", "ssh", ["ssh", "-G", "--", target], cwd, required="ssh", explanation=f"Resolve the effective SSH configuration for {target}; -G does not open a network connection or authenticate."))
+            status = "planned"
+            notes += ["Read-only SSH configuration diagnostics; private key contents, passwords, and agent secrets are not read.", "This adapter does not connect to the target. A real connection requires a separate explicitly approved plan."]
+    elif any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("log", "logs")):
+        kind = "container_logs"
+        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        match = re.search(r"(?:logs?|container)\s+(?:for\s+)?(?:container\s+)?([A-Za-z0-9][A-Za-z0-9_.-]{0,127})", lower)
+        container_id = match.group(1) if match else None
+        if not runtime:
+            status = "unavailable"; missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"]); notes.append("TOOL MISSING: neither Docker nor Podman was found; no container logs exist.")
+        elif not container_id or container_id in {"logs", "container"}:
+            status = "clarified"; notes.append("Provide one container name or ID; log collection is bounded to 200 lines.")
+        else:
+            specs.append(adapter_command("linux.containers.logs", runtime, [runtime, "logs", "--tail", "200", "--timestamps", container_id], cwd, required=runtime, explanation=f"Collect at most 200 timestamped lines from the real {runtime} container {container_id}; no container state changes."))
+            status = "planned"; notes += [f"Detected runtime: {runtime}. Logs are read-only and bounded.", "Log content is untrusted evidence; no vulnerability finding is inferred."]
+    elif any(word in lower for word in ("docker", "podman", "container")):
+        kind = "container_inspection"
+        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        if not runtime:
+            status = "unavailable"
+            missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"])
+            notes.append("TOOL MISSING: neither Docker nor Podman was found; no container state was observed.")
+        else:
+            specs.append(adapter_command("linux.containers.inspect", runtime, [runtime, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List real {runtime} containers without changing their state."))
+            status = "planned"
+            notes += [f"Detected runtime: {runtime}. The command is read-only and does not start, stop, remove, or prune containers.", "Container daemon output is observed only; no image or vulnerability conclusion is inferred."]
     elif parse_package_request(lower)[0]:
         package_operation, package_name = parse_package_request(lower)
         kind = "package_operation"
         risk = "high"
         authorization = "privileged package operation"
+        if package_operation == "install" and package_name:
+            rollback = {"available": True, "strategy": "fresh-plan-required", "inverse": ["remove", package_name], "warning": "Removal may not restore dependency state; create and review a fresh plan."}
+        elif package_operation == "remove" and package_name:
+            rollback = {"available": True, "strategy": "fresh-plan-required", "inverse": ["install", package_name], "warning": "The original version/source may not be restored."}
+        else:
+            rollback = {"available": False, "strategy": "snapshot-or-distro-recovery", "warning": "Upgrades have no automatic rollback; use a tested snapshot or package downgrade plan."}
         ready, apt_missing = apt_tools_ready()
         locks = apt_lock_state()
+        reboot = reboot_required_state()
         if not ready:
             status = "unavailable"
             missing.extend(apt_missing)
@@ -1078,38 +1313,50 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             status = "clarified"
             notes.append(f"Tell Vortex the exact package to {package_operation}; package names are parsed, not concatenated shell text.")
         else:
-            specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "--audit"], cwd, required="dpkg-query", explanation="Check for incomplete dpkg state before any package operation.", privilege="user"))
+            specs.append(adapter_command("linux.packages.apt", "dpkg", ["dpkg", "--audit"], cwd, required="dpkg", explanation="Check for incomplete dpkg state before any package operation.", privilege="user"))
             if package_name:
                 specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "policy", package_name], cwd, required="apt-cache", explanation=f"Show the installed/candidate version, architecture, and repository policy for {package_name}.", privilege="user"))
                 specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "show", package_name], cwd, required="apt-cache", explanation=f"Show package metadata and declared dependencies for {package_name}.", privilege="user"))
-                specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}.", privilege="user"))
+                specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}; a missing installed package is informational.", privilege="user"))
+                specs[-1]["allow_failure"] = True
+            if probe_executable("apt-mark")["state"] == "installed":
+                specs.append(adapter_command("linux.packages.apt", "apt-mark", ["apt-mark", "showhold"], cwd, required="apt-mark", explanation="Report held packages that may affect the requested operation.", privilege="user"))
+            if package_operation != "install" and probe_executable("apt-mark")["state"] == "installed":
+                specs.append(adapter_command("linux.packages.apt", "apt-mark", ["apt-mark", "showhold"], cwd, required="apt-mark", explanation="Report held packages that may affect the requested operation.", privilege="user"))
             if package_operation == "install":
-                simulation = ["apt-get", "-s", "--no-remove", "install", package_name]
+                preflight = ["apt-get", "-s", "--no-remove", "install", package_name]
                 mutation = ["apt-get", "--assume-yes", "--no-remove", "install", package_name]
             elif package_operation == "remove":
-                simulation = ["apt-get", "-s", "remove", package_name]
+                preflight = ["apt-get", "-s", "remove", package_name]
                 mutation = ["apt-get", "--assume-yes", "remove", package_name]
             else:
-                simulation = ["apt-get", "-s", "--no-remove", "upgrade"]
+                preflight = ["apt-get", "-s", "--no-remove", "upgrade"]
                 mutation = ["apt-get", "--assume-yes", "--no-remove", "upgrade"]
-            specs.append(adapter_command("linux.packages.apt", "apt-get", simulation, cwd, required="apt-get", explanation="Run a fresh apt simulation immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
-            specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding simulation and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
+            specs.append(adapter_command("linux.packages.apt", "apt-get", preflight, cwd, required="apt-get", explanation="Run a fresh apt preflight immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
+            specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding preflight and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
             status = "planned"
-            notes += ["Package source, candidate/installed version, dependency impact, held state, and simulation output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
+            notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
     elif parse_systemd_mutation(lower):
-        action, unit = parse_systemd_mutation(lower) or ("", "")
+        action, unit, user_mode = parse_systemd_mutation(lower) or ("", "", False)
         kind = "systemd_mutation"
         risk = "high"
-        authorization = "privileged service operation"
-        if not detect_context()["systemd"] or probe_executable("systemctl")["state"] != "installed":
+        authorization = "user-scoped service operation" if user_mode else "privileged service operation"
+        inverse = {"start": "stop", "stop": "start", "enable": "disable", "disable": "enable"}.get(action)
+        rollback = {"available": bool(inverse), "strategy": "fresh-plan-required", "inverse": [inverse, unit] if inverse else [], "warning": "Restart has no automatic inverse; inspect service state and create a fresh plan." if not inverse else "Inverse action still requires a fresh plan and confirmation."}
+        context = detect_context()
+        user_bus_available = context.get("systemd_context", {}).get("user_bus", {}).get("state") == "available"
+        systemd_available = user_bus_available if user_mode else context["systemd"]
+        if not systemd_available or probe_executable("systemctl")["state"] != "installed":
             status = "unavailable"
-            missing.append("systemd")
-            notes.append("Systemd is not usable in this context; no service mutation was created.")
+            missing.append("systemd-user-bus" if user_mode else "systemd")
+            notes.append("The requested systemd context is not usable; no service mutation was created.")
         else:
-            specs.append(adapter_command("linux.systemd.mutate", "systemctl", ["systemctl", "show", unit, "--property=Id,Description,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Freshly verify the description, active state, and persistence state of {unit} before mutation.", privilege="user"))
-            specs.append(adapter_command("linux.systemd.mutate", "systemctl", ["systemctl", "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {action} operation on {unit}; no user bus or sudo escalation is inferred.", privilege="root-required"))
+            prefix = ["systemctl", "--user"] if user_mode else ["systemctl"]
+            privilege = "user" if user_mode else "root-required"
+            specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "show", unit, "--property=Id,Description,LoadState,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Freshly verify the {('user ' if user_mode else '')}description, active state, and persistence state of {unit} before mutation.", privilege="user"))
+            specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {('user ' if user_mode else '')}{action} operation on {unit}; no sudo escalation is inferred.", privilege=privilege))
             status = "planned"
-            notes += [f"Fresh systemd state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
+            notes += [f"Fresh systemd {('user-bus ' if user_mode else '')}state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
     elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "curl", "http headers", "web application", "enumerate the web", "scan ")):
         kind = "authorized_engagement"
         risk = "high"
@@ -1139,7 +1386,11 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 missing.append(tool)
                 notes.append(f"TOOL MISSING: {tool}. The host probe found no executable; no scan output exists.")
             else:
-                if tool == "nmap":
+                network_facts = resolve_targets(normalized)
+                if network_facts["state"] != "observed":
+                    status = "unavailable"
+                    notes.append("Target DNS resolution was not observed; no network command was created.")
+                elif tool == "nmap":
                     for target in normalized:
                         if "/" in target:
                             try:
@@ -1182,12 +1433,18 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     elif parse_service(lower):
         unit = parse_service(lower)
         assert unit is not None
-        if (not detect_context()["systemd"] or any(probe_executable(tool)["state"] != "installed" for tool in ("systemctl", "journalctl"))):
-            status = "unavailable"; missing.extend([tool for tool in ("systemctl", "journalctl") if probe_executable(tool)["state"] != "installed"]); notes.append("Systemd is not usable in this context; no service command was run.")
+        user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", lower))
+        context = detect_context()
+        user_bus_available = context.get("systemd_context", {}).get("user_bus", {}).get("state") == "available"
+        systemd_available = user_bus_available if user_mode else context["systemd"]
+        if (not systemd_available or any(probe_executable(tool)["state"] != "installed" for tool in ("systemctl", "journalctl"))):
+            status = "unavailable"; missing.extend([tool for tool in ("systemctl", "journalctl") if probe_executable(tool)["state"] != "installed"]); notes.append("The requested systemd context is not usable; no service command was run.")
         else:
+            prefix = ["systemctl", "--user"] if user_mode else ["systemctl"]
+            journal_prefix = ["journalctl", "--user"] if user_mode else ["journalctl"]
             specs.extend([
-                adapter_command("linux.systemd.inspect", "systemctl", ["systemctl", "show", unit, "--property=Id,Description,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Read the factual state and persistence of {unit}."),
-                adapter_command("linux.systemd.inspect", "journalctl", ["journalctl", "-u", unit, "-n", "80", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation=f"Read the last bounded journal lines for {unit}; no service mutation is requested."),
+                adapter_command("linux.systemd.inspect", "systemctl", [*prefix, "show", unit, "--property=Id,Description,LoadState,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Read the factual {('user ' if user_mode else '')}state and persistence of {unit}."),
+                adapter_command("linux.systemd.inspect", "journalctl", [*journal_prefix, "-u", unit, "-n", "80", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation=f"Read the last bounded {('user ' if user_mode else '')}journal lines for {unit}; no service mutation is requested."),
             ])
             status = "planned"; notes.append("Read-only systemd and journal inspection. Restart/enable/disable require a separate fresh plan and confirmation.")
     elif any(word in lower for word in ("git status", "repository status", "git hygiene", "check my repo")):
@@ -1234,10 +1491,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "kind": kind,
         "risk": risk,
         "authorization": authorization,
+        "rollback": rollback,
         "commands": specs,
         "notes": notes,
         "missing_tools": sorted(set(missing)),
         "engagement_id": engagement_id,
+        "network_facts": network_facts,
         "scope": {"cwd": str(cwd), "engagement_id": engagement_id, "targets": specs[0].get("scope", []) if specs else []},
         "workers": [{"id": "vortex-deterministic-planner", "state": "responded", "evidence_used": bool(specs), "role": "reviewed local adapter"}, {"id": "local-model", "state": "disabled", "evidence_used": False, "role": "advisory only"}],
         "approval_required": bool(specs),
@@ -1273,8 +1532,13 @@ class ExecutionManager:
         plan = authoritative
         if plan["status"] != "planned":
             raise PolicyError("plan is not executable in its current state")
-        if offline and any(spec.get("network_class") != "no-network" for spec in plan.get("commands", [])):
+        if offline and any(spec.get("network_class") not in ("no-network", "loopback-only") for spec in plan.get("commands", [])):
             raise PolicyError("offline mode blocks this network-effecting plan")
+        planned_network = plan.get("network_facts", {})
+        if planned_network.get("state") == "observed":
+            current_network = resolve_targets([item.get("target") for item in planned_network.get("targets", []) if item.get("target")])
+            if current_network.get("state") != "observed" or resolution_digest(current_network) != resolution_digest(planned_network):
+                raise PolicyError("DNS resolution changed or could not be revalidated; create a fresh plan")
         if any(spec.get("privilege") == "root-required" for spec in plan.get("commands", [])) and os.getuid() != 0:
             raise PermissionError("this plan requires root; rerun the reviewed plan with sudo vortex --allow-root run <plan-id>")
         if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
@@ -1300,10 +1564,10 @@ class ExecutionManager:
         if not claimed:
             raise PolicyError(reason)
         self.store.append_audit("plan_approved", {"plan_id": plan["id"], "digest": plan["digest"]})
-        op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "output_digest": None, "analysis": None}
+        op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "network_facts": plan.get("network_facts", {}), "output_digest": None, "analysis": None}
         self.store.save_operation(op)
         self.store.append_audit("operation_started", {"operation_id": op["id"], "plan_id": plan["id"], "digest": plan["digest"], "privilege": "root-override" if allow_root else "user"})
-        thread = threading.Thread(target=self._run, args=(plan, op), daemon=True)
+        thread = threading.Thread(target=self._run, args=(plan, op, 0), daemon=True)
         with self.lock:
             self.threads[op["id"]] = thread
             self.cancel_events[op["id"]] = threading.Event()
@@ -1317,6 +1581,16 @@ class ExecutionManager:
             process = self.processes.get(operation_id)
         if not event:
             return False
+        operation = self.store.get_operation(operation_id)
+        if operation and operation.get("status") == "awaiting_confirmation":
+            event.set()
+            operation["status"] = "cancelled"
+            operation["ended_at"] = now_iso()
+            operation["analysis"] = make_analysis({}, operation)
+            self.store.update_operation(operation)
+            with self.lock: self.cancel_events.pop(operation_id, None)
+            self.store.append_audit("operation_cancelled", {"operation_id": operation_id, "reason": "preflight_declined"})
+            return True
         event.set()
         if process and process.poll() is None:
             try:
@@ -1325,6 +1599,53 @@ class ExecutionManager:
                 pass
         self.store.append_audit("operation_cancel_requested", {"operation_id": operation_id})
         return True
+
+    @staticmethod
+    def _has_guarded_mutation(plan: dict[str, Any]) -> bool:
+        return any(spec.get("privilege") == "root-required" and spec.get("adapter_id") in ("linux.packages.apt", "linux.systemd.mutate") for spec in plan.get("commands", []))
+
+    def approve_preflight(self, operation_id: str, confirm: bool, approval_token: str | None, preflight_digest: str | None) -> dict[str, Any]:
+        if not confirm:
+            raise PermissionError("mutation confirmation required")
+        operation = self.store.get_operation(operation_id)
+        if not operation:
+            raise PolicyError("operation not found")
+        if operation.get("status") != "awaiting_confirmation":
+            raise PolicyError("operation is not awaiting mutation confirmation")
+        plan = self.store.get_plan(operation["plan_id"])
+        if not plan:
+            raise PolicyError("plan not found")
+        if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
+            raise TimeoutError("plan expired before mutation approval")
+        for spec in plan.get("commands", []):
+            current = probe_executable(spec["executable"])
+            identity = spec.get("executable_identity", {})
+            if current.get("state") != "installed" or current.get("sha256") != identity.get("sha256") or current.get("device") != identity.get("device") or current.get("inode") != identity.get("inode"):
+                raise PolicyError(f"executable identity changed for {spec['executable']}; fresh plan required")
+        if plan.get("engagement_id"):
+            engagement = self.store.get_engagement(plan["engagement_id"])
+            if not engagement or engagement.get("status") != "active":
+                raise PolicyError("engagement is unavailable or closed")
+            if time.time() > datetime.fromisoformat(engagement["expires_at"]).timestamp():
+                raise TimeoutError("engagement expired before mutation approval")
+        if not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
+            raise PolicyError("exact approval token is required for mutation confirmation")
+        if not preflight_digest or not secrets.compare_digest(preflight_digest, operation.get("preflight_digest", "")):
+            raise PolicyError("fresh preflight digest does not match this operation")
+        with self.lock:
+            if operation_id in self.threads:
+                raise PolicyError("operation is already resuming")
+            event = self.cancel_events.get(operation_id)
+            if not event or event.is_set():
+                raise PolicyError("operation has been cancelled")
+            operation["status"] = "started"
+            operation["mutation_approval"] = {"at": now_iso(), "preflight_digest": operation["preflight_digest"]}
+            self.store.update_operation(operation)
+            self.store.append_audit("mutation_approved", {"operation_id": operation_id, "plan_id": plan["id"], "preflight_digest": operation["preflight_digest"]})
+            thread = threading.Thread(target=self._run, args=(plan, operation, len(operation.get("commands", []))), daemon=True)
+            self.threads[operation_id] = thread
+            thread.start()
+        return operation
 
     def _run_one(self, spec: dict[str, Any], operation_id: str) -> dict[str, Any]:
         started = now_iso(); started_mono = time.monotonic()
@@ -1424,6 +1745,45 @@ class ExecutionManager:
         record["evidence_digest"] = hashlib.sha256((record["stdout"] + "\n" + record["stderr"]).encode()).hexdigest()
         return record
 
+    def _preflight_gate(self, plan: dict[str, Any], op: dict[str, Any]) -> str | None:
+        """Validate fresh read-only facts before a guarded mutation."""
+        adapters = {spec.get("adapter_id") for spec in plan.get("commands", [])}
+        if "linux.packages.apt" in adapters:
+            facts = parse_package_facts(op.get("commands", []))
+            preflight = facts.get("preflight") or {}
+            if preflight.get("state") != "observed":
+                return "fresh apt preflight was not observed; mutation was not run"
+            # Install/upgrade preflights explicitly carry --no-remove. If a
+            # backend nevertheless reports removals, stop rather than accepting
+            # a changed dependency impact after approval.
+            mutation = plan.get("commands", [])[-1].get("argv", [])
+            if any(action in mutation for action in ("install", "upgrade")) and preflight.get("removed", 0) > 0:
+                return "fresh apt preflight reported removals; mutation was not run"
+            if mutation and "remove" in mutation and preflight.get("removed", 0) == 0:
+                return "fresh apt preflight reported no package removal; mutation was not run"
+        if "linux.systemd.mutate" in adapters:
+            facts = parse_systemd_facts(op.get("commands", []))
+            unit = facts.get("unit") or {}
+            if unit.get("state") != "observed":
+                return "fresh systemd state was not observed; mutation was not run"
+            if unit.get("load_state") in (None, "not-found", "bad-setting"):
+                return "systemd unit is not loaded; mutation was not run"
+        return None
+
+    def _collect_adapter_facts(self, plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for spec, command in zip(plan.get("commands", []), op.get("commands", [])):
+            adapter_id = spec.get("adapter_id")
+            if adapter_id:
+                grouped.setdefault(adapter_id, []).append(command)
+        facts: dict[str, Any] = {}
+        for adapter_id, results in grouped.items():
+            if adapter_id == "linux.packages.apt": facts[adapter_id] = parse_package_facts(results)
+            elif adapter_id in ("linux.systemd.inspect", "linux.systemd.mutate"): facts[adapter_id] = parse_systemd_facts(results)
+            elif adapter_id == "linux.containers.logs": facts[adapter_id] = parse_container_logs(results)
+            elif adapter_id == "linux.ssh.connection": facts[adapter_id] = parse_ssh_connection(results)
+        return facts
+
     def _collect_artifacts(self, plan: dict[str, Any], op: dict[str, Any]) -> list[dict[str, Any]]:
         artifacts: list[dict[str, Any]] = []
         for spec, command in zip(plan.get("commands", []), op.get("commands", [])):
@@ -1458,19 +1818,42 @@ class ExecutionManager:
                 artifacts.append(artifact)
         return artifacts
 
-    def _run(self, plan: dict[str, Any], op: dict[str, Any]) -> None:
+    def _run(self, plan: dict[str, Any], op: dict[str, Any], start_index: int = 0) -> None:
         try:
             op["status"] = "running"; self.store.update_operation(op)
-            for spec in plan["commands"]:
+            for index in range(start_index, len(plan["commands"])):
+                spec = plan["commands"][index]
                 if self.cancel_events.get(op["id"], threading.Event()).is_set():
                     break
                 result = self._run_one(spec, op["id"])
                 op["commands"].append(result)
                 self.store.update_operation(op)
-                if result["status"] != "succeeded":
+                current_spec = plan["commands"][index]
+                if result["status"] != "succeeded" and not current_spec.get("allow_failure", False):
                     break
+                if len(op["commands"]) < len(plan.get("commands", [])):
+                    completed_spec = plan["commands"][len(op["commands"]) - 1]
+                    is_fresh_apt_preflight = completed_spec.get("adapter_id") == "linux.packages.apt" and completed_spec.get("executable") == "apt-get" and "-s" in completed_spec.get("argv", [])
+                    is_fresh_systemd_state = completed_spec.get("adapter_id") == "linux.systemd.mutate" and completed_spec.get("executable") == "systemctl" and "show" in completed_spec.get("argv", [])
+                    if is_fresh_apt_preflight or is_fresh_systemd_state:
+                        gate_error = self._preflight_gate(plan, op)
+                        if gate_error:
+                            op["execution_gate"] = {"state": "blocked", "reason": gate_error}
+                            break
+                        if self._has_guarded_mutation(plan):
+                            op["facts"] = self._collect_adapter_facts(plan, op)
+                            op["preflight_digest"] = hashlib.sha256(canonical(op["commands"]).encode()).hexdigest()
+                            op["preflight"] = {"state": "ready", "next_command": plan["commands"][len(op["commands"])] ["display"], "digest": op["preflight_digest"]}
+                            op["status"] = "awaiting_confirmation"
+                            op["analysis"] = make_analysis(plan, op)
+                            self.store.update_operation(op)
+                            self.store.append_audit("preflight_ready", {"operation_id": op["id"], "plan_id": plan["id"], "preflight_digest": op["preflight_digest"]})
+                            with self.lock:
+                                self.threads.pop(op["id"], None)
+                            return
             statuses = [x["status"] for x in op["commands"]]
-            if self.cancel_events.get(op["id"], threading.Event()).is_set(): op["status"] = "cancelled"
+            if op.get("execution_gate", {}).get("state") == "blocked": op["status"] = "failed"
+            elif self.cancel_events.get(op["id"], threading.Event()).is_set(): op["status"] = "cancelled"
             elif any(s == "timed_out" for s in statuses): op["status"] = "timed_out"
             elif any(s == "interrupted" for s in statuses): op["status"] = "interrupted"
             elif any(s == "unavailable" for s in statuses): op["status"] = "unavailable"
@@ -1480,6 +1863,7 @@ class ExecutionManager:
             op["status"] = "unknown_after_crash"; op["error"] = redact(str(exc))
         op["ended_at"] = now_iso()
         op["output_digest"] = hashlib.sha256(canonical(op["commands"]).encode()).hexdigest()
+        op["facts"] = self._collect_adapter_facts(plan, op)
         op["artifacts"] = self._collect_artifacts(plan, op)
         op["analysis"] = make_analysis(plan, op)
         self.store.update_operation(op)
@@ -1489,17 +1873,63 @@ class ExecutionManager:
             self.threads.pop(op["id"], None)
 
 
+def build_undo_plan(store: Store, operation_id: str) -> dict[str, Any]:
+    operation = store.get_operation(operation_id)
+    if not operation:
+        raise PolicyError("history id not found")
+    if operation.get("status") != "succeeded":
+        raise PolicyError("only a verified successful operation can produce rollback guidance")
+    original = store.get_plan(operation["plan_id"])
+    if not original:
+        raise PolicyError("original plan is unavailable")
+    rollback = original.get("rollback", {})
+    inverse = rollback.get("inverse", [])
+    if not rollback.get("available") or len(inverse) != 2:
+        raise PolicyError("no verified inverse operation exists; use a snapshot or create a manual plan")
+    action, target = inverse
+    if action in {"install", "remove"}:
+        request = f"{action} package {target}"
+    else:
+        request = f"{action} {target}"
+    plan = build_plan(store, request, original.get("cwd"), original.get("engagement_id"))
+    plan["kind"] = "rollback_plan"
+    plan["notes"].insert(0, f"Rollback proposal derived from verified operation {operation_id}; it has not been executed.")
+    plan["rollback_source_operation"] = operation_id
+    # Recompute identity because the provenance annotation is part of the saved
+    # plan, while command/scope/policy digest remains bound to the exact action.
+    plan["digest"] = plan_digest(plan)
+    with store.lock, store.connect() as db:
+        db.execute("UPDATE plans SET plan_json=?, digest=? WHERE id=?", (canonical(plan), plan["digest"], plan["id"]))
+    store.append_audit("rollback_plan_created", {"operation_id": operation_id, "plan_id": plan["id"], "digest": plan["digest"]})
+    return plan
+
+
+def report_markdown(operation: dict[str, Any]) -> str:
+    analysis = operation.get("analysis") or {}
+    lines = ["# Linux Vortex operation report", "", f"- Status: **{operation.get('status', 'unknown')}**", f"- Operation: `{operation.get('id', '')}`", f"- Plan: `{operation.get('plan_id', '')}`", f"- Started: `{operation.get('started_at', '')}`", f"- Ended: `{operation.get('ended_at', '')}`", "", "## Observed analysis", "", str(analysis.get("fact", "No analysis was recorded.")), "", "## Command timeline", ""]
+    for index, command in enumerate(operation.get("commands", []), 1):
+        lines += [f"### {index}. `{command.get('display', '')}`", "", f"- Status: `{command.get('status')}`", f"- Exit code: `{command.get('exit_code')}`", f"- Signal: `{command.get('signal')}`", f"- Evidence digest: `{command.get('evidence_digest')}`", ""]
+        if command.get("stdout"): lines += ["```text", command["stdout"], "```", ""]
+        if command.get("stderr"): lines += ["### stderr", "", "```text", command["stderr"], "```", ""]
+    if analysis.get("rollback"): lines += ["## Rollback guidance", "", str(analysis["rollback"]), ""]
+    return "\n".join(lines)
+
+
 def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
     facts = []
     for command in op["commands"]:
         lines = [line for line in (command.get("stdout", "") + command.get("stderr", "")).splitlines() if line.strip()]
         facts.append({"command": command["display"], "status": command["status"], "observed_lines": len(lines), "evidence_digest": command.get("evidence_digest"), "summary": (lines[0][:220] if lines else "No output was observed; this is not evidence of a clean result.")})
     return {
-        "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "cancelled": "CANCELLED", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
+        "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "cancelled": "CANCELLED", "awaiting_confirmation": "PREFLIGHT COMPLETE", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
         "fact": f"{len(op['commands'])} real command(s) reached an observed terminal outcome." if op["commands"] else "No command was run.",
         "inference": "Output summaries are bounded and redacted. They are observations, not a security guarantee.",
         "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule.",
         "commands": facts,
+        "adapter_facts": op.get("facts", {}),
+        "execution_gate": op.get("execution_gate"),
+        "rollback": plan.get("rollback"),
+        "network_facts": op.get("network_facts", plan.get("network_facts", {})),
         "artifacts": [{"artifact_id": item.get("artifact_id"), "kind": item.get("kind"), "state": item.get("state"), "sha256": item.get("sha256"), "summary": item.get("summary"), "observations": item.get("observations", [])[:20]} for item in op.get("artifacts", [])],
         "next_steps": [{"label": "explain", "text": "Review the observed command timeline and evidence digests."}, {"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."}],
         "workers": op["workers"],
@@ -1581,6 +2011,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/history": return self._json(200, {"history": self.store.list_history()})
             if path == "/api/engagements": return self._json(200, {"engagements": self.store.list_engagements()})
             if path == "/api/audit/verify": return self._json(200, {"audit": self.store.verify_audit()})
+            if path == "/api/store/integrity": return self._json(200, {"integrity": self.store.integrity_check()})
             if path.startswith("/api/plans/"):
                 plan = self.store.get_plan(path.rsplit("/", 1)[-1]); return self._json(200 if plan else 404, {"plan": plan} if plan else {"error": {"code": "not_found", "message": "plan not found"}})
             if path.startswith("/api/operations/"):
@@ -1630,6 +2061,14 @@ class VortexHandler(BaseHTTPRequestHandler):
                     if not self.sessions.kill(parts[-2]):
                         return self._json(404, {"error": {"code": "not_running", "message": "session is not running"}})
                     return self._json(202, {"kill_requested": True, "session_id": parts[-2]})
+            if path == "/api/store/prune":
+                result = self.store.prune(body.get("history_days", 90), body.get("output_days", 30))
+                return self._json(200, {"prune": result})
+            if path == "/api/store/backup":
+                destination = body.get("destination")
+                if not isinstance(destination, str) or not destination.strip(): raise ValueError("backup destination is required")
+                backup_path = self.store.backup(destination, bool(body.get("overwrite", False)))
+                return self._json(201, {"backup": {"path": str(backup_path), "mode": oct(backup_path.stat().st_mode & 0o777)}})
             if path == "/api/artifacts/analyze":
                 artifact = analyze_path(body.get("path"), body.get("kind", "auto"))
                 self.store.save_artifact(artifact)
@@ -1655,6 +2094,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 expires = parse_expiry(body.get("expires_at"), default_seconds=24 * 3600)
                 item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": redact(str(body.get("name") or "Authorized assessment"))[:160], "authorization": redact(str(body.get("authorization") or "operator-declared authorization"))[:500], "targets": targets, "classes": [redact(x)[:80] for x in raw_classes[:20]], "status": "active"}
                 self.store.create_engagement(item); return self._json(201, {"engagement": item})
+            if path.startswith("/api/operations/") and path.endswith("/approve"):
+                operation_id = path.split("/")[-2]
+                operation = self.executor.approve_preflight(operation_id, bool(body.get("confirm")), body.get("approval_token"), body.get("preflight_digest"))
+                return self._json(202, {"operation": operation})
             if path.startswith("/api/operations/") and path.endswith("/cancel"):
                 operation_id = path.split("/")[-2]
                 if not self.executor.cancel(operation_id):
@@ -1685,12 +2128,16 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop_on_term)
     signal.signal(signal.SIGHUP, stop_on_term)
+    runtime_file = write_runtime_metadata(host, server.server_port, token)
     print(json.dumps({"backend": "online", "host": host, "port": server.server_port, "version": APP_VERSION}), flush=True)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally:
         handler.sessions.shutdown()
         server.server_close()
+        try:
+            if json.loads(runtime_file.read_text(encoding="utf-8")).get("pid") == os.getpid(): runtime_file.unlink()
+        except (OSError, ValueError): pass
 
 
 if __name__ == "__main__":

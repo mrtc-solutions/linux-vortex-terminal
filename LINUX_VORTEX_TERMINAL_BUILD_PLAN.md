@@ -9,8 +9,8 @@
 > desktop-agent direction supersedes earlier “CLI-only/no GUI” wording: the
 > product is a Linux-native Electron desktop workbench with a Python sidecar,
 > while the sidecar remains the sole authority that can execute a real command.
-> It is not a browser SaaS product, a remote-control service, or a simulated
-> terminal. The UI is optional; the local sidecar and `vortex` CLI are useful on
+> It is not a browser SaaS product, a remote-control service, or a terminal that fabricates
+> execution. The UI is optional; the local sidecar and `vortex` CLI are useful on
 > their own.
 
 ## 1. Product direction
@@ -33,15 +33,15 @@ or cloud SOC.
 North-star requests:
 
 ```bash
-vortex "why is this Ubuntu server exposing port 8080? inspect locally first"
+vortex "why is this Linux server exposing port 8080? inspect locally first"
 vortex "free space by finding large cache directories, show me the plan, then clean only caches I approve"
 vortex "enumerate the authorized web application at https://lab.example.test, save evidence, and explain each step"
 ```
 
 ### What is in scope for v1
 
-- Ubuntu 24.04 LTS first; Ubuntu 22.04 and Debian 12+ core compatibility where
-  probes prove it; best-effort Debian-family reporting elsewhere.
+- Linux first, with Kali and Debian-family compatibility driven by factual probes;
+  no distribution/version support claim is made without dedicated testing.
 - Linux administration, diagnostics, files, processes, services, packages, Git,
   containers, SSH diagnostics, authorized reconnaissance, defensive triage, and
   supplied-artifact analysis.
@@ -165,10 +165,10 @@ Output protocol:
 
 | Tier | Context | v1 promise |
 |---|---|---|
-| 1 | Ubuntu 24.04 LTS amd64/arm64 | Full acceptance target and first `.deb` |
-| 2 | Ubuntu 22.04, Debian 12+ | Source build/core CLI after probes |
-| 3 | Mint, Pop!_OS, Kali-derived | Best-effort Debian-family facts |
-| Deferred | Fedora/RHEL/openSUSE/Arch/Alpine, WSL, immutable OS, containers | Detect and report limits |
+| 1 | Linux on a supported host with required probes | Core CLI and local execution promise |
+| 2 | Kali/Debian-family Linux | Apt/systemd behavior after host probes |
+| 3 | Other Linux distributions | Best-effort facts; no mutation promise |
+| Deferred | Non-Linux, WSL, immutable OS, and constrained containers | Detect and report limits |
 
 `/etc/os-release`, actual executable probes, and usable-state probes are the
 source of truth. `doctor` reports distro/version/family, physical/VM/container/
@@ -200,7 +200,7 @@ Python 3.11 local sidecar (single authority, loopback-only)
         └─ optional disabled-by-default local model client
 ```
 
-The current sidecar uses the Python standard library so a clean Ubuntu host can
+The current sidecar uses the Python standard library so a clean Linux host can
 boot without downloading runtime dependencies; the packaged architecture can
 swap the HTTP handler for FastAPI/Pydantic without changing the authority
 boundary. Electron uses `contextIsolation`, `nodeIntegration=false`, sandboxed
@@ -268,7 +268,7 @@ fresh facts, exact identifiers, an impact card, and confirmation.
 
 Apt must probe apt-get/apt-cache/dpkg-query/sudo, validate package grammar,
 show installed/candidate version, architecture, origin, held state, dependency
-changes and removals from a fresh `apt-get -s` simulation, dpkg/lock/reboot state,
+changes and removals from a fresh `apt-get -s` preflight, dpkg/lock/reboot state,
 and signature policy. No unauthenticated flags, trust bypasses, PPAs, curl-piped
 installers, or arbitrary `.deb` files. Systemd validates unit names and user bus
 context, bounds journals, and never performs vacuum/mask/default-target changes
@@ -303,7 +303,7 @@ No OSC background/cursor/title sequences are emitted by default.
 Inspect repository/Git/licensing; add README, security, contributing, conduct,
 threat model, ADRs, changelog convention, CI, pinned dev instructions,
 compatibility matrix, I/O protocol, retention policy, threat boundary, and exit
-codes. Gate: clean Ubuntu can boot help/doctor with no model or network.
+codes. Gate: clean Linux host can boot help/doctor with no model or network.
 
 ### Phase 1 — Honest vertical slice (implemented in this delivery)
 
@@ -323,10 +323,10 @@ is stored, and dry-run/declined operations change nothing.
 
 ### Phase 3 — Core Linux and authorized security skills
 
-Add apt simulation/source/lock handling, systemd semantic adapters, filesystem,
+Add apt preflight/source/lock handling, systemd semantic adapters, filesystem,
 process/resource, Git, container, DNS/SSH, nmap and reviewed HTTP/content
 adapters, target normalization, artifact hashes/parsers, tool-specific negative
-and disposable-Ubuntu tests. No mutation is released without fresh facts and
+and disposable Linux tests. No mutation is released without fresh facts and
 confirmation.
 
 ### Phase 4 — Persistence/recovery
@@ -349,7 +349,7 @@ concurrency/resource caps. Shell RC files are never touched implicitly.
 
 ### Phase 7 — Linux release
 
-Release tested signed/checksummed Ubuntu 24.04 `.deb` first, with `/usr/bin/vortex`,
+Release tested signed/checksummed Linux Debian-family `.deb` first, with `/usr/bin/vortex`,
 man page, completions, documentation, SBOM, SPDX inventory, provenance,
 reproducibility notes, fresh-VM install/upgrade/uninstall tests, and no desktop
 autostart/listener/telemetry. Defer Snap/Flatpak/RPM/AUR until confinement and
@@ -358,7 +358,7 @@ host-execution behavior are separately tested.
 ## 10. Quality, abuse resistance, and release blockers
 
 Unit, integration, golden, property, fuzz/mutation, shell compatibility, and
-real disposable Ubuntu tests cover argv/path/package/unit parsing, plan digest and
+real disposable Linux tests cover argv/path/package/unit parsing, plan digest and
 approval invalidation, ANSI/bidi/control output, malformed UTF-8, giant output,
 symlink traversal, public model endpoints, prompt injection, stale/replayed plans,
 tampered audit/package data, sudo/password handling, forked descendants, signal
@@ -368,13 +368,13 @@ acceptance tests.
 
 CI runs formatting, lint, tests, dependency/license/SBOM review, shellcheck,
 unsafe-code review if introduced, dependency lock/provenance checks, and build
-smoke tests on Ubuntu. Maintain a capability matrix marked `implemented + tested`,
+smoke tests on Linux. Maintain a capability matrix marked `implemented + tested`,
 `available but tool missing`, `planned`, or `explicitly unsupported`; documentation
 must not turn proposals into claims. Maintainers publish an incident process,
 adapter emergency-disable list, knowledge revocation path, security update
 channel, rollback instructions, and release support lifecycle.
 
-Version 1 is blocked until a clean Ubuntu 24.04 VM demonstrates: no-network/no-
+Version 1 is blocked until a clean supported Linux VM demonstrates: no-network/no-
 model install and operation; correct TTY/non-TTY stdout/stderr/JSON/exit behavior;
 plan substitution/double-run/PATH replacement resistance; truthful cancellation,
 timeout, SSH disconnect and crash states with no descendants; no password capture
@@ -385,7 +385,7 @@ clearly distinguishes real capability from proposal.
 
 ## 11. Product-owner decisions before mutation/release phases
 
-1. Confirm Ubuntu/Debian-first v1 and defer Fedora/Arch.
+1. Confirm Linux-first v1 and defer Fedora/Arch.
 2. Keep command name `vortex` unless a distro collision requires `linux-vortex`.
 3. Confirm MIT licensing and third-party attribution policy.
 4. Choose Ollama, llama.cpp, or both behind the local OpenAI-compatible protocol.
@@ -405,9 +405,9 @@ open/stop controls. The CLI can create and attach to a foreground local PTY in a
 interactive terminal; the desktop sidecar supports session listing, event attach,
 input, resize, and kill.
 
-Remaining Priority 1 work is full terminal rendering/multiplexing: xterm-quality
-ANSI handling, tabs, panes, reconnectable daemon-owned attach, SSH/tmux/non-TTY
-compatibility tests, and a durable session/job protocol. These must be completed
+Remaining Priority 1 work is complete xterm compatibility, reconnectable daemon-owned
+attach across sidecar restarts, SSH/tmux/non-TTY compatibility tests, and a durable
+session/job protocol. These must be completed
 before marking the complete terminal workspace acceptance gate passed.
 
 ### Priority 2 — real adapter registry
@@ -427,9 +427,8 @@ Direct commands are still shell-free at the Vortex boundary, explicitly
 attributed `operator_direct`, approval-gated/logged, and can invoke a shell as a
 literal operator-selected executable.
 
-Remaining Priority 2 work is a complete adapter package layout, DNS/redirect
-revalidation, nmap XML/HTTP parsers, apt/systemd mutation adapters, parser fuzzing,
-and disposable-VM acceptance evidence.
+Remaining Priority 2 work is deeper Nmap/HTTP execution policy, runtime-specific
+output schemas, parser fuzzing, and disposable Linux acceptance evidence.
 
 ### Priority 2 — artifact parsing and evidence provenance
 
@@ -455,7 +454,7 @@ POST /api/artifacts/analyze {"path":"./scan.xml","kind":"auto"}
 
 The remaining evidence work is parser confidence/error taxonomy expansion,
 namespace/format coverage, DNS/redirect provenance, signed artifact packages,
-and parser fuzzing in disposable Ubuntu CI.
+and parser fuzzing in disposable Linux CI.
 
 ### Priority 3 — guarded apt and systemd operations
 
@@ -463,7 +462,7 @@ and parser fuzzing in disposable Ubuntu CI.
 includes typed package-operation plans for apt install/remove/upgrade and typed
 systemd start/stop/restart/enable/disable plans. Package plans validate package
 names, probe apt/dpkg tools, inspect lock availability, check dpkg state, show
-candidate/source/package facts, run a fresh `apt-get -s` simulation immediately
+candidate/source/package facts, run a fresh `apt-get -s` preflight immediately
 before the mutation, and require a root-only final command. Systemd plans validate
 unit names, probe systemd availability, show fresh unit state immediately before
 the action, and mark persistent enable/disable changes. Forbidden repository
@@ -475,7 +474,108 @@ instruction such as `sudo vortex --allow-root run <plan-id>`; the native PTY and
 explicit operator-direct path retain full Linux capability. Tests use planning
 and policy checks only; no shared-host apt or service mutation is run.
 
-Remaining Priority 3 work is apt simulation parsing for package/removal counts,
-held/reboot/incomplete-state reporting, lock behavior on Ubuntu 24.04, systemd
-user-bus semantics, fresh privileged disposable-VM install/remove and service
-acceptance tests, and rollback/recovery metadata.
+Remaining Priority 3 work is richer held/reboot/incomplete-state reporting,
+lock behavior on supported Linux, fresh privileged disposable-VM install/remove
+and service acceptance tests, interactive privilege flows, and rollback/recovery
+metadata. User-bus detection and strict `systemctl --user` routing are now
+implemented.
+
+### Priority 3 — apt/systemd factual result parsing
+
+**Implemented in the current iteration.** Apt preflight output is now parsed for
+upgrade/new/remove/not-upgraded counts, package lists, held/kept-back markers,
+reboot hints, and lock/error states. Systemd `show` and bounded journal output
+are parsed into unit load/active/substate/persistence fields and bounded failure
+line observations. Adapter facts are attached to completed operation analysis.
+
+Before a guarded mutation, the executor now requires fresh successful facts:
+changed apt preflights that report removals for install/upgrade are blocked, a
+remove with no observed removal is blocked, and missing/not-found systemd units
+are blocked before the action command. The normal-user root gate remains in
+place. Current tests use controlled test doubles only; production never fabricates output and no shared host is mutated.
+
+The remaining acceptance work is a disposable supported Linux VM for real apt
+install/remove and service actions, user-bus semantics, held/reboot edge cases,
+and rollback metadata. The production path has no fake preflight mode; apt
+`-s` is a real package-manager read-only preflight. Mutating operations pause
+with the observed preflight facts and require a second exact approval before the
+real mutation command runs.
+
+### Product-owner platform clarification — Linux without version marketing
+
+The product is presented as **Linux Vortex Terminal for Linux**, not as an
+distribution-release-specific application. Kali Linux is a first-class Debian-family
+runtime when factual probes show the required tools and context. Documentation,
+branding, and capability claims must not name a Linux release version. `doctor`
+may still return the host's factual `/etc/os-release` version in machine-readable
+host diagnostics because hiding observed state would violate truthfulness; that
+fact is not a support or release promise.
+
+### Priority 2 — Linux container and SSH diagnostics
+
+**Implemented in the current iteration.** Added factual Docker/Podman runtime
+selection with read-only `ps --all --no-trunc` inspection and explicit missing-
+runtime handling. Added read-only SSH effective-configuration resolution using
+`ssh -G`; it does not connect, authenticate, read private keys, or harvest agent
+secrets. Both adapters run only real installed host tools and are represented in
+the adapter registry. Runtime-specific acceptance tests and deeper output
+schemas remain separate work.
+
+### Priority 1 — terminal workspace progress
+
+**Current slice implemented.** The desktop workspace now provides real session tabs,
+a two-pane split view, a dependency-free terminal buffer with SGR/cursor/erase,
+scrollback and alternate-screen support, direct control/navigation key forwarding,
+and explicit shell integration preview/install/uninstall. Shell integration writes
+only a Vortex-owned idempotent block, creates a timestamped backup, requires
+`--yes`, and removes only that block on uninstall. No shell RC file is changed
+implicitly.
+
+The native PTY and direct operator command paths retain full Linux capability.
+The remaining terminal work is complete xterm compatibility, robust alternate-
+screen/TUI behavior across real applications, reconnectable attach across
+sidecar restarts, PTY history replay, and tmux/SSH/non-TTY acceptance evidence.
+
+### Priority 2 — network, container, and SSH hardening progress
+
+**Implemented in the current iteration.** Active hostname/URL plans now record
+real DNS resolution facts and compare them again immediately before execution;
+changed resolution invalidates the plan. HTTP Location headers are observed and
+never followed automatically. Docker/Podman log collection is bounded to 200
+lines and only uses real installed runtimes. SSH connectivity diagnostics require
+an active engagement and use BatchMode, a short connection timeout, one attempt,
+and strict host-key verification; SSH config inspection remains the no-network
+`ssh -G` path. No network scan, payload, credential submission, or fabricated
+reachability result is added.
+
+Remaining Priority 2 work is stronger Nmap/HTTP parsing and execution policy,
+complete container/SSH parser coverage, parser fuzzing, and disposable Linux
+acceptance evidence.
+
+### Priority 2 — network scope revalidation and real diagnostic adapters
+
+**Implemented in the current iteration.** Real hostname/URL resolution facts are
+recorded when an active plan is created and re-resolved immediately before
+execution. A changed address set or failed resolution invalidates the plan.
+HTTP Location headers are parsed as observed redirects and are never followed
+without a new scope decision. Docker/Podman log collection is bounded to 200
+lines. SSH connectivity diagnostics require an engagement, use BatchMode,
+strict host-key checking, a short timeout, and one attempt; SSH configuration
+inspection remains a no-network `ssh -G` operation.
+
+No fake reachability, logs, redirect target, container, or SSH result is created.
+The remaining Priority 2 work is deeper Nmap/HTTP parser coverage, full runtime
+specific output schemas, fuzzing, and real Linux acceptance evidence.
+
+### Priority 2 — parser and execution hardening progress
+
+**Implemented in the current iteration.** Nmap XML parsing now validates host
+addresses and port observations and records parser errors without inventing
+findings. HTTP parsing records response chains, redacted headers, and observed
+redirects requiring a new scope decision. Container logs have bounded level/line
+summaries, and SSH connectivity output has explicit classifications for DNS,
+host-key, authentication, timeout, refused, and generic failures. A real DNS
+change invalidation test protects active plans, and parser tests exercise
+malformed, hostile, and random bounded input. The registry remains split across
+adapter, network, facts, and artifact modules; the remaining package-level
+separation and disposable Linux acceptance work is still pending.

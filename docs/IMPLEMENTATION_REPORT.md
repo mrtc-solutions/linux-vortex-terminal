@@ -25,9 +25,15 @@
   input, resize, process-group cancellation with TERM/KILL escalation, idle
   reaping, stale-session crash states, authenticated session endpoints, and a
   desktop open/stop local-shell flow.
+- Completed the current terminal workspace slice with real session tabs, a
+  two-pane split view, SGR/cursor/erase/scrollback/alternate-screen rendering,
+  per-key control/navigation forwarding, and explicit idempotent shell
+  integration with preview, backup, install, and uninstall.
 - Started Priority 2 with a versioned adapter registry and manifests for local
   health, filesystem usage, sockets, Git status, systemd inspection, scoped
-  nmap discovery, and bounded curl headers.
+  nmap discovery, bounded curl headers, container runtimes, and SSH diagnostics.
+  Registry data is now separated into `adapter_registry.py`; network, facts, and
+  artifact parsing remain separate modules.
 - Implemented bounded evidence parsing for Nmap XML and HTTP headers, including
   source path/operation provenance, SHA-256, parser version, observed versus
   inconclusive/tool-error states, redacted observations, artifact persistence,
@@ -36,17 +42,32 @@
   `/api/adapters`. Explicit operator PTY/direct commands remain available for
   the user’s full Linux capability and are clearly attributed outside AI adapter
   validation.
+- Implemented deterministic apt preflight parsing and systemd state/journal
+  parsing. Guarded mutations now stop when fresh preflight/state is missing or
+  unsafe, and completed operations expose structured package/service facts to
+  analysis and reports. No privileged mutation was run on the shared host.
+- Added real read-only Docker/Podman runtime detection and bounded container
+  log collection. Missing runtimes produce no fabricated container state.
+- Added scoped SSH connectivity checks
+  using BatchMode and strict host-key verification, and DNS resolution facts
+  compared again at execution so changed targets invalidate a plan. HTTP
+  redirects are observed but never followed automatically.
+- Added SQLite backup/integrity, retention/migration, rollback-plan, persistent
+  session-event replay, real Linux acceptance checklist, and model-disabled paths.
 - Added tests for planner honesty, shell metacharacters, target injection, missing
   tools, scope denial, audit tamper detection, real exit status, redaction,
   output caps, cancellation, offline mode, URL/port scope, plan tampering, and
   exact approval-token enforcement, Nmap XML/HTTP parsing, malformed artifact
-  handling, and artifact size/symlink boundaries.
+  handling, artifact size/symlink boundaries, guarded apt/systemd plan
+  construction, apt/systemd output-fact parsing, container absence, bounded
+  container logs, SSH config/connectivity, DNS revalidation, redirect reporting,
+  and systemd user-bus detection.
 
 ## Commands run
 
 ```text
 python3 -m py_compile backend/vortex_backend.py cli/vortex.py
-python3 -m unittest discover -s tests -v  # 20 tests
+python3 -m unittest discover -s tests -v  # 41 Python tests; npm test also runs the JS emulator test
 ./vortex doctor --json
 ./vortex plan "system health"
 ./vortex run --yes -- /bin/echo hello
@@ -63,12 +84,14 @@ strings, validated engagement payloads, and added persistence-integrity errors.
 
 ## Known limitations
 
-This is a deliberately small first slice. PTY tabs/panes, persistent sessions,
-full report export, apt mutation VM evidence, DNS/redirect revalidation, nmap/curl execution hardening, nuclei adapters, signed knowledge packages, local model providers, worker
-manifests, migrations/backups/retention pruning, shell install/uninstall,
-FastAPI packaging, and signed `.deb` artifacts are planned. The current desktop
-shell is an Electron-ready local renderer; `npm install` is required to launch
-Electron, while the preview and CLI need only Python 3.11.
+This is a deliberately small first release slice. Complete xterm compatibility,
+reconnectable attach across sidecar restarts, PTY history replay in the renderer,
+full apt mutation VM evidence, deeper nmap/curl policy, nuclei adapters, signed
+knowledge packages, worker manifests, migration upgrades beyond the current
+compatible schema, retention scheduling, full report export, FastAPI packaging,
+and signed release artifacts remain. The current desktop shell is Electron-ready;
+`npm install` is required to launch Electron, while the preview and CLI need only
+Python 3.11.
 
 Do not call the current slice a full penetration-testing automation platform or a
 security scanner. It reports installed/absent tools and executes only the narrow
