@@ -25,6 +25,7 @@ current vertical slice.
 ./vortex tools
 ./vortex adapters --json
 ./vortex artifact inspect ./scan.xml --type nmap-xml
+./vortex shell preview bash
 ./vortex plan "system health"
 ./vortex plan "install package ripgrep" # real preflight + root-required plan; no auto-sudo
 ./vortex "git status"
@@ -57,8 +58,10 @@ VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
 | Engagement creation, canonical targets, scope gate | Implemented + tested |
 | Desktop planning/activity/reports/settings UI | Implemented + smoke-tested |
 | Python-owned local PTY sessions and cancellation | Implemented + tested |
+| Terminal tabs/split view, safe SGR rendering, key forwarding | Implemented + tested |
+| Explicit shell integration install/uninstall | Implemented + tested |
+| Full xterm cursor emulation and reconnectable daemon attach | Planned |
 | Matrix binary rain and project-owned artwork | Implemented + accessible fallback |
-| Full PTY tabs/panes and shell integration | Planned |
 | Scoped nmap/curl planning and evidence parsers | Implemented + tested; tool availability varies |
 | Real apt preflight, impact parsing, and guarded package plans | Implemented + tested; Linux VM mutation gate remains |
 | Systemd state parsing, user-bus detection, and guarded plans | Implemented + tested; host context varies |

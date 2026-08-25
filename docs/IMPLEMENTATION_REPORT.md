@@ -25,6 +25,10 @@
   input, resize, process-group cancellation with TERM/KILL escalation, idle
   reaping, stale-session crash states, authenticated session endpoints, and a
   desktop open/stop local-shell flow.
+- Completed the current terminal workspace slice with real session tabs, a
+  two-pane split view, safe SGR color/bold rendering, per-key control/navigation
+  forwarding, and explicit idempotent shell integration with preview, backup,
+  install, and uninstall.
 - Started Priority 2 with a versioned adapter registry and manifests for local
   health, filesystem usage, sockets, Git status, systemd inspection, scoped
   nmap discovery, and bounded curl headers.
@@ -55,7 +59,7 @@
 
 ```text
 python3 -m py_compile backend/vortex_backend.py cli/vortex.py
-python3 -m unittest discover -s tests -v  # 30 tests
+python3 -m unittest discover -s tests -v  # 33 tests
 ./vortex doctor --json
 ./vortex plan "system health"
 ./vortex run --yes -- /bin/echo hello
@@ -72,10 +76,12 @@ strings, validated engagement payloads, and added persistence-integrity errors.
 
 ## Known limitations
 
-This is a deliberately small first slice. PTY tabs/panes, persistent sessions,
-full report export, apt mutation VM evidence, DNS/redirect revalidation, nmap/curl execution hardening, nuclei adapters, signed knowledge packages, local model providers, worker
-manifests, migrations/backups/retention pruning, shell install/uninstall,
-FastAPI packaging, and signed `.deb` artifacts are planned. The current desktop
+This is a deliberately small first slice. Full xterm cursor/alternate-screen
+emulation, reconnectable attach across sidecar restarts, PTY history replay,
+full report export, apt mutation VM evidence, DNS/redirect revalidation, nmap/curl
+execution hardening, nuclei adapters, signed knowledge packages, local model
+providers, worker manifests, migrations/backups/retention pruning, FastAPI
+packaging, and signed `.deb` artifacts are planned. The current desktop
 shell is an Electron-ready local renderer; `npm install` is required to launch
 Electron, while the preview and CLI need only Python 3.11.
 

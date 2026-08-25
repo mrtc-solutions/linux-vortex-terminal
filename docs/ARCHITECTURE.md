@@ -64,11 +64,12 @@ sends TERM then KILL to the process group on timeout, and records `exit_code`,
 Priority 1 also adds `SessionManager`: Linux `pty.fork()` creates a controlling
 terminal, a dedicated process group, a bounded in-memory event ring, input,
 resize, cancellation escalation, and a reaper. Session output is sanitized and
-redacted before transport; input is never persisted. Session metadata is stored,
-but old `running` sessions become `unknown_after_crash` when a new sidecar owns
-the store. The desktop uses authenticated event polling over the sidecar API.
-PTY multiplexing, terminal escape rendering, cgroup/systemd scopes, and durable
-remote attach are separate follow-up work.
+redacted before transport; input is never persisted. The renderer now offers
+session tabs, a two-pane split view, safe SGR rendering, and per-key input
+forwarding. Session metadata is stored, but old `running` sessions become
+`unknown_after_crash` when a new sidecar owns the store. The desktop uses
+authenticated event polling over the sidecar API. Full cursor/erase emulation
+and durable daemon attach remain follow-up work.
 
 ## Desktop security
 

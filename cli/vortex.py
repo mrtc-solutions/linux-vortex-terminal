@@ -6,9 +6,13 @@ ExecutionManager, preserving the one-authority rule for local commands.
 """
 from __future__ import annotations
 import argparse
+import datetime
+import difflib
 import json
 import os
 import select
+import shutil
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -66,10 +70,77 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
+
+SHELL_START = "# >>> vortex shell integration >>>"
+SHELL_END = "# <<< vortex shell integration <<<"
+
+
+def shell_rc_path(shell, home=None):
+    home = Path(home or Path.home())
+    return {'bash': home / '.bashrc', 'zsh': home / '.zshrc', 'fish': home / '.config' / 'fish' / 'config.fish'}[shell]
+
+
+def shell_block(shell):
+    if shell == 'fish':
+        return f"{SHELL_START}\nfunction vortex-plan\n    command vortex plan $argv\nend\n{SHELL_END}\n"
+    return f"{SHELL_START}\nvortex-plan() {{ command vortex plan \"$@\"; }}\n{SHELL_END}\n"
+
+
+def shell_proposal(shell, current, install):
+    start = current.find(SHELL_START)
+    end = current.find(SHELL_END)
+    if start >= 0 and end >= start:
+        end += len(SHELL_END)
+        if end < len(current) and current[end] == '\n': end += 1
+        base = current[:start] + current[end:]
+    else:
+        base = current
+    if install:
+        if base and not base.endswith('\n'): base += '\n'
+        base += shell_block(shell)
+    return base
+
+
+def shell_command(shell, action, yes, as_json):
+    rc = shell_rc_path(shell)
+    current = rc.read_text(encoding='utf-8', errors='replace') if rc.exists() else ''
+    proposed = shell_proposal(shell, current, action != 'uninstall')
+    diff = ''.join(difflib.unified_diff(current.splitlines(True), proposed.splitlines(True), fromfile=str(rc), tofile=str(rc) + ' (Vortex proposal)'))
+    if action == 'preview':
+        payload = {'shell': {'shell': shell, 'path': str(rc), 'action': action, 'changes': bool(diff), 'diff': diff}}
+        if as_json: emit(payload, True)
+        else: print(diff or 'No Vortex shell changes would be made.')
+        return 0
+    if not yes:
+        if as_json: emit({'shell': {'shell': shell, 'path': str(rc), 'action': action, 'changes': bool(diff), 'diff': diff}, 'error': {'code':'confirmation_required'}}, True)
+        else:
+            print(diff or 'No Vortex shell changes would be made.', file=sys.stderr)
+            print('Re-run with --yes to apply only the Vortex-owned block.', file=sys.stderr)
+        return EXIT_CODES['confirmation_required']
+    if diff:
+        rc.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backup = None
+        if rc.exists():
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+            backup = rc.with_name(rc.name + '.vortex.bak-' + stamp)
+            shutil.copy2(rc, backup)
+        fd, temp_name = tempfile.mkstemp(prefix='.vortex-shell-', dir=str(rc.parent), text=True)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='') as handle: handle.write(proposed)
+            os.chmod(temp_name, 0o600)
+            os.replace(temp_name, rc)
+        finally:
+            if os.path.exists(temp_name): os.unlink(temp_name)
+        Store().append_audit('shell_integration_' + action, {'shell': shell, 'path': str(rc), 'backup': str(backup) if backup else None})
+    result = {'shell': {'shell': shell, 'path': str(rc), 'action': action, 'changed': bool(diff)}}
+    if as_json: emit(result, True)
+    else: print(f"[{('INSTALLED' if action == 'install' else 'UNINSTALLED')}] {shell} integration {'updated' if diff else 'already clean'}: {rc}")
+    return 0
+
 
 def attach_foreground_session(manager, session_id):
     sequence = 0
@@ -116,6 +187,7 @@ def main(argv=None):
     b = sub.add_parser('backup'); b.add_argument('path'); b.add_argument('--force', action='store_true')
     db = sub.add_parser('db'); db.add_argument('action', choices=['integrity'], nargs='?', default='integrity')
     sub.add_parser('migrate')
+    sh = sub.add_parser('shell'); sh.add_argument('action', choices=['preview','install','uninstall']); sh.add_argument('shell', choices=['bash','zsh','fish'])
     h = sub.add_parser('history'); h.add_argument('action', choices=['list','show','search','replay'], nargs='?', default='list'); h.add_argument('query', nargs='?')
     x = sub.add_parser('explain'); x.add_argument('request', nargs='+')
     a = sub.add_parser('audit'); a.add_argument('action', choices=['verify'], nargs='?', default='verify')
@@ -156,6 +228,8 @@ def main(argv=None):
         if args.subcommand == 'migrate':
             result = {'migration': {'schema_version': 1, 'state': 'compatible', 'message': 'No irreversible schema migration is pending.'}}
             emit(result, args.as_json); return 0
+        if args.subcommand == 'shell':
+            return shell_command(args.shell, args.action, getattr(args, 'yes', False), args.as_json)
         if args.subcommand == 'session':
             if args.action == 'list':
                 emit({'sessions': store.list_sessions()}, args.as_json); return 0

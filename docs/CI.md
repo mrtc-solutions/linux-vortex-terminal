@@ -17,3 +17,8 @@ The first push from this environment is intentionally kept free of a workflow
 file because the configured GitHub App is not permitted to create or update
 workflow files. This is an integration permission limitation, not a product
 runtime dependency.
+
+Terminal workspace assets are checked with `node --check`; PTY, key forwarding,
+ANSI sanitization, tab/split state, and shell integration ownership are covered
+by the Python test suite. Full emulator and privileged Linux acceptance still
+require dedicated host/VM jobs.

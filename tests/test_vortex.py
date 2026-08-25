@@ -11,10 +11,11 @@ import unittest
 from pathlib import Path
 
 from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
+from backend.vortex_backend import sanitize_pty
 from backend.facts import parse_apt_preflight, parse_package_facts, parse_systemd_show
 from backend.vortex_backend import (
     ExecutionManager, PolicyError, SessionManager, Store, build_plan, command_spec,
-    apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, parse_systemd_mutation, probe_executable, plan_digest, systemd_user_bus_state, target_in_engagement,
+    apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, parse_systemd_mutation, probe_executable, plan_digest, sanitize_pty, systemd_user_bus_state, target_in_engagement,
 )
 
 
@@ -44,6 +45,21 @@ class VortexCoreTests(unittest.TestCase):
         self.assertEqual(plan['commands'][0]['adapter_id'], 'linux.ssh.config')
         self.assertEqual(plan['commands'][0]['argv'], ['ssh', '-G', '--', 'labhost'])
         self.assertEqual(plan['commands'][0]['network_class'], 'no-network')
+
+    def test_pty_sanitizer_keeps_sgr_and_removes_osc(self):
+        value = sanitize_pty('\x1b[31mred\x1b[0m\x1b]0;malicious-title\x07\x1b[2K\n')
+        self.assertIn('\x1b[31m', value)
+        self.assertIn('red', value)
+        self.assertNotIn('malicious-title', value)
+        self.assertIn('\x1b[2K', value)
+
+    def test_shell_integration_is_owned_and_idempotent(self):
+        from cli.vortex import shell_block, shell_proposal
+        current = 'export TEST=1\n'
+        installed = shell_proposal('bash', current, True)
+        self.assertIn(shell_block('bash'), installed)
+        self.assertEqual(shell_proposal('bash', installed, True), installed)
+        self.assertNotIn('# >>> vortex shell integration >>>', shell_proposal('bash', installed, False))
 
     def test_planner_is_deterministic_and_read_only(self):
         plan = build_plan(self.store, "system health", self.tmp.name)

@@ -1,6 +1,6 @@
 /* Vortex renderer. In Electron all requests go through the typed preload bridge;
    the relative fetch fallback keeps the local preview useful without Electron. */
-const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, session: null, sessionSeq: 0, sessionTimer: null, matrix: 'medium', plain: false };
+const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, sessions: [], activeSessionId: null, paneIds: [], sessionSeqs: {}, sessionTimer: null, matrix: 'medium', plain: false };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 const fmtDate = (value) => { if (!value) return '—'; try { return new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(value)); } catch { return value; } };
@@ -63,8 +63,72 @@ function renderAnalysis(op) {
 async function createEngagement() { const name = $('eng-name').value.trim(), authorization = $('eng-auth').value.trim(), target = $('eng-target').value.trim(); if (!name || !authorization || !target) return toast('Name, authorization reference, and target are required.', true); try { const data = await api('/api/engagements',{method:'POST',body:{name,authorization,targets:[target],classes:['reconnaissance','defensive-analysis']}}); state.engagements.unshift(data.engagement); state.activeEngagementId = data.engagement.id; renderEngagements(); $('engagement-form').hidden=true; toast('Engagement scope created. Targets are rechecked at execution.'); } catch(e) { toast(e.message,true); } }
 async function verifyAudit() { try { const data = await api('/api/audit/verify'); const el = $('audit-result'); el.className = `audit-strip ${data.audit.valid ? 'valid':'invalid'}`; el.innerHTML = `<span class="status-dot"></span> ${data.audit.valid ? `AUDIT CHAIN VERIFIED · ${data.audit.checked} event(s)` : `AUDIT CHAIN INVALID · ${esc(data.audit.error)}`}`; } catch(e) { toast(e.message,true); } }
 function setupMatrix() { const canvas = $('matrix'), ctx = canvas.getContext('2d'); let columns = [], frame = 0; function resize(){canvas.width=innerWidth;canvas.height=innerHeight;columns=Array(Math.ceil(canvas.width/17)).fill(0).map(()=>Math.random()*-40)} function tick(){ if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; } if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 4 : 2)) !== 0) return; ctx.fillStyle='rgba(10,10,12,.09)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.font='12px monospace';ctx.fillStyle='rgba(0,212,170,.54)';columns.forEach((y,i)=>{ctx.fillText(Math.random()>.5?'1':'0',i*17,y*17);if(y*17>canvas.height && Math.random()>.975)columns[i]=0;columns[i]++});} resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
+function activeSession() { return state.sessions.find(session => session.id === state.activeSessionId) || null; }
+function sessionOutput(sessionId) { return Array.from(document.querySelectorAll('[data-session-output]')).find(element => element.dataset.sessionOutput === sessionId) || null; }
+function appendAnsiText(element, text, ansi) {
+  if (!text) return;
+  const span = document.createElement('span');
+  span.className = ansi.bold ? 'ansi-bold' : '';
+  if (ansi.color) span.style.color = ansi.color;
+  span.textContent = text;
+  element.appendChild(span);
+}
+function appendAnsi(element, data) {
+  const ansi = element._ansiState || {bold:false,color:null};
+  // Only SGR is rendered. Cursor/erase/unknown CSI sequences are discarded;
+  // OSC and other unsafe controls were already removed by the sidecar.
+  const token = /\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[\x20-\x2f]*[@-~]/g;
+  let cursor = 0; let match;
+  while ((match = token.exec(data))) {
+    appendAnsiText(element, data.slice(cursor, match.index), ansi);
+    if (match[0].endsWith('m')) {
+      const codes = match[1] ? match[1].split(';').map(Number) : [0];
+      for (let i = 0; i < codes.length; i++) {
+        const code = codes[i];
+        if (code === 0) { ansi.bold = false; ansi.color = null; }
+        else if (code === 1) ansi.bold = true;
+        else if (code === 22) ansi.bold = false;
+        else if (code === 39) ansi.color = null;
+        else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) ansi.color = ['#101015','#cc5555','#23a049','#e6a817','#5f8cff','#9b8cff','#00d4aa','#f0f0f4'][code >= 90 ? code - 90 : code - 30];
+        else if (code === 38 && codes[i + 1] === 5 && Number.isInteger(codes[i + 2])) { ansi.color = ['#101015','#cc0000','#23a049','#e6a817','#5f8cff','#9b8cff','#00d4aa','#f0f0f4','#5d5f70','#ef7777','#58d47b','#f0c94d','#86a6ff','#c0b8ff','#42e8c4','#ffffff'][codes[i + 2] % 16]; i += 2; }
+      }
+    }
+    cursor = token.lastIndex;
+  }
+  appendAnsiText(element, data.slice(cursor), ansi);
+  element._ansiState = ansi;
+  element.scrollTop = element.scrollHeight;
+}
+function ensureSessionPane(sessionId) {
+  const host = $('terminal-panes');
+  let output = sessionOutput(sessionId);
+  if (output) return output;
+  const old = $('terminal-output');
+  if (old && !old.dataset.sessionOutput && old.parentElement === host) host.innerHTML = '';
+  output = document.createElement('pre');
+  output.className = 'terminal-body'; output.dataset.sessionOutput = sessionId;
+  output.setAttribute('role', 'log'); output.setAttribute('aria-live', 'polite');
+  output.textContent = `[PTY ${sessionId.slice(0, 8)}] attaching…\n`;
+  host.appendChild(output);
+  return output;
+}
+function renderSessionTabs() {
+  const host = $('terminal-tabs');
+  const controls = '<button class="terminal-button" id="new-session">＋ NEW</button><button class="terminal-button" id="split-session">SPLIT VIEW</button>';
+  host.innerHTML = state.sessions.length ? state.sessions.map((session, index) => `<button class="terminal-tab-button ${session.id === state.activeSessionId ? 'active':''}" data-session-tab="${esc(session.id)}"><span class="tab-led ${session.status === 'running' ? 'live':''}"></span>${esc(session.name || `session ${index + 1}`)} <small>${esc(session.status)}</small></button>`).join('') + controls : `<span class="tab-empty">NO PTY SESSIONS</span>${controls}`;
+  host.querySelectorAll('[data-session-tab]').forEach(button => button.addEventListener('click', () => selectSession(button.dataset.sessionTab)));
+  $('new-session')?.addEventListener('click', openSession);
+  $('split-session')?.addEventListener('click', splitSession);
+}
+function renderSessionPanes() {
+  const host = $('terminal-panes');
+  if (!state.sessions.length) { host.style.gridTemplateColumns = '1fr'; return; }
+  state.paneIds.forEach(ensureSessionPane);
+  Array.from(host.querySelectorAll('[data-session-output]')).forEach(output => { output.hidden = !state.paneIds.includes(output.dataset.sessionOutput); });
+  host.style.gridTemplateColumns = state.paneIds.length > 1 ? 'repeat(2,minmax(0,1fr))' : '1fr';
+}
 function renderSessionState() {
-  const session = state.session;
+  const session = activeSession();
   const running = session?.status === 'running';
   $('session-status').textContent = session ? statusLabel(session.status) : 'NO PTY SESSION';
   $('session-status').className = `session-status ${running ? 'live' : session ? 'ended' : ''}`;
@@ -73,64 +137,83 @@ function renderSessionState() {
   $('terminal-input').disabled = !running;
   $('terminal-input').placeholder = running ? 'Type into the active local PTY…' : 'Open a shell to type into the real PTY…';
   $('terminal-hint').textContent = running ? 'ENTER TO SEND · CTRL-C INTERRUPTS' : 'OPEN SESSION FIRST';
+  $('terminal-cwd').textContent = session?.cwd || state.doctor?.cwd || '—';
 }
-function appendTerminal(data) {
-  if (!data) return;
-  const output = $('terminal-output');
-  output.textContent += data;
-  output.scrollTop = output.scrollHeight;
+function selectSession(sessionId) {
+  if (!state.sessions.some(session => session.id === sessionId)) return;
+  state.activeSessionId = sessionId; state.session = activeSession();
+  if (!state.paneIds.includes(sessionId)) { if (state.paneIds.length >= 2) state.paneIds.shift(); state.paneIds.push(sessionId); }
+  renderSessionTabs(); renderSessionPanes(); renderSessionState();
+  if (activeSession()?.status === 'running') pollSessions();
 }
 async function loadSessions() {
   try {
     const data = await api('/api/sessions');
-    if (!state.session) {
-      const running = data.sessions.find(s => s.status === 'running');
-      if (running) { state.session = running; state.sessionSeq = 0; $('terminal-output').textContent = ''; }
-    }
-    renderSessionState();
-    if (state.session?.status === 'running') pollSession();
+    state.sessions = data.sessions || [];
+    if (!state.activeSessionId || !state.sessions.some(session => session.id === state.activeSessionId)) state.activeSessionId = state.sessions.find(session => session.status === 'running')?.id || state.sessions[0]?.id || null;
+    state.session = activeSession();
+    if (state.activeSessionId && !state.paneIds.includes(state.activeSessionId)) state.paneIds = [state.activeSessionId];
+    renderSessionTabs(); renderSessionPanes(); renderSessionState();
+    if (state.sessions.some(session => session.status === 'running')) pollSessions();
   } catch (e) { toast(e.message, true); }
 }
-async function pollSession() {
-  if (state.sessionTimer || !state.session) return;
+async function pollSessions() {
+  if (state.sessionTimer) return;
   const tick = async () => {
     state.sessionTimer = null;
-    if (!state.session) return;
-    try {
-      const data = await api(`/api/sessions/${encodeURIComponent(state.session.id)}/events?since=${state.sessionSeq}`);
-      (data.events || []).forEach(event => { appendTerminal(event.data); state.sessionSeq = Math.max(state.sessionSeq, event.seq); });
-      if (data.session) state.session = data.session;
-      renderSessionState();
-      if (state.session?.status === 'running') state.sessionTimer = setTimeout(tick, 220);
-    } catch (e) { toast(e.message, true); }
+    const running = state.sessions.filter(session => session.status === 'running');
+    for (const session of running) {
+      try {
+        const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/events?since=${state.sessionSeqs[session.id] || 0}`);
+        const output = ensureSessionPane(session.id);
+        (data.events || []).forEach(event => { appendAnsi(output, event.data); state.sessionSeqs[session.id] = Math.max(state.sessionSeqs[session.id] || 0, event.seq); });
+        const index = state.sessions.findIndex(item => item.id === session.id);
+        if (index >= 0 && data.session) state.sessions[index] = data.session;
+      } catch (e) { toast(e.message, true); }
+    }
+    state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();
+    if (state.sessions.some(session => session.status === 'running')) state.sessionTimer = setTimeout(tick, 220);
   };
   await tick();
 }
 async function openSession() {
   $('open-session').disabled = true;
   try {
-    const data = await api('/api/sessions', {method:'POST', body:{name:'local shell', cwd:state.doctor?.cwd || undefined, cols:100, rows:30}});
-    state.session = data.session; state.sessionSeq = 0; $('terminal-output').textContent = '';
-    renderSessionState(); pollSession(); $('terminal-input').focus();
+    const data = await api('/api/sessions', {method:'POST', body:{name:`local shell ${state.sessions.length + 1}`, cwd:state.doctor?.cwd || undefined, cols:100, rows:30}});
+    state.sessions.push(data.session); state.activeSessionId = data.session.id; state.session = data.session; state.sessionSeqs[data.session.id] = 0;
+    if (state.paneIds.length >= 2) state.paneIds.shift(); state.paneIds.push(data.session.id);
+    renderSessionTabs(); renderSessionPanes(); renderSessionState(); pollSessions(); $('terminal-input').focus();
     toast('Real local PTY opened. Input stays inside the Python sidecar.');
   } catch (e) { toast(e.message, true); }
   finally { $('open-session').disabled = false; renderSessionState(); }
 }
+async function splitSession() {
+  if (!state.sessions.length) return openSession();
+  if (state.paneIds.length < 2) {
+    const next = state.sessions.find(session => session.id !== state.activeSessionId && session.status === 'running');
+    if (next) { state.paneIds.push(next.id); selectSession(next.id); return; }
+    return openSession();
+  }
+  toast('Split view already has two panes.');
+}
 async function writeSession(data) {
-  if (!state.session || state.session.status !== 'running') return toast('Open a local PTY session first.', true);
-  try { await api(`/api/sessions/${encodeURIComponent(state.session.id)}/input`, {method:'POST', body:{data}}); }
+  const session = activeSession();
+  if (!session || session.status !== 'running') return toast('Open a local PTY session first.', true);
+  try { await api(`/api/sessions/${encodeURIComponent(session.id)}/input`, {method:'POST', body:{data}}); }
   catch (e) { toast(e.message, true); }
 }
 async function killSession() {
-  if (!state.session) return;
-  try { await api(`/api/sessions/${encodeURIComponent(state.session.id)}/kill`, {method:'POST', body:{}}); toast('PTY group cancellation requested.'); }
+  const session = activeSession();
+  if (!session) return;
+  try { await api(`/api/sessions/${encodeURIComponent(session.id)}/kill`, {method:'POST', body:{}}); toast('PTY group cancellation requested.'); }
   catch (e) { toast(e.message, true); }
 }
 async function resizeSession() {
-  if (!state.session || state.session.status !== 'running') return;
-  try { await api(`/api/sessions/${encodeURIComponent(state.session.id)}/resize`, {method:'POST', body:{cols:Math.max(40, Math.min(220, Math.floor(innerWidth / 8))), rows:30}}); }
+  const session = activeSession();
+  if (!session || session.status !== 'running') return;
+  try { await api(`/api/sessions/${encodeURIComponent(session.id)}/resize`, {method:'POST', body:{cols:Math.max(40, Math.min(220, Math.floor(innerWidth / 8))), rows:30}}); }
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
-function init() { setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown',e=>{if(e.ctrlKey && e.key.toLowerCase()==='c'){e.preventDefault();writeSession('\u0003');return;} if(e.key==='Enter'){e.preventDefault();const value=e.target.value;e.target.value='';writeSession(value+'\n'); }}); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function init() { setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown',e=>{if(e.ctrlKey && !e.altKey && e.key.length===1){e.preventDefault();writeSession(String.fromCharCode(e.key.toLowerCase().charCodeAt(0)-96));return;} const keys={Enter:'\n',Backspace:'\x7f',Tab:'\t',ArrowUp:'\x1b[A',ArrowDown:'\x1b[B',ArrowRight:'\x1b[C',ArrowLeft:'\x1b[D',Home:'\x1b[H',End:'\x1b[F',Delete:'\x1b[3~'}; if(keys[e.key]){e.preventDefault();writeSession(keys[e.key]);} else if(e.key.length===1 && !e.metaKey && !e.altKey){e.preventDefault();writeSession(e.key);} }); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);

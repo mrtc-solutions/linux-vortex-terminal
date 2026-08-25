@@ -141,6 +141,48 @@ def redact(text: str) -> str:
     return REDACTION_RE.sub(lambda m: m.group(1) + "[REDACTED]", text)
 
 
+def sanitize_pty(text: str) -> str:
+    """Preserve only harmless terminal CSI controls for the local PTY renderer.
+
+    SGR/cursor/erase controls are kept for terminal presentation; OSC, device
+    control strings, and unknown escapes are removed so PTY output cannot set a
+    title, open a hyperlink, copy clipboard data, or inject terminal commands.
+    """
+    allowed_finals = set("mABCDEFGHfJKsuUlG@`")
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char != "\x1b":
+            if char in "\n\r\t\b" or ord(char) >= 0x20:
+                out.append(char)
+            i += 1
+            continue
+        if i + 1 >= len(text):
+            break
+        kind = text[i + 1]
+        if kind == "[":
+            end = i + 2
+            while end < len(text) and not ("@" <= text[end] <= "~"):
+                end += 1
+            if end < len(text) and text[end] in allowed_finals:
+                out.append(text[i:end + 1])
+            i = end + 1
+        elif kind == "]":
+            # OSC ends at BEL or ST; neither payload nor terminator is kept.
+            end = i + 2
+            while end < len(text):
+                if text[end] == "\x07":
+                    end += 1; break
+                if text[end] == "\x1b" and end + 1 < len(text) and text[end + 1] == "\\":
+                    end += 2; break
+                end += 1
+            i = end
+        else:
+            i += 2
+    return BIDI_RE.sub("[BIDI]", REDACTION_RE.sub(lambda m: m.group(1) + "[REDACTED]", "".join(out))).replace("\x00", "")
+
+
 def safe_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
@@ -741,7 +783,7 @@ class SessionManager:
             pass
 
     def _append_event(self, session_id: str, text: str, stream: str = "pty") -> None:
-        text = redact(sanitize(text))
+        text = sanitize_pty(text)
         if not text:
             return
         with self.lock:
