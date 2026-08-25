@@ -12,7 +12,7 @@ from pathlib import Path
 from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
 from backend.vortex_backend import (
     ExecutionManager, PolicyError, SessionManager, Store, build_plan, command_spec,
-    digest, make_analysis, normalize_target, now_iso, probe_executable, plan_digest, target_in_engagement,
+    apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, probe_executable, plan_digest, target_in_engagement,
 )
 
 
@@ -203,6 +203,30 @@ class VortexCoreTests(unittest.TestCase):
             self.assertEqual(result["termination_reason"], "cancelled")
         finally:
             sessions.shutdown()
+
+    def test_apt_plan_is_simulated_before_root_mutation(self):
+        if not apt_tools_ready()[0]:
+            self.skipTest('apt/dpkg unavailable')
+        plan = build_plan(self.store, 'install package git', self.tmp.name)
+        self.assertEqual(plan['status'], 'planned')
+        self.assertEqual(plan['commands'][-2]['argv'][:4], ['apt-get', '-s', '--no-remove', 'install'])
+        self.assertEqual(plan['commands'][-1]['privilege'], 'root-required')
+        self.assertNotIn('--allow-unauthenticated', json.dumps(plan))
+        self.assertEqual(parse_package_request('install git; touch /tmp/pwned'), ('', None))
+        if os.getuid() != 0:
+            with self.assertRaises(PermissionError):
+                ExecutionManager(self.store).start(plan, True, plan['approval_token'])
+
+    def test_systemd_mutation_is_guarded_and_unit_typed(self):
+        plan = build_plan(self.store, 'restart nginx', self.tmp.name)
+        if plan['status'] == 'planned':
+            self.assertEqual(plan['commands'][0]['adapter_id'], 'linux.systemd.mutate')
+            self.assertEqual(plan['commands'][1]['argv'][-1], 'nginx.service')
+            self.assertEqual(plan['commands'][1]['privilege'], 'root-required')
+        else:
+            self.assertEqual(plan['commands'], [])
+        with self.assertRaises(Exception):
+            build_plan(self.store, 'restart ../../evil; echo unsafe', self.tmp.name)
 
     def test_nmap_artifact_parser_reports_only_observed_ports(self):
         data = b'''<?xml version="1.0"?><nmaprun scanner="nmap" args="nmap -sV lab.example.test"><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="lab.example.test"/></hostnames><ports><port protocol="tcp" portid="443"><state state="open"/><service name="https" product="Example" version="1.2"/></port></ports></host></nmaprun>'''

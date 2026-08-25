@@ -456,3 +456,26 @@ POST /api/artifacts/analyze {"path":"./scan.xml","kind":"auto"}
 The remaining evidence work is parser confidence/error taxonomy expansion,
 namespace/format coverage, DNS/redirect provenance, signed artifact packages,
 and parser fuzzing in disposable Ubuntu CI.
+
+### Priority 3 — guarded apt and systemd operations
+
+**Started and implemented in the current iteration.** The adapter registry now
+includes typed package-operation plans for apt install/remove/upgrade and typed
+systemd start/stop/restart/enable/disable plans. Package plans validate package
+names, probe apt/dpkg tools, inspect lock availability, check dpkg state, show
+candidate/source/package facts, run a fresh `apt-get -s` simulation immediately
+before the mutation, and require a root-only final command. Systemd plans validate
+unit names, probe systemd availability, show fresh unit state immediately before
+the action, and mark persistent enable/disable changes. Forbidden repository
+trust bypasses, PPAs, arbitrary debs, daemon reloads, masking, vacuum, and default
+-target changes remain excluded.
+
+Vortex never invokes sudo or captures passwords. Normal users receive a rerun
+instruction such as `sudo vortex --allow-root run <plan-id>`; the native PTY and
+explicit operator-direct path retain full Linux capability. Tests use planning
+and policy checks only; no shared-host apt or service mutation is run.
+
+Remaining Priority 3 work is apt simulation parsing for package/removal counts,
+held/reboot/incomplete-state reporting, lock behavior on Ubuntu 24.04, systemd
+user-bus semantics, fresh privileged disposable-VM install/remove and service
+acceptance tests, and rollback/recovery metadata.

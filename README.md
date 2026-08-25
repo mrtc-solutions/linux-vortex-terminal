@@ -23,7 +23,10 @@ current vertical slice.
 ./vortex --help
 ./vortex doctor --json
 ./vortex tools
+./vortex adapters --json
+./vortex artifact inspect ./scan.xml --type nmap-xml
 ./vortex plan "system health"
+vortex plan "install package ripgrep" # simulation + root-required plan; no auto-sudo
 ./vortex "git status"
 
 # Optional desktop preview (same local sidecar; binds 0.0.0.0 for a dev preview)
@@ -57,8 +60,9 @@ VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
 | Matrix binary rain and project-owned artwork | Implemented + accessible fallback |
 | Full PTY tabs/panes and shell integration | Planned |
 | Scoped nmap/curl planning and evidence parsers | Implemented + tested; tool availability varies |
+| Apt simulation and guarded package-operation plans | Implemented + tested; Ubuntu VM mutation gate remains |
+| Systemd inspection and guarded mutation plans | Implemented + tested; host context varies |
 | Nuclei/content-discovery active adapters | Planned; reviewed templates/wordlists required |
-| apt/systemd mutation adapters | Planned; read-only plans are available |
 | Local model / specialist worker bus | Planned; provider disabled by default |
 | Signed knowledge packages and `.deb` release | Planned |
 | Cloud API, remote control, attack automation, telemetry | Explicitly unsupported |

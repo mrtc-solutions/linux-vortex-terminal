@@ -15,6 +15,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import pwd
 import pty
 import queue
 import re
@@ -88,6 +89,9 @@ TOOL_CATALOG: dict[str, dict[str, Any]] = {
     "nikto": {"family": "authorized-assessment", "probe": ["-Version"], "role": "web server assessment"},
     "amass": {"family": "passive-osint", "probe": ["-version"], "role": "passive domain discovery"},
     "ssh": {"family": "ssh-diagnostics", "probe": ["-V"], "role": "connection diagnostics"},
+    "apt-get": {"family": "packages", "probe": ["--version"], "role": "package planning and mutation"},
+    "apt-cache": {"family": "packages", "probe": ["--version"], "role": "package metadata"},
+    "dpkg-query": {"family": "packages", "probe": ["--version"], "role": "installed package facts"},
 }
 
 
@@ -97,6 +101,8 @@ ADAPTER_MANIFESTS: dict[str, dict[str, Any]] = {
     "linux.network.sockets": {"version": "1", "family": "network", "tool": "ss", "risk": "low", "network_class": "no-network", "operation": "read-only local socket facts", "limits": {"timeout_seconds": 30}},
     "linux.development.git-status": {"version": "1", "family": "development", "tool": "git", "risk": "low", "network_class": "no-network", "operation": "read-only repository facts", "limits": {"timeout_seconds": 30}},
     "linux.systemd.inspect": {"version": "1", "family": "systemd", "tool": "systemctl+journalctl", "risk": "low", "network_class": "no-network", "operation": "read-only unit and journal facts", "limits": {"journal_lines": 80, "timeout_seconds": 30}},
+    "linux.systemd.mutate": {"version": "1", "family": "systemd", "tool": "systemctl", "risk": "high", "network_class": "no-network", "operation": "guarded service mutation", "privilege": "root-required", "limits": {"timeout_seconds": 60}},
+    "linux.packages.apt": {"version": "1", "family": "packages", "tool": "apt-get+apt-cache+dpkg-query", "risk": "high", "network_class": "outbound-mutation", "operation": "guarded apt package operation", "privilege": "root-required", "limits": {"timeout_seconds": 900}},
     "security.nmap.discovery": {"version": "1", "family": "authorized-reconnaissance", "tool": "nmap", "risk": "high", "network_class": "outbound-read", "operation": "scoped service discovery", "limits": {"max_cidr_hosts": 256, "max_ports": 32, "timing": "T2", "timeout_seconds": 120}},
     "security.http.headers": {"version": "1", "family": "authorized-http", "tool": "curl", "risk": "high", "network_class": "outbound-read", "operation": "bounded HTTP/TLS header discovery", "limits": {"max_time_seconds": 15, "max_redirects": 0}},
 }
@@ -138,7 +144,16 @@ def xdg_dir(env_name: str, fallback: Path) -> Path:
 
 def data_root() -> Path:
     override = os.environ.get("VORTEX_DATA_DIR")
-    root = Path(override).expanduser() if override else xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share") / "vortex"
+    if override:
+        root = Path(override).expanduser()
+    elif os.getuid() == 0 and os.environ.get("SUDO_USER"):
+        try:
+            invoking_user = pwd.getpwnam(os.environ["SUDO_USER"])
+            root = Path(os.environ.get("XDG_DATA_HOME", Path(invoking_user.pw_dir) / ".local" / "share")).expanduser() / "vortex"
+        except KeyError:
+            root = xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share") / "vortex"
+    else:
+        root = xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share") / "vortex"
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         root.chmod(0o700)
@@ -914,6 +929,7 @@ def command_spec(executable: str, argv: list[str], cwd: Path, *, risk: str = "lo
         "output_cap_bytes": 512 * 1024,
         "risk": risk,
         "network_class": network,
+        "privilege": "user",
         "required_tool": required or executable,
         "tool_state_at_plan": state,
         "executable_identity": identity,
@@ -923,18 +939,84 @@ def command_spec(executable: str, argv: list[str], cwd: Path, *, risk: str = "lo
     }
 
 
-def adapter_command(adapter_id: str, executable: str, argv: list[str], cwd: Path, *, required: str | None = None, scope: list[str] | None = None, explanation: str = "", timeout: int | None = None) -> dict[str, Any]:
+def adapter_command(adapter_id: str, executable: str, argv: list[str], cwd: Path, *, required: str | None = None, scope: list[str] | None = None, explanation: str = "", timeout: int | None = None, privilege: str | None = None) -> dict[str, Any]:
     manifest = ADAPTER_MANIFESTS[adapter_id]
     spec = command_spec(executable, argv, cwd, risk=manifest["risk"], network=manifest["network_class"], required=required or executable, scope=scope, explanation=explanation, timeout=timeout or int(manifest["limits"].get("timeout_seconds", 30)))
     spec["adapter_id"] = adapter_id
     spec["adapter_version"] = manifest["version"]
     spec["adapter_limits"] = manifest["limits"]
+    spec["privilege"] = privilege or manifest.get("privilege", "user")
     return spec
+
+
+def parse_package_request(text: str) -> tuple[str, str | None]:
+    lower = text.lower()
+    if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
+        return "", None
+    if re.search(r"\b(?:do not|don't|never)\s+(?:install|remove|upgrade)\b", lower):
+        return "", None
+    operation = next((item for item in ("install", "remove", "upgrade") if re.search(rf"\b{item}\b", lower)), None)
+    if not operation:
+        return "", None
+    if operation == "upgrade":
+        return operation, None
+    match = re.search(rf"\b{operation}\s+(?:packages?\s+)?([a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?)\b", lower)
+    package = match.group(1) if match else None
+    if package and not PACKAGE_RE.fullmatch(package):
+        raise PolicyError("invalid apt package name")
+    return operation, package
+
+
+def apt_lock_state() -> dict[str, Any]:
+    locks = ("/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock", "/var/cache/apt/archives/lock")
+    result: dict[str, str] = {}
+    for raw_path in locks:
+        path = Path(raw_path)
+        if not path.exists():
+            result[raw_path] = "absent"
+            continue
+        try:
+            fd = os.open(str(path), os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                result[raw_path] = "available"
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+        except BlockingIOError:
+            result[raw_path] = "held"
+        except OSError:
+            result[raw_path] = "unknown"
+    return {"locks": result, "blocked": any(value == "held" for value in result.values()), "unknown": any(value == "unknown" for value in result.values())}
+
+
+def apt_tools_ready() -> tuple[bool, list[str]]:
+    required = ["apt-get", "apt-cache", "dpkg-query"]
+    missing = [tool for tool in required if probe_executable(tool)["state"] != "installed"]
+    return not missing, missing
 
 
 def parse_service(text: str) -> str | None:
     match = re.search(r"(?:service|unit)\s+([A-Za-z0-9][A-Za-z0-9_.@:-]*\.service)", text, re.I)
     return match.group(1) if match else None
+
+
+def parse_systemd_mutation(text: str) -> tuple[str, str] | None:
+    if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
+        raise PolicyError("systemd request contains unsafe shell syntax")
+    match = re.search(r"\b(restart|start|stop|enable|disable)\s+([^\s,;|&`$()<>]+)", text, re.I)
+    if not match:
+        return None
+    action, raw_unit = match.group(1).lower(), match.group(2)
+    if raw_unit.endswith(".service"):
+        unit = raw_unit
+    elif re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@:-]*", raw_unit):
+        unit = raw_unit + ".service"
+    else:
+        raise PolicyError("invalid systemd unit name; path-like units are not allowed")
+    if not UNIT_RE.fullmatch(unit):
+        raise PolicyError("invalid systemd unit name")
+    return action, unit
 
 
 def plan_digest(plan: dict[str, Any]) -> str:
@@ -977,6 +1059,57 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             notes.append(f"{argv[0]} would be invoked with {len(argv) - 1} argument(s). No command will be executed by ask or plan.")
         status = "clarified"
+    elif parse_package_request(lower)[0]:
+        package_operation, package_name = parse_package_request(lower)
+        kind = "package_operation"
+        risk = "high"
+        authorization = "privileged package operation"
+        ready, apt_missing = apt_tools_ready()
+        locks = apt_lock_state()
+        if not ready:
+            status = "unavailable"
+            missing.extend(apt_missing)
+            notes.append("Required apt/dpkg executables are unavailable; no package command was created.")
+        elif locks["blocked"]:
+            status = "unavailable"
+            notes.append("An apt/dpkg lock is currently held; no package command was created.")
+            notes.append(json.dumps(locks, sort_keys=True))
+        elif package_operation in ("install", "remove") and not package_name:
+            status = "clarified"
+            notes.append(f"Tell Vortex the exact package to {package_operation}; package names are parsed, not concatenated shell text.")
+        else:
+            specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "--audit"], cwd, required="dpkg-query", explanation="Check for incomplete dpkg state before any package operation.", privilege="user"))
+            if package_name:
+                specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "policy", package_name], cwd, required="apt-cache", explanation=f"Show the installed/candidate version, architecture, and repository policy for {package_name}.", privilege="user"))
+                specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "show", package_name], cwd, required="apt-cache", explanation=f"Show package metadata and declared dependencies for {package_name}.", privilege="user"))
+                specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}.", privilege="user"))
+            if package_operation == "install":
+                simulation = ["apt-get", "-s", "--no-remove", "install", package_name]
+                mutation = ["apt-get", "--assume-yes", "--no-remove", "install", package_name]
+            elif package_operation == "remove":
+                simulation = ["apt-get", "-s", "remove", package_name]
+                mutation = ["apt-get", "--assume-yes", "remove", package_name]
+            else:
+                simulation = ["apt-get", "-s", "--no-remove", "upgrade"]
+                mutation = ["apt-get", "--assume-yes", "--no-remove", "upgrade"]
+            specs.append(adapter_command("linux.packages.apt", "apt-get", simulation, cwd, required="apt-get", explanation="Run a fresh apt simulation immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
+            specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding simulation and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
+            status = "planned"
+            notes += ["Package source, candidate/installed version, dependency impact, held state, and simulation output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
+    elif parse_systemd_mutation(lower):
+        action, unit = parse_systemd_mutation(lower) or ("", "")
+        kind = "systemd_mutation"
+        risk = "high"
+        authorization = "privileged service operation"
+        if not detect_context()["systemd"] or probe_executable("systemctl")["state"] != "installed":
+            status = "unavailable"
+            missing.append("systemd")
+            notes.append("Systemd is not usable in this context; no service mutation was created.")
+        else:
+            specs.append(adapter_command("linux.systemd.mutate", "systemctl", ["systemctl", "show", unit, "--property=Id,Description,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Freshly verify the description, active state, and persistence state of {unit} before mutation.", privilege="user"))
+            specs.append(adapter_command("linux.systemd.mutate", "systemctl", ["systemctl", "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {action} operation on {unit}; no user bus or sudo escalation is inferred.", privilege="root-required"))
+            status = "planned"
+            notes += [f"Fresh systemd state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
     elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "curl", "http headers", "web application", "enumerate the web", "scan ")):
         kind = "authorized_engagement"
         risk = "high"
@@ -1142,6 +1275,8 @@ class ExecutionManager:
             raise PolicyError("plan is not executable in its current state")
         if offline and any(spec.get("network_class") != "no-network" for spec in plan.get("commands", [])):
             raise PolicyError("offline mode blocks this network-effecting plan")
+        if any(spec.get("privilege") == "root-required" for spec in plan.get("commands", [])) and os.getuid() != 0:
+            raise PermissionError("this plan requires root; rerun the reviewed plan with sudo vortex --allow-root run <plan-id>")
         if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
             raise TimeoutError("plan expired")
         if plan.get("engagement_id"):
