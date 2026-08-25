@@ -34,7 +34,7 @@
 
 ```text
 python3 -m py_compile backend/vortex_backend.py cli/vortex.py
-python3 -m unittest discover -s tests -v  # 13 tests
+python3 -m unittest discover -s tests -v  # 14 tests
 ./vortex doctor --json
 ./vortex plan "system health"
 ./vortex run --yes -- /bin/echo hello
