@@ -13,6 +13,7 @@ from pathlib import Path
 from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
 from backend.vortex_backend import sanitize_pty
 from backend.facts import parse_apt_preflight, parse_package_facts, parse_systemd_show
+from backend.network import resolve_target, resolve_targets, resolution_digest
 from backend.vortex_backend import (
     ExecutionManager, PolicyError, SessionManager, Store, build_plan, command_spec,
     apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, parse_systemd_mutation, probe_executable, plan_digest, sanitize_pty, systemd_user_bus_state, target_in_engagement,
@@ -409,6 +410,8 @@ The following packages will be upgraded:
         self.assertIn('[REDACTED]', serialized)
         self.assertNotIn('super-secret', serialized)
         self.assertTrue(any(h['name'] == 'location' for h in artifact['headers']))
+        self.assertTrue(artifact['redirect_requires_new_scope_check'])
+        self.assertEqual(artifact['redirects'][0], 'https://example.test/next')
 
     def test_real_http_adapter_persists_parsed_evidence(self):
         import shutil
@@ -448,6 +451,57 @@ The following packages will be upgraded:
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_dns_facts_are_real_and_digestable(self):
+        fact = resolve_target('localhost')
+        self.assertIn(fact['state'], ('observed', 'tool_error'))
+        if fact['state'] == 'observed':
+            self.assertTrue(fact['addresses'])
+        facts = resolve_targets(['127.0.0.1'])
+        self.assertEqual(facts['state'], 'observed')
+        self.assertEqual(resolution_digest(facts), resolution_digest(facts))
+
+    def test_dns_change_invalidates_active_plan_before_connection(self):
+        import backend.vortex_backend as backend_module
+        if not shutil.which('curl'):
+            self.skipTest('curl unavailable')
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200); self.end_headers()
+            def log_message(self, *_args): pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            target = f'http://127.0.0.1:{server.server_port}/'
+            engagement = {'id':'dns-eng','created_at':now_iso(),'expires_at':'2099-08-25T00:00:00+00:00','name':'dns test','authorization':'test','targets':[target],'classes':['reconnaissance'],'status':'active'}
+            self.store.create_engagement(engagement)
+            plan = build_plan(self.store, f'curl {target}', self.tmp.name, engagement['id'])
+            self.assertEqual(plan['status'], 'planned')
+            changed = {'state':'observed','targets':[{'target':target,'host':'127.0.0.1','port':server.server_port,'state':'observed','addresses':['192.0.2.99']}]}
+            with patch.object(backend_module, 'resolve_targets', return_value=changed):
+                with self.assertRaises(PolicyError):
+                    ExecutionManager(self.store).start(plan, True, plan['approval_token'])
+        finally:
+            server.shutdown(); server.server_close()
+
+    def test_container_log_request_is_bounded_or_truthfully_unavailable(self):
+        plan = build_plan(self.store, 'show logs for container web', self.tmp.name)
+        if plan['status'] == 'planned':
+            command = plan['commands'][0]
+            self.assertEqual(command['adapter_id'], 'linux.containers.logs')
+            self.assertEqual(command['argv'][-1], 'web')
+            self.assertEqual(command['argv'][command['argv'].index('--tail') + 1], '200')
+        else:
+            self.assertEqual(plan['commands'], [])
+
+    def test_active_ssh_requires_scope_and_offline_blocks_connection(self):
+        plan = build_plan(self.store, 'test ssh connection to labhost', self.tmp.name)
+        self.assertEqual(plan['kind'], 'ssh_diagnostics')
+        self.assertEqual(plan['commands'], [])
+        self.assertIn(plan['status'], ('clarified', 'unavailable', 'rejected'))
+        offline = build_plan(self.store, 'test ssh connection to labhost', self.tmp.name, offline=True)
+        self.assertEqual(offline['commands'], [])
+        self.assertEqual(offline['status'], 'unavailable')
 
     def test_analysis_does_not_invent_findings(self):
         op = {"status": "succeeded", "commands": [], "workers": []}

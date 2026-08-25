@@ -169,14 +169,17 @@ def parse_http_headers(text: str, source: dict[str, Any]) -> dict[str, Any]:
             continue
         name, value = line.split(":", 1)
         if name.strip(): headers.append({"name": name.strip().lower(), "value": value.strip()[:2048]})
+    redirects = [header["value"] for header in headers if header["name"] == "location"]
     base.update({
         "state": "observed",
         "status_code": int(match.group(1)),
         "reason": match.group(2) or "",
         "headers": headers[:200],
+        "redirects": redirects[:10],
+        "redirect_requires_new_scope_check": bool(redirects),
         "observations": [{"type": "http_header", **header, "evidence_ref": "curl.response.headers"} for header in headers[:200]],
         "summary": f"Observed HTTP status {match.group(1)} with {len(headers)} response header(s).",
-        "limitations": ["Headers are observations, not proof of a vulnerability or secure configuration.", "Redirects and DNS destinations require separate scope revalidation."],
+        "limitations": ["Headers are observations, not proof of a vulnerability or secure configuration.", "Redirect destinations are reported but never followed automatically; a new scope check is required."],
     })
     return base
 

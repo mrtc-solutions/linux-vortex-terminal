@@ -67,7 +67,11 @@ VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
 | Real apt preflight, impact parsing, and guarded package plans | Implemented + tested; Linux VM mutation gate remains |
 | Systemd state parsing, user-bus detection, and guarded plans | Implemented + tested; host context varies |
 | Docker/Podman read-only container inspection | Implemented + tested; runtime availability varies |
+| Bounded Docker/Podman container log inspection | Implemented + tested; runtime availability varies |
 | SSH effective-config diagnostics | Implemented + tested; no connection or key read |
+| Scoped SSH connectivity diagnostics | Implemented + tested; engagement required |
+| DNS resolution revalidation for active plans | Implemented + tested |
+| Redirect observation without automatic follow | Implemented + tested |
 | Nuclei/content-discovery active adapters | Planned; reviewed templates/wordlists required |
 | Local model / specialist worker bus | Planned; provider disabled by default |
 | Signed knowledge packages and `.deb` release | Planned |

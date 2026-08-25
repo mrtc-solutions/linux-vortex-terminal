@@ -47,19 +47,24 @@
 - Added real read-only Docker/Podman runtime detection and SSH effective-config
   diagnostics. Missing runtimes produce no fabricated container state; SSH
   diagnostics use `ssh -G` only and never connect or read private keys.
+- Added bounded Docker/Podman log collection, scoped SSH connectivity checks
+  using BatchMode and strict host-key verification, and DNS resolution facts
+  compared again at execution so changed targets invalidate a plan. HTTP
+  redirects are observed but never followed automatically.
 - Added tests for planner honesty, shell metacharacters, target injection, missing
   tools, scope denial, audit tamper detection, real exit status, redaction,
   output caps, cancellation, offline mode, URL/port scope, plan tampering, and
   exact approval-token enforcement, Nmap XML/HTTP parsing, malformed artifact
   handling, artifact size/symlink boundaries, guarded apt/systemd plan
-  construction, apt/systemd output-fact parsing, container absence, SSH config,
+  construction, apt/systemd output-fact parsing, container absence, bounded
+  container logs, SSH config/connectivity, DNS revalidation, redirect reporting,
   and systemd user-bus detection.
 
 ## Commands run
 
 ```text
 python3 -m py_compile backend/vortex_backend.py cli/vortex.py
-python3 -m unittest discover -s tests -v  # 33 Python tests; npm test also runs the JS emulator test
+python3 -m unittest discover -s tests -v  # 37 Python tests; npm test also runs the JS emulator test
 ./vortex doctor --json
 ./vortex plan "system health"
 ./vortex run --yes -- /bin/echo hello
@@ -78,8 +83,8 @@ strings, validated engagement payloads, and added persistence-integrity errors.
 
 This is a deliberately small first slice. Full xterm cursor/alternate-screen
 emulation, reconnectable attach across sidecar restarts, PTY history replay,
-full report export, apt mutation VM evidence, DNS/redirect revalidation, nmap/curl
-execution hardening, nuclei adapters, signed knowledge packages, local model
+full report export, apt mutation VM evidence, nmap/curl execution hardening, nuclei
+adapters, signed knowledge packages, local model
 providers, worker manifests, migrations/backups/retention pruning, FastAPI
 packaging, and signed `.deb` artifacts are planned. The current desktop
 shell is an Electron-ready local renderer; `npm install` is required to launch

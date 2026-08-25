@@ -41,9 +41,11 @@ from typing import Any
 try:
     from .artifacts import ArtifactError, analyze_operation_http, analyze_path
     from .facts import parse_package_facts, parse_systemd_facts
+    from .network import resolve_targets, resolution_digest
 except ImportError:  # direct `python backend/vortex_backend.py`
     from artifacts import ArtifactError, analyze_operation_http, analyze_path
     from facts import parse_package_facts, parse_systemd_facts
+    from network import resolve_targets, resolution_digest
 
 SCHEMA_VERSION = 1
 APP_VERSION = "0.1.0"
@@ -110,7 +112,9 @@ ADAPTER_MANIFESTS: dict[str, dict[str, Any]] = {
     "linux.systemd.mutate": {"version": "1", "family": "systemd", "tool": "systemctl", "risk": "high", "network_class": "no-network", "operation": "guarded service mutation", "privilege": "root-required", "limits": {"timeout_seconds": 60}},
     "linux.packages.apt": {"version": "1", "family": "packages", "tool": "apt-get+apt-cache+dpkg-query+dpkg+apt-mark", "risk": "high", "network_class": "outbound-mutation", "operation": "guarded apt package operation", "privilege": "root-required", "limits": {"timeout_seconds": 900}},
     "linux.containers.inspect": {"version": "1", "family": "containers", "tool": "docker+podman", "risk": "low", "network_class": "loopback-only", "operation": "read-only container inspection", "limits": {"output_cap_bytes": 524288, "timeout_seconds": 30}},
+    "linux.containers.logs": {"version": "1", "family": "containers", "tool": "docker+podman", "risk": "low", "network_class": "loopback-only", "operation": "bounded container logs", "limits": {"tail_lines": 200, "timeout_seconds": 30}},
     "linux.ssh.config": {"version": "1", "family": "ssh-diagnostics", "tool": "ssh", "risk": "low", "network_class": "no-network", "operation": "read-only SSH configuration resolution", "limits": {"timeout_seconds": 15}},
+    "linux.ssh.connection": {"version": "1", "family": "ssh-diagnostics", "tool": "ssh", "risk": "high", "network_class": "outbound-read", "operation": "bounded SSH connectivity diagnostic", "limits": {"connect_timeout_seconds": 5, "timeout_seconds": 15}},
     "security.nmap.discovery": {"version": "1", "family": "authorized-reconnaissance", "tool": "nmap", "risk": "high", "network_class": "outbound-read", "operation": "scoped service discovery", "limits": {"max_cidr_hosts": 256, "max_ports": 32, "timing": "T2", "timeout_seconds": 120}},
     "security.http.headers": {"version": "1", "family": "authorized-http", "tool": "curl", "risk": "high", "network_class": "outbound-read", "operation": "bounded HTTP/TLS header discovery", "limits": {"max_time_seconds": 15, "max_redirects": 0}},
 }
@@ -1159,6 +1163,7 @@ def plan_digest(plan: dict[str, Any]) -> str:
         "source": plan.get("source"),
         "risk": plan.get("risk"),
         "rollback": plan.get("rollback", {}),
+        "network_facts": plan.get("network_facts", {}),
         "expires_at": plan.get("expires_at"),
     })
 
@@ -1176,6 +1181,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     risk = "low"
     authorization = "local diagnostic capability"
     rollback: dict[str, Any] = {"available": False, "advice": "No automatic rollback metadata is available for this plan."}
+    network_facts: dict[str, Any] = {}
     engagement = store.get_engagement(engagement_id) if engagement_id else None
 
     if lower.startswith("explain ") or lower.startswith("what does ") or lower.startswith("why does "):
@@ -1193,6 +1199,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         status = "clarified"
     elif re.search(r"\bssh\b", lower) and any(word in lower for word in ("diagnos", "config", "connection", "connect")):
         kind = "ssh_diagnostics"
+        active_connection = bool(re.search(r"\b(?:test|check|diagnose)\b.*\bssh\b.*\b(?:connection|connect|connectivity)\b", lower) or re.search(r"\bssh\s+connectivity\b", lower))
         target_match = (
             re.search(r"\bssh\s+(?:config|diagnostics?|connection)\s+(?:for|to)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
             or re.search(r"\bssh\s+(?:to|for)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
@@ -1201,13 +1208,41 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         target = target_match.group(1) if target_match else None
         if not target:
             status = "clarified"
-            notes.append("Provide one SSH host alias or hostname. Vortex will resolve configuration only and will not read key contents or connect.")
+            notes.append("Provide one SSH host alias or hostname. Vortex will not read key contents or guess a target.")
         elif probe_executable("ssh")["state"] != "installed":
-            status = "unavailable"; missing.append("ssh"); notes.append("TOOL MISSING: ssh; no connection facts were observed.")
+            status = "unavailable"; missing.append("ssh"); notes.append("TOOL MISSING: ssh; no SSH facts were observed.")
+        elif active_connection:
+            risk = "high"; authorization = "authorized SSH diagnostic required"
+            if offline:
+                status = "unavailable"; notes.append("OFFLINE mode blocks outbound SSH diagnostics; no connection was attempted.")
+            elif not engagement:
+                status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex never bypasses host verification."]
+            elif not target_in_engagement(target, engagement):
+                status = "rejected"; notes.append("SSH target is outside the active engagement scope: " + target)
+            else:
+                network_facts = resolve_targets([target])
+                if network_facts["state"] != "observed":
+                    status = "unavailable"; notes.append("SSH target DNS could not be resolved; no connection was attempted.")
+                else:
+                    specs.append(adapter_command("linux.ssh.connection", "ssh", ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ConnectionAttempts=1", "-o", "StrictHostKeyChecking=yes", "--", target, "true"], cwd, required="ssh", scope=[target], explanation=f"Perform a bounded, non-interactive SSH connectivity check to {target}; no password prompt or host-key bypass is allowed."))
+                    status = "planned"
+                    notes += ["This is an outbound connectivity diagnostic and requires explicit approval.", "BatchMode prevents password capture; StrictHostKeyChecking=yes prevents host-verification bypass."]
         else:
             specs.append(adapter_command("linux.ssh.config", "ssh", ["ssh", "-G", "--", target], cwd, required="ssh", explanation=f"Resolve the effective SSH configuration for {target}; -G does not open a network connection or authenticate."))
             status = "planned"
             notes += ["Read-only SSH configuration diagnostics; private key contents, passwords, and agent secrets are not read.", "This adapter does not connect to the target. A real connection requires a separate explicitly approved plan."]
+    elif any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("log", "logs")):
+        kind = "container_logs"
+        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        match = re.search(r"(?:logs?|container)\s+(?:for\s+)?(?:container\s+)?([A-Za-z0-9][A-Za-z0-9_.-]{0,127})", lower)
+        container_id = match.group(1) if match else None
+        if not runtime:
+            status = "unavailable"; missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"]); notes.append("TOOL MISSING: neither Docker nor Podman was found; no container logs exist.")
+        elif not container_id or container_id in {"logs", "container"}:
+            status = "clarified"; notes.append("Provide one container name or ID; log collection is bounded to 200 lines.")
+        else:
+            specs.append(adapter_command("linux.containers.logs", runtime, [runtime, "logs", "--tail", "200", "--timestamps", container_id], cwd, required=runtime, explanation=f"Collect at most 200 timestamped lines from the real {runtime} container {container_id}; no container state changes."))
+            status = "planned"; notes += [f"Detected runtime: {runtime}. Logs are read-only and bounded.", "Log content is untrusted evidence; no vulnerability finding is inferred."]
     elif any(word in lower for word in ("docker", "podman", "container")):
         kind = "container_inspection"
         runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
@@ -1318,7 +1353,11 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 missing.append(tool)
                 notes.append(f"TOOL MISSING: {tool}. The host probe found no executable; no scan output exists.")
             else:
-                if tool == "nmap":
+                network_facts = resolve_targets(normalized)
+                if network_facts["state"] != "observed":
+                    status = "unavailable"
+                    notes.append("Target DNS resolution was not observed; no network command was created.")
+                elif tool == "nmap":
                     for target in normalized:
                         if "/" in target:
                             try:
@@ -1424,6 +1463,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "notes": notes,
         "missing_tools": sorted(set(missing)),
         "engagement_id": engagement_id,
+        "network_facts": network_facts,
         "scope": {"cwd": str(cwd), "engagement_id": engagement_id, "targets": specs[0].get("scope", []) if specs else []},
         "workers": [{"id": "vortex-deterministic-planner", "state": "responded", "evidence_used": bool(specs), "role": "reviewed local adapter"}, {"id": "local-model", "state": "disabled", "evidence_used": False, "role": "advisory only"}],
         "approval_required": bool(specs),
@@ -1461,6 +1501,11 @@ class ExecutionManager:
             raise PolicyError("plan is not executable in its current state")
         if offline and any(spec.get("network_class") not in ("no-network", "loopback-only") for spec in plan.get("commands", [])):
             raise PolicyError("offline mode blocks this network-effecting plan")
+        planned_network = plan.get("network_facts", {})
+        if planned_network.get("state") == "observed":
+            current_network = resolve_targets([item.get("target") for item in planned_network.get("targets", []) if item.get("target")])
+            if current_network.get("state") != "observed" or resolution_digest(current_network) != resolution_digest(planned_network):
+                raise PolicyError("DNS resolution changed or could not be revalidated; create a fresh plan")
         if any(spec.get("privilege") == "root-required" for spec in plan.get("commands", [])) and os.getuid() != 0:
             raise PermissionError("this plan requires root; rerun the reviewed plan with sudo vortex --allow-root run <plan-id>")
         if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
@@ -1486,7 +1531,7 @@ class ExecutionManager:
         if not claimed:
             raise PolicyError(reason)
         self.store.append_audit("plan_approved", {"plan_id": plan["id"], "digest": plan["digest"]})
-        op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "output_digest": None, "analysis": None}
+        op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "network_facts": plan.get("network_facts", {}), "output_digest": None, "analysis": None}
         self.store.save_operation(op)
         self.store.append_audit("operation_started", {"operation_id": op["id"], "plan_id": plan["id"], "digest": plan["digest"], "privilege": "root-override" if allow_root else "user"})
         thread = threading.Thread(target=self._run, args=(plan, op, 0), daemon=True)
@@ -1807,6 +1852,7 @@ def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
         "adapter_facts": op.get("facts", {}),
         "execution_gate": op.get("execution_gate"),
         "rollback": plan.get("rollback"),
+        "network_facts": op.get("network_facts", plan.get("network_facts", {})),
         "artifacts": [{"artifact_id": item.get("artifact_id"), "kind": item.get("kind"), "state": item.get("state"), "sha256": item.get("sha256"), "summary": item.get("summary"), "observations": item.get("observations", [])[:20]} for item in op.get("artifacts", [])],
         "next_steps": [{"label": "explain", "text": "Review the observed command timeline and evidence digests."}, {"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."}],
         "workers": op["workers"],

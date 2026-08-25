@@ -536,3 +536,34 @@ The native PTY and direct operator command paths retain full Linux capability.
 The remaining terminal work is complete xterm compatibility, robust alternate-
 screen/TUI behavior across real applications, reconnectable attach across
 sidecar restarts, PTY history replay, and tmux/SSH/non-TTY acceptance evidence.
+
+### Priority 2 — network, container, and SSH hardening progress
+
+**Implemented in the current iteration.** Active hostname/URL plans now record
+real DNS resolution facts and compare them again immediately before execution;
+changed resolution invalidates the plan. HTTP Location headers are observed and
+never followed automatically. Docker/Podman log collection is bounded to 200
+lines and only uses real installed runtimes. SSH connectivity diagnostics require
+an active engagement and use BatchMode, a short connection timeout, one attempt,
+and strict host-key verification; SSH config inspection remains the no-network
+`ssh -G` path. No network scan, payload, credential submission, or fabricated
+reachability result is added.
+
+Remaining Priority 2 work is stronger Nmap/HTTP parsing and execution policy,
+complete container/SSH parser coverage, parser fuzzing, and disposable Linux
+acceptance evidence.
+
+### Priority 2 — network scope revalidation and real diagnostic adapters
+
+**Implemented in the current iteration.** Real hostname/URL resolution facts are
+recorded when an active plan is created and re-resolved immediately before
+execution. A changed address set or failed resolution invalidates the plan.
+HTTP Location headers are parsed as observed redirects and are never followed
+without a new scope decision. Docker/Podman log collection is bounded to 200
+lines. SSH connectivity diagnostics require an engagement, use BatchMode,
+strict host-key checking, a short timeout, and one attempt; SSH configuration
+inspection remains a no-network `ssh -G` operation.
+
+No fake reachability, logs, redirect target, container, or SSH result is created.
+The remaining Priority 2 work is deeper Nmap/HTTP parser coverage, full runtime
+specific output schemas, fuzzing, and real Linux acceptance evidence.
