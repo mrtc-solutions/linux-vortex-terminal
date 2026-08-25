@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Node/Electron
+node_modules/
+npm-debug.log*
+.DS_Store
+
+# Local Vortex state and evidence
+*.db
+*.db-*
+.vortex/
+reports/
+evidence/
+*.pcap
+*.xml
+
+# Build/release output
+build/
+dist/
+out/
+coverage/
+*.deb
+*.rpm
+*.AppImage
+
+# Local environment
+.env
+.env.*
+!.env.example
