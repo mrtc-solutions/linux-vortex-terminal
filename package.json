@@ -1,0 +1,21 @@
+{
+  "name": "linux-vortex-terminal",
+  "version": "0.1.0",
+  "description": "Linux-native Vortex AI cybersecurity and operations workbench",
+  "private": true,
+  "license": "MIT",
+  "main": "desktop/main.js",
+  "scripts": {
+    "start": "electron desktop/main.js",
+    "preview": "python3 backend/vortex_backend.py --host 0.0.0.0 --port 4173",
+    "test": "python3 -m unittest discover -s tests -v && node tests/test_terminal.js",
+    "lint": "python3 -m py_compile backend/vortex_backend.py cli/vortex.py && node --check frontend/terminal.js",
+    "format:check": "python3 -m compileall -q backend cli"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

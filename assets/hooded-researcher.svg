@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 220" role="img" aria-label="Project-owned abstract security researcher artwork">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#00d4aa" stop-opacity=".82"/><stop offset="1" stop-color="#244b5d" stop-opacity=".18"/></linearGradient><filter id="glow"><feGaussianBlur stdDeviation="4"/></filter></defs>
+  <ellipse cx="210" cy="203" rx="104" ry="8" fill="#00d4aa" opacity=".2" filter="url(#glow)"/>
+  <path d="M84 199c6-55 24-87 52-104 10-7 16-22 17-40 3-26 22-40 49-40 30 0 53 21 54 51 1 16 5 27 17 39 24 23 36 51 41 94z" fill="#0c151a" stroke="#31676a" stroke-width="2"/>
+  <path d="M147 62c4-18 18-30 39-30 22 0 39 15 42 36-17-10-29-13-42-13-14 0-25 3-39 7z" fill="#19232a"/>
+  <path d="M145 87c18 12 40 15 61 3 5 9 7 22 3 31-14 12-40 12-57-1-7-9-10-21-7-33z" fill="#10181e" stroke="#386d70" stroke-width="1.5"/>
+  <path d="M157 101l16-2m13 0 16 2" stroke="#00d4aa" stroke-width="2" opacity=".9"/><circle cx="172" cy="100" r="2" fill="#00ffb7"/><circle cx="185" cy="100" r="2" fill="#00ffb7"/>
+  <path d="M116 164c33-18 88-19 128 0l12 35H101z" fill="url(#g)" opacity=".7"/><rect x="143" y="150" width="102" height="51" rx="3" fill="#10191d" stroke="#00d4aa" stroke-opacity=".5"/><rect x="151" y="157" width="86" height="34" fill="#071513"/><path d="M159 168h44m-44 8h61m-61 8h27" stroke="#00d4aa" stroke-opacity=".7"/><path d="M100 201h171" stroke="#00d4aa" stroke-width="2" opacity=".5"/>
+</svg>
