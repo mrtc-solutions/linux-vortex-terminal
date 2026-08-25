@@ -1,15 +1,18 @@
+import http.server
 import json
 import os
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 
+from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
 from backend.vortex_backend import (
     ExecutionManager, PolicyError, SessionManager, Store, build_plan, command_spec,
-    digest, make_analysis, normalize_target, probe_executable, plan_digest, target_in_engagement,
+    digest, make_analysis, normalize_target, now_iso, probe_executable, plan_digest, target_in_engagement,
 )
 
 
@@ -200,6 +203,76 @@ class VortexCoreTests(unittest.TestCase):
             self.assertEqual(result["termination_reason"], "cancelled")
         finally:
             sessions.shutdown()
+
+    def test_nmap_artifact_parser_reports_only_observed_ports(self):
+        data = b'''<?xml version="1.0"?><nmaprun scanner="nmap" args="nmap -sV lab.example.test"><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="lab.example.test"/></hostnames><ports><port protocol="tcp" portid="443"><state state="open"/><service name="https" product="Example" version="1.2"/></port></ports></host></nmaprun>'''
+        artifact = analyze_bytes(data, kind='nmap-xml', source={'kind':'fixture','identity':'nmap-fixture'})
+        self.assertEqual(artifact['state'], 'observed')
+        self.assertEqual(artifact['observations'][0]['type'], 'open_port')
+        self.assertEqual(artifact['observations'][0]['port'], '443')
+        self.assertNotIn('vulnerability', json.dumps(artifact).lower())
+        self.assertEqual(artifact['parser']['id'], 'nmap.xml')
+
+    def test_artifact_parser_rejects_malformed_xml_entities_and_symlinks(self):
+        malformed = analyze_bytes(b'<!DOCTYPE foo [<!ENTITY x "boom">]><nmaprun/>', kind='nmap-xml')
+        self.assertEqual(malformed['state'], 'tool_error')
+        malformed = analyze_bytes(b'<nmaprun>', kind='nmap-xml')
+        self.assertEqual(malformed['state'], 'tool_error')
+        path = Path(self.tmp.name) / 'linked.xml'
+        path.symlink_to(Path(self.tmp.name) / 'missing.xml')
+        with self.assertRaises(ArtifactError):
+            analyze_path(str(path), 'auto')
+        with self.assertRaises(ArtifactError):
+            analyze_bytes(b'x' * (10 * 1024 * 1024 + 1), kind='text')
+
+    def test_http_artifact_parser_redacts_headers_and_marks_observation(self):
+        data = 'HTTP/1.1 200 OK\r\nServer: test\r\nSet-Cookie: token=super-secret\r\nLocation: https://example.test/next\r\n\r\n'
+        artifact = analyze_bytes(data.encode(), kind='http-headers')
+        self.assertEqual(artifact['state'], 'observed')
+        self.assertEqual(artifact['status_code'], 200)
+        serialized = json.dumps(artifact)
+        self.assertIn('[REDACTED]', serialized)
+        self.assertNotIn('super-secret', serialized)
+        self.assertTrue(any(h['name'] == 'location' for h in artifact['headers']))
+
+    def test_real_http_adapter_persists_parsed_evidence(self):
+        import shutil
+        if not shutil.which('curl'):
+            self.skipTest('curl unavailable')
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('X-Vortex-Test', 'yes')
+                self.send_header('Set-Cookie', 'token=fixture-secret')
+                self.end_headers()
+            def log_message(self, *_args):
+                pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            target = f'http://127.0.0.1:{server.server_port}/'
+            engagement = {
+                'id': 'http-eng', 'created_at': now_iso(), 'expires_at': '2099-08-25T00:00:00+00:00',
+                'name': 'local HTTP fixture', 'authorization': 'test fixture', 'targets': [target],
+                'classes': ['reconnaissance'], 'status': 'active',
+            }
+            self.store.create_engagement(engagement)
+            plan = build_plan(self.store, f'curl {target}', self.tmp.name, engagement['id'])
+            self.assertEqual(plan['status'], 'planned')
+            manager = ExecutionManager(self.store)
+            operation = manager.start(plan, True, plan['approval_token'])
+            for _ in range(150):
+                result = self.store.get_operation(operation['id'])
+                if result and result['status'] not in ('started', 'running'):
+                    break
+                time.sleep(.02)
+            self.assertEqual(result['status'], 'succeeded')
+            self.assertEqual(result['artifacts'][0]['kind'], 'http-headers')
+            self.assertEqual(result['artifacts'][0]['state'], 'observed')
+            self.assertNotIn('fixture-secret', json.dumps(result))
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_analysis_does_not_invent_findings(self):
         op = {"status": "succeeded", "commands": [], "workers": []}

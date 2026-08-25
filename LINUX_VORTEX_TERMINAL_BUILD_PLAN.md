@@ -430,3 +430,29 @@ literal operator-selected executable.
 Remaining Priority 2 work is a complete adapter package layout, DNS/redirect
 revalidation, nmap XML/HTTP parsers, apt/systemd mutation adapters, parser fuzzing,
 and disposable-VM acceptance evidence.
+
+### Priority 2 — artifact parsing and evidence provenance
+
+**Implemented in the current iteration.** Bounded parsers now accept supplied Nmap
+XML, HTTP response headers, and generic text artifacts. Every result records a
+random/local artifact identity, source provenance, byte size, SHA-256, parser ID
+and version, and an honest `observed`, `inconclusive`, `tool_error`, or `not_run`
+state. XML entities/DOCTYPEs, symlink inputs, oversized files, terminal escapes,
+control characters, and common secret values are handled defensively. Parsed
+observations are evidence only; no parser invents a vulnerability or security
+finding.
+
+Successful HTTP adapter operations and generated Nmap XML are parsed into the
+operation report and local artifact table. Generated raw Nmap XML is deleted by
+default after parsing; retention requires the explicit
+`VORTEX_RETAIN_RAW_EVIDENCE=1` opt-in and mode 0600. Supplied artifacts can be
+inspected without executing anything:
+
+```text
+vortex artifact inspect ./scan.xml --type nmap-xml
+POST /api/artifacts/analyze {"path":"./scan.xml","kind":"auto"}
+```
+
+The remaining evidence work is parser confidence/error taxonomy expansion,
+namespace/format coverage, DNS/redirect provenance, signed artifact packages,
+and parser fuzzing in disposable Ubuntu CI.

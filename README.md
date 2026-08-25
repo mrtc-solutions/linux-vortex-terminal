@@ -56,7 +56,8 @@ VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
 | Python-owned local PTY sessions and cancellation | Implemented + tested |
 | Matrix binary rain and project-owned artwork | Implemented + accessible fallback |
 | Full PTY tabs/panes and shell integration | Planned |
-| nmap/nuclei/HTTP active adapters | Planned; tool missing/adapter hardening required |
+| Scoped nmap/curl planning and evidence parsers | Implemented + tested; tool availability varies |
+| Nuclei/content-discovery active adapters | Planned; reviewed templates/wordlists required |
 | apt/systemd mutation adapters | Planned; read-only plans are available |
 | Local model / specialist worker bus | Planned; provider disabled by default |
 | Signed knowledge packages and `.deb` release | Planned |

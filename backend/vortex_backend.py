@@ -37,6 +37,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+try:
+    from .artifacts import ArtifactError, analyze_operation_http, analyze_path
+except ImportError:  # direct `python backend/vortex_backend.py`
+    from artifacts import ArtifactError, analyze_operation_http, analyze_path
+
 SCHEMA_VERSION = 1
 APP_VERSION = "0.1.0"
 REDACTION_RE = re.compile(
@@ -414,6 +419,12 @@ class Store:
                 started_at TEXT NOT NULL, ended_at TEXT, last_activity TEXT,
                 exit_code INTEGER, signal INTEGER, termination_reason TEXT
             );
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id TEXT PRIMARY KEY, operation_id TEXT, kind TEXT NOT NULL,
+                source_json TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL, parser_json TEXT NOT NULL,
+                state TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL
+            );
             INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', '1');
             """)
     def mark_stale_sessions(self) -> None:
@@ -518,6 +529,19 @@ class Store:
 
     def get_session_record(self, session_id: str) -> dict[str, Any] | None:
         return next((item for item in self.list_sessions() if item["id"] == session_id), None)
+
+
+    def save_artifact(self, artifact: dict[str, Any], operation_id: str | None = None) -> None:
+        with self.lock, self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO artifacts(id,operation_id,kind,source_json,size_bytes,sha256,parser_json,state,result_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)", (artifact["artifact_id"], operation_id or artifact.get("operation_id"), artifact.get("kind", "unknown"), canonical(artifact.get("source", {})), artifact.get("size_bytes", 0), artifact.get("sha256", ""), canonical(artifact.get("parser", {})), artifact.get("state", "inconclusive"), canonical(artifact), now_iso()))
+
+    def list_artifacts(self, operation_id: str | None = None) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            if operation_id:
+                rows = db.execute("SELECT result_json FROM artifacts WHERE operation_id=? ORDER BY created_at DESC", (operation_id,)).fetchall()
+            else:
+                rows = db.execute("SELECT result_json FROM artifacts ORDER BY created_at DESC LIMIT 100").fetchall()
+        return [json.loads(row[0]) for row in rows]
 
 
     def create_engagement(self, item: dict[str, Any]) -> None:
@@ -690,8 +714,11 @@ class SessionManager:
             if fd is not None:
                 try: os.close(fd)
                 except OSError: pass
+            # Keep audit completion inside the lifecycle lock. Shutdown waits
+            # on the same lock, so it cannot remove a test/runtime data root
+            # between the terminal state update and its finish event.
+            self.store.append_audit("session_finished", {"session_id": session_id, "status": session["status"], "exit_code": session["exit_code"], "signal": session["signal"]})
             self.conditions[session_id].notify_all()
-        self.store.append_audit("session_finished", {"session_id": session_id, "status": session["status"], "exit_code": session["exit_code"], "signal": session["signal"]})
 
     def info(self, session_id: str) -> dict[str, Any] | None:
         with self.lock:
@@ -1171,7 +1198,7 @@ class ExecutionManager:
         identity_path = spec.get("executable_identity", {}).get("realpath")
         if identity_path:
             execution_argv[0] = identity_path
-        record: dict[str, Any] = {"argv": [redact(arg) for arg in argv], "display": redact(spec["display"]), "executable": spec["executable"], "cwd": spec["cwd"], "started_at": started, "stdout": "", "stderr": "", "exit_code": None, "signal": None, "termination_reason": None, "status": "running", "version": spec["executable_identity"].get("version"), "evidence_digest": None}
+        record: dict[str, Any] = {"argv": [redact(arg) for arg in argv], "display": redact(spec["display"]), "executable": spec["executable"], "adapter_id": spec.get("adapter_id"), "adapter_version": spec.get("adapter_version"), "cwd": spec["cwd"], "started_at": started, "stdout": "", "stderr": "", "exit_code": None, "signal": None, "termination_reason": None, "status": "running", "version": spec["executable_identity"].get("version"), "evidence_digest": None}
         cancel_event = self.cancel_events.get(operation_id)
         try:
             proc = subprocess.Popen(execution_argv, cwd=spec["cwd"], env=minimal_env(False, spec.get("env_additions")), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, start_new_session=True, close_fds=True)
@@ -1262,6 +1289,40 @@ class ExecutionManager:
         record["evidence_digest"] = hashlib.sha256((record["stdout"] + "\n" + record["stderr"]).encode()).hexdigest()
         return record
 
+    def _collect_artifacts(self, plan: dict[str, Any], op: dict[str, Any]) -> list[dict[str, Any]]:
+        artifacts: list[dict[str, Any]] = []
+        for spec, command in zip(plan.get("commands", []), op.get("commands", [])):
+            adapter_id = spec.get("adapter_id")
+            try:
+                if adapter_id == "security.http.headers":
+                    artifact = analyze_operation_http(command.get("stdout", ""), op["id"])
+                elif adapter_id == "security.nmap.discovery":
+                    argv = spec.get("argv", [])
+                    output_path = argv[argv.index("-oX") + 1] if "-oX" in argv and argv.index("-oX") + 1 < len(argv) else None
+                    if not output_path or not Path(output_path).exists():
+                        artifact = {"schema_version": 1, "artifact_id": secrets.token_hex(16), "kind": "nmap-xml", "source": {"kind": "generated_file", "path": output_path}, "size_bytes": 0, "sha256": "", "parser": {"id": "nmap.xml", "version": "1"}, "state": "not_run", "error": "nmap produced no XML artifact", "observations": [], "summary": "No Nmap XML artifact was available to parse."}
+                        artifact["operation_id"] = op["id"]
+                        self.store.save_artifact(artifact, op["id"])
+                        artifacts.append(artifact)
+                        continue
+                    artifact = analyze_path(output_path, "nmap-xml")
+                    if os.environ.get("VORTEX_RETAIN_RAW_EVIDENCE") != "1":
+                        try: os.unlink(output_path)
+                        except OSError: pass
+                    else:
+                        try: Path(output_path).chmod(0o600)
+                        except OSError: pass
+                else:
+                    continue
+                artifact["operation_id"] = op["id"]
+                self.store.save_artifact(artifact, op["id"])
+                artifacts.append(artifact)
+            except ArtifactError as exc:
+                artifact = {"schema_version": 1, "artifact_id": secrets.token_hex(16), "kind": "unknown", "source": {"kind": "operation_output", "operation_id": op["id"]}, "size_bytes": 0, "sha256": "", "parser": {"id": adapter_id or "unknown", "version": "1"}, "state": "tool_error", "error": redact(str(exc)), "observations": [], "operation_id": op["id"]}
+                self.store.save_artifact(artifact, op["id"])
+                artifacts.append(artifact)
+        return artifacts
+
     def _run(self, plan: dict[str, Any], op: dict[str, Any]) -> None:
         try:
             op["status"] = "running"; self.store.update_operation(op)
@@ -1284,6 +1345,7 @@ class ExecutionManager:
             op["status"] = "unknown_after_crash"; op["error"] = redact(str(exc))
         op["ended_at"] = now_iso()
         op["output_digest"] = hashlib.sha256(canonical(op["commands"]).encode()).hexdigest()
+        op["artifacts"] = self._collect_artifacts(plan, op)
         op["analysis"] = make_analysis(plan, op)
         self.store.update_operation(op)
         self.store.append_audit("operation_finished", {"operation_id": op["id"], "plan_id": plan["id"], "status": op["status"], "output_digest": op["output_digest"]})
@@ -1303,6 +1365,7 @@ def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
         "inference": "Output summaries are bounded and redacted. They are observations, not a security guarantee.",
         "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule.",
         "commands": facts,
+        "artifacts": [{"artifact_id": item.get("artifact_id"), "kind": item.get("kind"), "state": item.get("state"), "sha256": item.get("sha256"), "summary": item.get("summary"), "observations": item.get("observations", [])[:20]} for item in op.get("artifacts", [])],
         "next_steps": [{"label": "explain", "text": "Review the observed command timeline and evidence digests."}, {"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."}],
         "workers": op["workers"],
     }
@@ -1379,6 +1442,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if len(parts) == 4:
                     session = self.sessions.info(parts[-1])
                     return self._json(200 if session else 404, {"session": session} if session else {"error": {"code": "not_found", "message": "session not found"}})
+            if path == "/api/artifacts": return self._json(200, {"artifacts": self.store.list_artifacts()})
             if path == "/api/history": return self._json(200, {"history": self.store.list_history()})
             if path == "/api/engagements": return self._json(200, {"engagements": self.store.list_engagements()})
             if path == "/api/audit/verify": return self._json(200, {"audit": self.store.verify_audit()})
@@ -1431,6 +1495,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                     if not self.sessions.kill(parts[-2]):
                         return self._json(404, {"error": {"code": "not_running", "message": "session is not running"}})
                     return self._json(202, {"kill_requested": True, "session_id": parts[-2]})
+            if path == "/api/artifacts/analyze":
+                artifact = analyze_path(body.get("path"), body.get("kind", "auto"))
+                self.store.save_artifact(artifact)
+                return self._json(201, {"artifact": artifact})
             if path == "/api/plan":
                 request = body.get("request")
                 if not isinstance(request, str):

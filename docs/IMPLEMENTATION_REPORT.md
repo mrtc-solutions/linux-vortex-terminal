@@ -27,7 +27,11 @@
   desktop open/stop local-shell flow.
 - Started Priority 2 with a versioned adapter registry and manifests for local
   health, filesystem usage, sockets, Git status, systemd inspection, scoped
-  nmap discovery, and bounded curl headers. Adapter IDs, tool state, limits,
+  nmap discovery, and bounded curl headers.
+- Implemented bounded evidence parsing for Nmap XML and HTTP headers, including
+  source path/operation provenance, SHA-256, parser version, observed versus
+  inconclusive/tool-error states, redacted observations, artifact persistence,
+  CLI/API inspection, and default deletion of generated raw Nmap XML. Adapter IDs, tool state, limits,
   network class, and version are visible through `vortex adapters` and
   `/api/adapters`. Explicit operator PTY/direct commands remain available for
   the user’s full Linux capability and are clearly attributed outside AI adapter
@@ -35,7 +39,8 @@
 - Added tests for planner honesty, shell metacharacters, target injection, missing
   tools, scope denial, audit tamper detection, real exit status, redaction,
   output caps, cancellation, offline mode, URL/port scope, plan tampering, and
-  exact approval-token enforcement.
+  exact approval-token enforcement, Nmap XML/HTTP parsing, malformed artifact
+  handling, and artifact size/symlink boundaries.
 
 ## Commands run
 
@@ -59,8 +64,8 @@ strings, validated engagement payloads, and added persistence-integrity errors.
 ## Known limitations
 
 This is a deliberately small first slice. PTY tabs/panes, persistent sessions,
-full report export, apt simulation, service mutations, artifact parsers, nmap/
-HTTP/nuclei adapters, signed knowledge packages, local model providers, worker
+full report export, apt simulation, service mutations, DNS/redirect revalidation,
+nmap/curl execution hardening, nuclei adapters, signed knowledge packages, local model providers, worker
 manifests, migrations/backups/retention pruning, shell install/uninstall,
 FastAPI packaging, and signed `.deb` artifacts are planned. The current desktop
 shell is an Electron-ready local renderer; `npm install` is required to launch

@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from backend.artifacts import ArtifactError, analyze_path
 from backend.vortex_backend import (ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, detect_context, digest, now_iso, probe_executable, command_spec, validate_cwd, plan_digest)
 
 def emit(value, as_json=False):
@@ -65,7 +66,7 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
@@ -111,6 +112,7 @@ def main(argv=None):
     sub.add_parser('doctor')
     sub.add_parser('tools')
     sub.add_parser('adapters')
+    art = sub.add_parser('artifact'); art.add_argument('action', choices=['inspect','analyze'], nargs='?', default='inspect'); art.add_argument('path'); art.add_argument('--type', choices=['auto','nmap-xml','http-headers','text'], default='auto')
     h = sub.add_parser('history'); h.add_argument('action', choices=['list','show','search','replay'], nargs='?', default='list'); h.add_argument('query', nargs='?')
     x = sub.add_parser('explain'); x.add_argument('request', nargs='+')
     a = sub.add_parser('audit'); a.add_argument('action', choices=['verify'], nargs='?', default='verify')
@@ -135,6 +137,11 @@ def main(argv=None):
                 tools = [] if manifest['tool'] == 'multiple' else manifest['tool'].split('+')
                 items.append({'id': adapter_id, **manifest, 'tool_state': {tool: probe_executable(tool)['state'] for tool in tools}})
             emit({'adapters': items}, args.as_json); return 0
+        if args.subcommand == 'artifact':
+            artifact = analyze_path(args.path, args.type)
+            store.save_artifact(artifact)
+            emit({'artifact': artifact}, args.as_json)
+            return 0 if artifact.get('state') != 'tool_error' else EXIT_CODES['failure']
         if args.subcommand == 'session':
             if args.action == 'list':
                 emit({'sessions': store.list_sessions()}, args.as_json); return 0
