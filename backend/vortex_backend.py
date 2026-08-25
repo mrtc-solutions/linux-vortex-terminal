@@ -38,6 +38,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
 try:
     from .adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from .artifacts import ArtifactError, analyze_operation_http, analyze_path
@@ -50,7 +54,7 @@ except ImportError:  # direct `python backend/vortex_backend.py`
     from network import resolve_targets, resolution_digest
 
 SCHEMA_VERSION = 1
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 REDACTION_RE = re.compile(
     r"(?i)(bearer\s+|password\s*[=:]\s*|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*|secret\s*[=:]\s*)([^\s,;]+)"
 )
@@ -510,6 +514,11 @@ class Store:
             );
             INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', '1');
             """)
+        try:
+            from .workspace import ensure_schema
+        except ImportError:
+            from workspace import ensure_schema
+        ensure_schema(self)
     def mark_stale_sessions(self) -> None:
         # A sidecar restart cannot prove that an old PTY is still alive. This is
         # called by the session authority at startup, not by every read-only
@@ -1276,6 +1285,19 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             specs.append(adapter_command("linux.containers.logs", runtime, [runtime, "logs", "--tail", "200", "--timestamps", container_id], cwd, required=runtime, explanation=f"Collect at most 200 timestamped lines from the real {runtime} container {container_id}; no container state changes."))
             status = "planned"; notes += [f"Detected runtime: {runtime}. Logs are read-only and bounded.", "Log content is untrusted evidence; no vulnerability finding is inferred."]
+    elif any(word in lower for word in ("docker", "podman")) and any(word in lower for word in ("diagnos", "not working", "broken", "failing")):
+        kind = "container_diagnose"
+        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        if not runtime:
+            status = "unavailable"
+            missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"])
+            notes.append("TOOL MISSING: neither Docker nor Podman was found; diagnosis cannot continue.")
+        else:
+            specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "--version"], cwd, required=runtime, explanation=f"Confirm the installed {runtime} client version."))
+            specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "info"], cwd, required=runtime, explanation=f"Inspect the real {runtime} daemon/user context without changing containers."))
+            specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List real {runtime} containers after daemon facts are observed."))
+            status = "planned"
+            notes += [f"Multi-step read-only diagnosis using {runtime}.", "VORTEX stops when daemon facts and container lists are observed; it does not apply a fix unless a separate approved plan is created."]
     elif any(word in lower for word in ("docker", "podman", "container")):
         kind = "container_inspection"
         runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
@@ -1320,8 +1342,6 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}; a missing installed package is informational.", privilege="user"))
                 specs[-1]["allow_failure"] = True
             if probe_executable("apt-mark")["state"] == "installed":
-                specs.append(adapter_command("linux.packages.apt", "apt-mark", ["apt-mark", "showhold"], cwd, required="apt-mark", explanation="Report held packages that may affect the requested operation.", privilege="user"))
-            if package_operation != "install" and probe_executable("apt-mark")["state"] == "installed":
                 specs.append(adapter_command("linux.packages.apt", "apt-mark", ["apt-mark", "showhold"], cwd, required="apt-mark", explanation="Report held packages that may affect the requested operation.", privilege="user"))
             if package_operation == "install":
                 preflight = ["apt-get", "-s", "--no-remove", "install", package_name]
@@ -1424,6 +1444,20 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                     specs.append(adapter_command(adapter_id, tool, args, cwd, required=tool, scope=normalized, explanation=explanation))
                     status = "planned"
                 notes += ["This is active authorized assessment, not a generic shell command.", "Targets, DNS, redirects, limits, and engagement expiry must be checked again at execution."]
+    elif any(phrase in lower for phrase in ("ip address", "network interface", "show interfaces", "list interfaces")) or lower.strip() in {"ip addr", "ip address"}:
+        kind = "network_interfaces"
+        if probe_executable("ip")["state"] != "installed":
+            status = "unavailable"; missing.append("ip"); notes.append("TOOL MISSING: ip; no interface facts were observed.")
+        else:
+            specs.append(adapter_command("linux.network.interfaces", "ip", ["ip", "-br", "addr"], cwd, required="ip", explanation="List observed network interfaces and addresses without changing configuration."))
+            status = "planned"; notes.append("Read-only interface inspection. No routes, firewall, or DNS are modified.")
+    elif lower.strip() in {"date", "time"} or "what time" in lower or "current date" in lower:
+        kind = "clock"
+        if probe_executable("date")["state"] != "installed":
+            status = "unavailable"; missing.append("date"); notes.append("TOOL MISSING: date; no clock fact was observed.")
+        else:
+            specs.append(adapter_command("linux.system.clock", "date", ["date", "--iso-8601=seconds"], cwd, required="date", explanation="Report the host clock as observed."))
+            status = "planned"; notes.append("Read-only clock observation.")
     elif any(word in lower for word in ("port", "listen", "socket")):
         if probe_executable("ss")["state"] != "installed":
             status = "unavailable"; missing.append("ss"); notes.append("TOOL MISSING: ss. Install instructions may be shown separately; no socket facts were observed.")
@@ -1447,6 +1481,38 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 adapter_command("linux.systemd.inspect", "journalctl", [*journal_prefix, "-u", unit, "-n", "80", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation=f"Read the last bounded {('user ' if user_mode else '')}journal lines for {unit}; no service mutation is requested."),
             ])
             status = "planned"; notes.append("Read-only systemd and journal inspection. Restart/enable/disable require a separate fresh plan and confirmation.")
+    elif any(word in lower for word in ("whoami", "who am i", "current user", "hostname")) or lower.strip() in {"pwd", "id"}:
+        kind = "identity"
+        catalog = [
+            ("whoami", ["whoami"], "Report the current user name."),
+            ("id", ["id"], "Report user and group identifiers."),
+            ("hostname", ["hostname"], "Report the local hostname."),
+            ("pwd", ["pwd"], "Report the working directory."),
+        ]
+        wanted = {lower.strip()} if lower.strip() in {"whoami", "id", "pwd", "hostname"} else {item[0] for item in catalog}
+        for executable, argv, explanation in catalog:
+            if executable not in wanted:
+                continue
+            if probe_executable(executable)["state"] == "installed":
+                specs.append(adapter_command("linux.system.identity", executable, argv, cwd, required=executable, explanation=explanation))
+            else:
+                missing.append(executable)
+        status = "planned" if specs else "unavailable"
+        notes.append("Read-only identity facts from the local host.")
+    elif lower.strip() in {"ls", "list files", "list directory"} or any(phrase in lower for phrase in ("list files", "list the directory", "show files in")):
+        kind = "filesystem_list"
+        if probe_executable("ls")["state"] != "installed":
+            status = "unavailable"; missing.append("ls"); notes.append("TOOL MISSING: ls; no directory listing was observed.")
+        else:
+            specs.append(adapter_command("linux.filesystem.list", "ls", ["ls", "-la", str(cwd)], cwd, required="ls", explanation="List files in the current working-directory scope only."))
+            status = "planned"; notes.append("Read-only directory listing; no files are modified.")
+    elif any(word in lower for word in ("process list", "running processes", "list processes")) or lower.strip() in {"ps", "show processes"}:
+        kind = "processes"
+        if probe_executable("ps")["state"] != "installed":
+            status = "unavailable"; missing.append("ps"); notes.append("TOOL MISSING: ps; no process table was observed.")
+        else:
+            specs.append(adapter_command("linux.system.processes", "ps", ["ps", "-eo", "pid,user,pcpu,pmem,comm", "--no-headers"], cwd, required="ps", explanation="List observed processes without sending signals."))
+            status = "planned"; notes.append("Read-only process inspection. Output is untrusted data, not instructions.")
     elif any(word in lower for word in ("git status", "repository status", "git hygiene", "check my repo")):
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no repository state was observed.")
@@ -1460,7 +1526,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         if status == "unavailable":
             missing = [x["required_tool"] for x in specs if x["tool_state_at_plan"] != "ready"]
         notes += ["Read-only disk inspection. Cleanup is not bundled into a discovery plan.", "No files are removed or moved by these commands."]
-    elif any(word in lower for word in ("system", "health", "cpu", "memory", "ram", "diagnos")):
+    elif any(word in lower for word in ("system", "health", "cpu", "memory", "ram", "diagnos", "kernel")):
         for executable, argv, explanation in [
             ("uname", ["uname", "-a"], "Identify the running kernel and architecture."),
             ("uptime", ["uptime"], "Report observed uptime and load averages."),
@@ -1545,6 +1611,9 @@ class ExecutionManager:
             raise TimeoutError("plan expired")
         if plan.get("engagement_id"):
             engagement = self.store.get_engagement(plan["engagement_id"])
+            workspace = getattr(self, "workspace", None)
+            if workspace is not None:
+                engagement = workspace.enrich_engagement(engagement)
             if not engagement or engagement.get("status") != "active":
                 raise PolicyError("engagement is unavailable or closed")
             if time.time() > datetime.fromisoformat(engagement["expires_at"]).timestamp():
@@ -1624,6 +1693,9 @@ class ExecutionManager:
                 raise PolicyError(f"executable identity changed for {spec['executable']}; fresh plan required")
         if plan.get("engagement_id"):
             engagement = self.store.get_engagement(plan["engagement_id"])
+            workspace = getattr(self, "workspace", None)
+            if workspace is not None:
+                engagement = workspace.enrich_engagement(engagement)
             if not engagement or engagement.get("status") != "active":
                 raise PolicyError("engagement is unavailable or closed")
             if time.time() > datetime.fromisoformat(engagement["expires_at"]).timestamp():
@@ -1868,6 +1940,18 @@ class ExecutionManager:
         op["analysis"] = make_analysis(plan, op)
         self.store.update_operation(op)
         self.store.append_audit("operation_finished", {"operation_id": op["id"], "plan_id": plan["id"], "status": op["status"], "output_digest": op["output_digest"]})
+        workspace = getattr(self, "workspace", None)
+        if workspace is not None:
+            try:
+                from orchestrate import finish_task
+                task = workspace.find_task_by_plan(plan["id"])
+                if task:
+                    finish_task(workspace, task["id"], op, plan, executor=self, store=self.store)
+            except Exception as exc:
+                try:
+                    self.store.append_audit("task_finish_failed", {"plan_id": plan.get("id"), "operation_id": op.get("id"), "error": redact(str(exc))[:240]})
+                except Exception:
+                    pass
         with self.lock:
             self.cancel_events.pop(op["id"], None)
             self.threads.pop(op["id"], None)
@@ -1924,7 +2008,8 @@ def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
         "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "cancelled": "CANCELLED", "awaiting_confirmation": "PREFLIGHT COMPLETE", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
         "fact": f"{len(op['commands'])} real command(s) reached an observed terminal outcome." if op["commands"] else "No command was run.",
         "inference": "Output summaries are bounded and redacted. They are observations, not a security guarantee.",
-        "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule.",
+        "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule. Tool output is untrusted data and never overrides Guardian policy.",
+        "untrusted_output": True,
         "commands": facts,
         "adapter_facts": op.get("facts", {}),
         "execution_gate": op.get("execution_gate"),
@@ -1958,9 +2043,10 @@ class VortexHandler(BaseHTTPRequestHandler):
     store: Store
     executor: ExecutionManager
     sessions: SessionManager
+    workspace: Any
     frontend: Path
     token: str | None = None
-    server_version = "VortexSidecar/0.1"
+    server_version = "VortexSidecar/0.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Do not log request bodies, prompts, or credentials.
@@ -1994,7 +2080,131 @@ class VortexHandler(BaseHTTPRequestHandler):
         if not self._authorized(): return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         parsed = urllib.parse.urlparse(self.path); path = parsed.path
         try:
-            if path == "/api/health": return self._json(200, {"ok": True, "version": APP_VERSION, "backend": "online"})
+            if path == "/api/health":
+                try:
+                    from config import load_settings
+                    from health import collect
+                    payload = collect(self.store, self.sessions, load_settings())
+                    return self._json(200, {"ok": True, "version": APP_VERSION, "backend": "online", "health": payload, "offline": payload.get("offline"), "interrupted_tasks": self.workspace.interrupted_tasks()})
+                except Exception as exc:
+                    return self._json(200, {"ok": False, "version": APP_VERSION, "backend": "online", "health_error": redact(str(exc))})
+            if path == "/api/system/health":
+                from config import load_settings
+                from health import collect
+                return self._json(200, {"health": collect(self.store, self.sessions, load_settings())})
+            if path == "/api/agents":
+                from agents.council import discover
+                return self._json(200, {"agents": discover()})
+            if path == "/api/models":
+                from config import load_settings
+                from models.router import model_status
+                return self._json(200, {"model": model_status(load_settings())})
+            if path == "/api/settings":
+                from config import load_settings
+                return self._json(200, {"settings": load_settings()})
+            if path == "/api/setup":
+                from config import load_settings
+                from health import setup_checks
+                return self._json(200, {"setup": setup_checks(self.store, load_settings())})
+            if path == "/api/sandbox":
+                from sandbox import isolation_status
+                return self._json(200, {"sandbox": isolation_status()})
+            if path == "/api/secrets":
+                from secretstore import status as secret_status
+                return self._json(200, {"secrets": secret_status()})
+            if path.startswith("/api/operations/") and path.endswith("/stream"):
+                op_id = path.split("/")[-2]
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                for _ in range(300):
+                    op = self.store.get_operation(op_id)
+                    payload = json.dumps({"schema_version": SCHEMA_VERSION, "operation": op})
+                    self.wfile.write(f"data: {payload}\n\n".encode())
+                    self.wfile.flush()
+                    if not op or op.get("status") not in ("started", "running"):
+                        break
+                    time.sleep(0.2)
+                return
+            if path == "/api/findings":
+                return self._json(200, {"findings": self.workspace.list_findings()})
+            if path == "/api/learning/agents":
+                return self._json(200, {"scores": self.workspace.agent_scores()})
+            if path == "/api/tools/route":
+                from tools.router import route
+                query = urllib.parse.parse_qs(parsed.query)
+                return self._json(200, {"route": route((query.get("q") or [""])[0])})
+            if path == "/api/plugins":
+                from plugins.loader import list_manifests
+                return self._json(200, {"plugins": list_manifests()})
+            if path == "/api/tools/registry":
+                from tools.registry import by_category, inventory
+                return self._json(200, {"tools": inventory(), "categories": by_category()})
+            if path == "/api/reports/system":
+                from reports.engine import render_system
+                from tools.registry import inventory
+                query = urllib.parse.parse_qs(parsed.query)
+                fmt = (query.get("format") or ["json"])[0]
+                data, content_type, ext = render_system(fmt, detect_context(), inventory())
+                self.send_response(200)
+                self._headers(content_type)
+                self.send_header("Content-Disposition", f'attachment; filename="vortex-system.{ext}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if path == "/api/conversations":
+                query = urllib.parse.parse_qs(parsed.query)
+                return self._json(200, {"conversations": self.workspace.list_conversations((query.get("q") or [None])[0])})
+            if path.startswith("/api/conversations/") and path.endswith("/export"):
+                cid = path.split("/")[-2]
+                payload = {"schema_version": SCHEMA_VERSION, "export": self.workspace.export_conversation(cid)}
+                raw = (canonical(payload) + "\n").encode()
+                self.send_response(200)
+                self._headers("application/json")
+                self.send_header("Content-Disposition", f'attachment; filename="conversation-{cid[:12]}.json"')
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            if path.startswith("/api/conversations/"):
+                cid = path.rsplit("/", 1)[-1]
+                item = self.workspace.get_conversation(cid)
+                if not item:
+                    return self._json(404, {"error": {"code": "not_found", "message": "conversation not found"}})
+                return self._json(200, {"conversation": item, "messages": self.workspace.list_messages(cid)})
+            if path == "/api/tasks":
+                return self._json(200, {"tasks": self.workspace.list_tasks(), "interrupted": self.workspace.interrupted_tasks()})
+            if path.startswith("/api/tasks/"):
+                item = self.workspace.get_task(path.rsplit("/", 1)[-1])
+                return self._json(200 if item else 404, {"task": item} if item else {"error": {"code": "not_found", "message": "task not found"}})
+            if path == "/api/memory":
+                return self._json(200, {"memories": self.workspace.list_memories()})
+            if path == "/api/learning":
+                return self._json(200, {"experiences": self.workspace.list_experiences(), "procedures": self.workspace.list_procedures()})
+            if path == "/api/reports":
+                return self._json(200, {"reports": self.workspace.list_reports()})
+            if path.startswith("/api/reports/") and path.endswith("/download"):
+                report_id = path.split("/")[-2]
+                query = urllib.parse.parse_qs(parsed.query)
+                fmt = (query.get("format") or ["md"])[0]
+                report = self.workspace.get_report(report_id)
+                if not report:
+                    return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
+                operation = self.store.get_operation(report.get("operation_id") or "") or {"status": report.get("body", {}).get("status"), "commands": [], "id": report.get("operation_id"), "plan_id": "", "analysis": {"fact": report.get("body", {}).get("markdown", "")}}
+                plan = self.store.get_plan(operation.get("plan_id") or "") if operation.get("plan_id") else {}
+                task = self.workspace.get_task(report.get("task_id") or "") if report.get("task_id") else None
+                from reports.engine import render
+                data, content_type, ext = render(fmt, operation, plan or {}, task)
+                self.send_response(200)
+                self._headers(content_type)
+                self.send_header("Content-Disposition", f'attachment; filename="{report_id}.{ext}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if path == "/api/doctor": return self._json(200, {"doctor": detect_context()})
             if path == "/api/tools": return self._json(200, {"tools": [probe_executable(name) | {"family": meta["family"], "role": meta["role"]} for name, meta in TOOL_CATALOG.items()]})
             if path == "/api/adapters": return self._json(200, {"adapters": [{"id": adapter_id, **manifest, "tool_state": [probe_executable(tool)["state"] for tool in manifest["tool"].split("+") if tool != "multiple"]} for adapter_id, manifest in ADAPTER_MANIFESTS.items()]})
@@ -2009,7 +2219,34 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return self._json(200 if session else 404, {"session": session} if session else {"error": {"code": "not_found", "message": "session not found"}})
             if path == "/api/artifacts": return self._json(200, {"artifacts": self.store.list_artifacts()})
             if path == "/api/history": return self._json(200, {"history": self.store.list_history()})
-            if path == "/api/engagements": return self._json(200, {"engagements": self.store.list_engagements()})
+            if path == "/api/engagements":
+                items = [self.workspace.enrich_engagement(item) for item in self.store.list_engagements()]
+                return self._json(200, {"engagements": items})
+            if path.startswith("/api/agents/") and path.endswith("/install"):
+                from agents.install import proposal
+                return self._json(200, {"install": proposal(path.split("/")[-2])})
+            if path.startswith("/api/reports/assessment/"):
+                from reports.assessment import as_operation_view, build
+                from reports.engine import render
+                eng_id = path.rsplit("/", 1)[-1]
+                engagement = self.workspace.enrich_engagement(self.store.get_engagement(eng_id))
+                if not engagement:
+                    return self._json(404, {"error": {"code": "not_found", "message": "engagement not found"}})
+                findings = [item for item in self.workspace.list_findings() if item.get("engagement_id") == eng_id]
+                operations = self.workspace.operations_for_engagement(eng_id)
+                document = build(engagement, findings, operations)
+                query = urllib.parse.parse_qs(parsed.query)
+                fmt = (query.get("format") or ["json"])[0]
+                if fmt == "json":
+                    return self._json(200, {"report": document})
+                data, content_type, ext = render(fmt, as_operation_view(document), {"request": "assessment"}, {"id": eng_id})
+                self.send_response(200)
+                self._headers(content_type)
+                self.send_header("Content-Disposition", f'attachment; filename="assessment-{eng_id[:8]}.{ext}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if path == "/api/audit/verify": return self._json(200, {"audit": self.store.verify_audit()})
             if path == "/api/store/integrity": return self._json(200, {"integrity": self.store.integrity_check()})
             if path.startswith("/api/plans/"):
@@ -2093,7 +2330,13 @@ class VortexHandler(BaseHTTPRequestHandler):
                     raise ValueError("classes must be a list of non-empty strings")
                 expires = parse_expiry(body.get("expires_at"), default_seconds=24 * 3600)
                 item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": redact(str(body.get("name") or "Authorized assessment"))[:160], "authorization": redact(str(body.get("authorization") or "operator-declared authorization"))[:500], "targets": targets, "classes": [redact(x)[:80] for x in raw_classes[:20]], "status": "active"}
-                self.store.create_engagement(item); return self._json(201, {"engagement": item})
+                self.store.create_engagement(item)
+                excluded = body.get("excluded_targets") or []
+                if not isinstance(excluded, list):
+                    raise ValueError("excluded_targets must be a list")
+                self.workspace.save_engagement_scope(item["id"], [str(x) for x in excluded[:100]], str(body.get("environment") or ""), str(body.get("owner") or ""))
+                item = self.workspace.enrich_engagement(item)
+                return self._json(201, {"engagement": item})
             if path.startswith("/api/operations/") and path.endswith("/approve"):
                 operation_id = path.split("/")[-2]
                 operation = self.executor.approve_preflight(operation_id, bool(body.get("confirm")), body.get("approval_token"), body.get("preflight_digest"))
@@ -2106,6 +2349,94 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/feedback":
                 rating = int(body.get("rating", 0)); correction = redact(str(body.get("correction", "")))[:2000]
                 self.store.append_audit("feedback_recorded", {"operation_id": body.get("operation_id"), "rating": max(1, min(5, rating)), "correction": correction}); return self._json(201, {"saved": True})
+            if path == "/api/workspace/turn":
+                from config import load_settings
+                from orchestrate import run_turn
+                request = body.get("request")
+                if not isinstance(request, str) or not request.strip():
+                    raise ValueError("request must be a string")
+                settings = load_settings()
+                if body.get("offline") is True:
+                    settings["offline"] = True
+                result = run_turn(self.store, self.workspace, self.executor, request.strip(), cwd=body.get("cwd"), engagement_id=body.get("engagement_id"), conversation_id=body.get("conversation_id"), settings=settings, confirm=bool(body.get("confirm")), approval_token=body.get("approval_token"))
+                return self._json(200, result)
+            if path == "/api/conversations":
+                title = str(body.get("title") or "New conversation")
+                return self._json(201, {"conversation": self.workspace.create_conversation(title)})
+            if path.startswith("/api/conversations/") and path.endswith("/rename"):
+                item = self.workspace.rename_conversation(path.split("/")[-2], str(body.get("title") or ""))
+                if not item:
+                    return self._json(404, {"error": {"code": "not_found", "message": "conversation not found"}})
+                return self._json(200, {"conversation": item})
+            if path.startswith("/api/conversations/") and path.endswith("/archive"):
+                self.workspace.archive_conversation(path.split("/")[-2]); return self._json(200, {"archived": True})
+            if path.startswith("/api/conversations/") and path.endswith("/delete"):
+                self.workspace.delete_conversation(path.split("/")[-2]); return self._json(200, {"deleted": True})
+            if path.startswith("/api/conversations/") and "/edit" in path:
+                parts = path.split("/")
+                branch = self.workspace.edit_and_branch(parts[3], parts[5], str(body.get("content") or ""))
+                return self._json(201, {"conversation": branch, "messages": self.workspace.list_messages(branch["id"])})
+            if path.startswith("/api/plans/") and path.endswith("/reject"):
+                plan_id = path.split("/")[-2]
+                result = self.workspace.reject_task_plan(plan_id, body.get("task_id"), self.executor)
+                if not result.get("rejected") and not result.get("task"):
+                    return self._json(404, {"error": {"code": "not_found", "message": "plan not found or not rejectable"}})
+                return self._json(200, {"rejected": True, "plan_id": plan_id, "task": result.get("task")})
+            if path.startswith("/api/tasks/") and path.endswith("/pause"):
+                task = self.workspace.pause_task(path.split("/")[-2], self.executor)
+                if not task:
+                    return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                return self._json(200, {"task": task})
+            if path == "/api/secrets":
+                from secretstore import put
+                slot = str(body.get("slot") or "")
+                value = str(body.get("value") or "")
+                return self._json(200, {"secrets": put(slot, value)})
+            if path == "/api/control/stop-all":
+                from orchestrate import stop_all
+                result = stop_all(self.executor, self.sessions, self.workspace)
+                self.store.append_audit("stop_all", result)
+                return self._json(202, {"stop": result})
+            if path == "/api/settings":
+                from config import save_settings
+                return self._json(200, {"settings": save_settings(body if isinstance(body, dict) else {})})
+            if path == "/api/setup/complete":
+                from config import save_settings
+                return self._json(200, {"settings": save_settings({"first_run_complete": True})})
+            if path.startswith("/api/tasks/") and path.endswith("/resume"):
+                from config import load_settings
+                from orchestrate import run_turn
+                task = self.workspace.get_task(path.split("/")[-2])
+                if not task:
+                    return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=body.get("cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
+                return self._json(200, result)
+            if path.startswith("/api/tasks/") and path.endswith("/restart"):
+                from config import load_settings
+                from orchestrate import run_turn
+                task = self.workspace.get_task(path.split("/")[-2])
+                if not task:
+                    return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                self.workspace.update_task(task["id"], state="CANCELLED")
+                result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=body.get("cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
+                return self._json(200, result)
+            if path.startswith("/api/tasks/") and path.endswith("/delete"):
+                task = self.workspace.delete_task(path.split("/")[-2])
+                if not task:
+                    return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                return self._json(200, {"task": task})
+            if path.startswith("/api/operations/") and path.endswith("/complete-task"):
+                from orchestrate import finish_task
+                operation_id = path.split("/")[-2]
+                operation = self.store.get_operation(operation_id)
+                if not operation:
+                    return self._json(404, {"error": {"code": "not_found", "message": "operation not found"}})
+                plan = self.store.get_plan(operation.get("plan_id") or "") or {}
+                report = finish_task(self.workspace, str(body.get("task_id") or ""), operation, plan)
+                return self._json(200, {"operation": operation, "report": report, "task": self.workspace.get_task(str(body.get("task_id") or ""))})
+            if path == "/api/benchmark":
+                from benchmark import run_suite
+                return self._json(200, {"benchmark": run_suite(self.store, self.workspace, self.executor, body.get("cwd"))})
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
         except PermissionError as exc:
             return self._json(403, {"error": {"code": "confirmation_or_privilege", "message": str(exc), "exit_code": EXIT_CODES["confirmation_required"]}})
@@ -2121,8 +2452,12 @@ class VortexHandler(BaseHTTPRequestHandler):
 
 def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -> None:
     store = Store()
+    try:
+        from .workspace import Workspace
+    except ImportError:
+        from workspace import Workspace
     handler = VortexHandler
-    handler.store = store; handler.executor = ExecutionManager(store); handler.sessions = SessionManager(store); handler.frontend = Path(__file__).resolve().parent.parent / "frontend"; handler.token = token
+    handler.store = store; handler.executor = ExecutionManager(store); handler.sessions = SessionManager(store); handler.workspace = Workspace(store); handler.executor.workspace = handler.workspace; handler.frontend = Path(__file__).resolve().parent.parent / "frontend"; handler.token = token
     server = ThreadingHTTPServer((host, port), handler)
     def stop_on_term(_signum: int, _frame: Any) -> None:
         raise KeyboardInterrupt

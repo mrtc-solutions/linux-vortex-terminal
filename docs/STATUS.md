@@ -1,24 +1,40 @@
 # Current implementation status
 
-This project is a real Linux application. Production code uses real installed
-Linux tools and observed output only. Test doubles and fixture files exist only
-inside tests; they cannot become production findings or tool health.
+VORTEX 0.2.0 is a real Linux application. Production paths use installed host
+tools and observed output only. Test doubles exist only inside tests.
 
-## Priority status
+## Directive coverage
 
-| Priority | State | Remaining release gate |
-|---|---|---|
-| 1. Terminal workspace | Functional slice implemented | Full xterm compatibility, durable daemon attachment across sidecar restarts, tmux/SSH/non-TTY acceptance |
-| 2. Adapter hardening | Functional slice implemented | Deeper runtime-specific schemas, Nmap/HTTP acceptance, fuzzing and host coverage |
-| 3. Privileged Linux acceptance | Code and preflight implemented | Must run real package/service mutations only on a dedicated disposable Linux/Kali host |
-| 4. Persistence and release | Local backups, integrity, retention, reports, and `.deb` CLI build implemented | Schema upgrade migrations, scheduled retention, signed artifacts and install/upgrade/uninstall VM evidence |
-| 5. Optional intelligence | Deliberately disabled | Local model and worker implementations are optional; no LLM is required |
+| Area | State |
+|---|---|
+| Real execution / PTY / NL Linux (reviewed adapters) | Done + tested |
+| Guardian, risk policy, kill switch | Done + tested (word-level destructive match) |
+| Engagements / scope / excluded targets | Done + tested |
+| Tasks (VTX-*), resume, pause, reject, replan evaluation | Done + tested |
+| Conversations, branch on edit, export download, search | Done + tested |
+| Tool registry live probes | Done + tested |
+| Agent adapters + discovery | Done + tested; consult = REQUIRES CONFIGURATION |
+| Reports MD/HTML/JSON/PDF + system inventory | Done + tested |
+| Assessment reports scoped to one engagement | Done + tested |
+| Memory / procedures / experiences | Done + tested |
+| Health, first-run, offline, lab flag, developer mode | Done |
+| Workspace SEND path (`/api/workspace/turn`) | Done |
+| SSE operation stream + poll fallback | Done |
+| Secret slots (values never returned) | Done |
+| Internal tool router (not MCP-dependent) | Done |
+| Auto low-risk replan follow-up (max 2, Guardian gated, enriched scope) | Done |
+| Ollama loopback probe | Done; unavailable here |
+| Docker isolation **execution** | Probe only; runtime missing here |
+| Plugin code loading | Deliberately not implemented (manifests only) |
+| FastAPI / PostgreSQL / pgvector | Not started; SQLite monolith is intentional |
+| Nuclei/ffuf/nikto/amass/msf execution | Catalog probe only |
+| Full VORTEX self-pentest / signed release | Not a 1.0 gate pass |
 
-## Honest limitations
+## Remaining host / release gates (cannot be faked)
 
-The repository does not contain a VM, a second Linux host, an installed Docker/
-Podman runtime, an installed Nmap binary, or configured local model workers. It
-therefore does not claim those environment-specific acceptance gates passed.
-`tests/linux_acceptance.sh` is a guarded real-host checklist; it refuses to run
-privileged mutations unless the operator explicitly supplies the required
-environment variables on a disposable host.
+1. Reviewed non-interactive consult APIs for agents that are actually installed
+2. Disposable-VM apt/systemd mutation acceptance
+3. Full xterm + durable PTY attach across sidecar restarts
+4. Optional FastAPI/PostgreSQL only if packaging requires it
+5. Signed `.deb` and install/upgrade/uninstall VM evidence
+6. Deeper Nmap/HTTP/parser fuzzing on a host that has those tools

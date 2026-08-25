@@ -16,15 +16,22 @@ Pydantic handler must preserve the same route and authority boundary.
 
 ```text
 renderer or CLI
+  -> conversation + VTX task
   -> natural-language deterministic planner
+  -> Agent Council discovery (advisory; missing = UNAVAILABLE)
+  -> Guardian (independent risk/policy; not LLM-controlled)
   -> actual host and tool probes
   -> typed CommandSpec / Engagement gate
   -> policy + cwd + executable identity + freshness validation
-  -> exact approval token
+  -> exact approval token or policy auto low-risk
   -> Python ExecutionManager (shell=False, new session)
   -> bounded sanitized evidence + exit/signal
-  -> SQLite operation + hash-chain audit + analysis
+  -> objective evaluation / optional replan proposal
+  -> SQLite operation + hash-chain audit + report + memory
 ```
+
+SQLite WAL remains the local store. PostgreSQL/FastAPI are not required for
+this release and were not introduced as unused infrastructure.
 
 An optional model and local workers may propose structured candidates later. They
 never get process access, scope authority, policy access, or a network transport

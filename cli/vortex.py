@@ -72,7 +72,7 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
@@ -220,13 +220,22 @@ def main(argv=None):
     parser.add_argument('--yes', action='store_true', help='skip the interactive prompt only for a policy-valid plan')
     parser.add_argument('--format', choices=('text', 'json', 'md'), default='text', help='output format')
     parser.add_argument('--profile', choices=('safe', 'standard', 'expert'), default='safe', help='policy friction profile')
-    parser.add_argument('--version', action='version', version='vortex 0.1.0')
+    parser.add_argument('--version', action='version', version='vortex 0.2.0')
     sub = parser.add_subparsers(dest='subcommand')
     for name in ('ask', 'plan'):
         p = sub.add_parser(name); p.add_argument('request')
     sub.add_parser('doctor')
     sub.add_parser('tools')
     sub.add_parser('adapters')
+    sub.add_parser('health')
+    sub.add_parser('agents')
+    tk = sub.add_parser('tasks'); tk.add_argument('action', choices=['list','show','pause','reject'], nargs='?', default='list'); tk.add_argument('task_id', nargs='?')
+    sub.add_parser('memory')
+    sub.add_parser('learning')
+    conv = sub.add_parser('conversations'); conv.add_argument('action', choices=['list','show','export'], nargs='?', default='list'); conv.add_argument('conversation_id', nargs='?')
+    sub.add_parser('sandbox')
+    sub.add_parser('plugins')
+    sub.add_parser('benchmark')
     art = sub.add_parser('artifact'); art.add_argument('action', choices=['inspect','analyze'], nargs='?', default='inspect'); art.add_argument('path'); art.add_argument('--type', choices=['auto','nmap-xml','http-headers','text'], default='auto')
     b = sub.add_parser('backup'); b.add_argument('path'); b.add_argument('--force', action='store_true')
     db = sub.add_parser('db'); db.add_argument('action', choices=['integrity'], nargs='?', default='integrity')
@@ -252,6 +261,42 @@ def main(argv=None):
     store = Store()
     try:
         if args.subcommand == 'doctor': emit({'doctor': detect_context()}, args.as_json); return EXIT_CODES['success']
+        if args.subcommand == 'health':
+            from backend.health import collect
+            from backend.config import load_settings
+            emit({'health': collect(store, None, load_settings())}, args.as_json); return 0
+        if args.subcommand == 'agents':
+            from backend.agents.council import discover
+            emit({'agents': discover()}, args.as_json); return 0
+        if args.subcommand == 'tasks':
+            from backend.workspace import Workspace
+            workspace = Workspace(store)
+            if getattr(args, 'action', 'list') == 'show' and getattr(args, 'task_id', None):
+                emit({'task': workspace.get_task(args.task_id)}, args.as_json); return 0
+            emit({'tasks': workspace.list_tasks(), 'interrupted': workspace.interrupted_tasks()}, args.as_json); return 0
+        if args.subcommand == 'memory':
+            from backend.workspace import Workspace
+            emit({'memories': Workspace(store).list_memories()}, args.as_json); return 0
+        if args.subcommand == 'learning':
+            from backend.workspace import Workspace
+            ws = Workspace(store)
+            emit({'experiences': ws.list_experiences(), 'procedures': ws.list_procedures()}, args.as_json); return 0
+        if args.subcommand == 'sandbox':
+            from backend.sandbox import isolation_status
+            emit({'sandbox': isolation_status()}, args.as_json); return 0
+        if args.subcommand == 'plugins':
+            from backend.plugins.loader import list_manifests
+            emit({'plugins': list_manifests()}, args.as_json); return 0
+        if args.subcommand == 'benchmark':
+            from backend.benchmark import run_suite
+            from backend.workspace import Workspace
+            emit({'benchmark': run_suite(store, Workspace(store), ExecutionManager(store), args.cwd)}, args.as_json); return 0
+        if args.subcommand == 'conversations':
+            from backend.workspace import Workspace
+            ws = Workspace(store)
+            if args.action in ('show', 'export') and args.conversation_id:
+                emit({'export' if args.action == 'export' else 'conversation': ws.export_conversation(args.conversation_id)}, args.as_json); return 0
+            emit({'conversations': ws.list_conversations()}, args.as_json); return 0
         if args.subcommand == 'tools': emit({'tools': [{**probe_executable(n), 'family': m['family'], 'role': m['role']} for n,m in __import__('backend.vortex_backend', fromlist=['TOOL_CATALOG']).TOOL_CATALOG.items()]}, args.as_json); return 0
         if args.subcommand == 'adapters':
             items = []
