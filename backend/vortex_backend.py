@@ -309,6 +309,38 @@ def minimal_env(tty: bool, additions: dict[str, str] | None = None) -> dict[str,
     return env
 
 
+def systemd_user_bus_state() -> dict[str, Any]:
+    """Probe the current user's real systemd user bus without exposing env output."""
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+    bus = runtime / "bus"
+    result: dict[str, Any] = {"state": "absent", "socket": str(bus), "probe_exit": None}
+    try:
+        if not stat.S_ISSOCK(bus.stat().st_mode):
+            return result
+    except OSError:
+        return result
+    systemctl = probe_executable("systemctl")
+    if systemctl.get("state") != "installed":
+        result["state"] = "unavailable"
+        return result
+    env = minimal_env(False)
+    env["XDG_RUNTIME_DIR"] = str(runtime)
+    env["DBUS_SESSION_BUS_ADDRESS"] = os.environ.get("DBUS_SESSION_BUS_ADDRESS", f"unix:path={bus}")
+    try:
+        probe = subprocess.run([systemctl["realpath"], "--user", "--no-pager", "is-system-running"], capture_output=True, text=True, timeout=3, env=env)
+        result["probe_exit"] = probe.returncode
+        error_text = sanitize(probe.stderr or "")
+        if "failed to connect to bus" in error_text.lower() or "no medium found" in error_text.lower():
+            result["state"] = "unavailable"
+            result["error"] = error_text[:240]
+        else:
+            result["state"] = "available"
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        result["state"] = "unavailable"
+        result["error"] = redact(str(exc))[:240]
+    return result
+
+
 def detect_context() -> dict[str, Any]:
     os_release = read_os_release()
     cgroup = "unknown"
@@ -326,6 +358,7 @@ def detect_context() -> dict[str, Any]:
         except OSError:
             pass
     systemd = bool(shutil.which("systemctl")) and Path("/run/systemd/system").exists()
+    user_bus = systemd_user_bus_state()
     kernel_text = os.uname().release.lower()
     wsl = bool(os.environ.get("WSL_INTEROP")) or "microsoft" in kernel_text
     distro_id = os_release.get("ID", "unknown").lower()
@@ -356,6 +389,7 @@ def detect_context() -> dict[str, Any]:
         "confinement": {"flatpak": bool(os.environ.get("FLATPAK_ID")), "snap": bool(os.environ.get("SNAP"))},
         "pid1": shutil.which("ps") and _pid1_name(),
         "systemd": systemd,
+        "systemd_context": {"system_bus": "available" if systemd else "unavailable", "user_bus": user_bus},
         "cgroup": cgroup,
         "package_manager": {name: probe_executable(name)["state"] for name in ("apt-get", "apt-cache", "dpkg-query", "dpkg", "apt-mark", "sudo")},
         "model": {"state": "disabled by default", "endpoint": None},
@@ -1054,10 +1088,11 @@ def parse_service(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def parse_systemd_mutation(text: str) -> tuple[str, str] | None:
+def parse_systemd_mutation(text: str) -> tuple[str, str, bool] | None:
     if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
         raise PolicyError("systemd request contains unsafe shell syntax")
-    match = re.search(r"\b(restart|start|stop|enable|disable)\s+([^\s,;|&`$()<>]+)", text, re.I)
+    user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", text, re.I))
+    match = re.search(r"(?:--user\s+)?\b(restart|start|stop|enable|disable)\s+(?:--user\s+)?([^\s,;|&`$()<>]+)", text, re.I)
     if not match:
         return None
     action, raw_unit = match.group(1).lower(), match.group(2)
@@ -1069,7 +1104,7 @@ def parse_systemd_mutation(text: str) -> tuple[str, str] | None:
         raise PolicyError("invalid systemd unit name; path-like units are not allowed")
     if not UNIT_RE.fullmatch(unit):
         raise PolicyError("invalid systemd unit name")
-    return action, unit
+    return action, unit, user_mode
 
 
 def plan_digest(plan: dict[str, Any]) -> str:
@@ -1192,21 +1227,26 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             status = "planned"
             notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
     elif parse_systemd_mutation(lower):
-        action, unit = parse_systemd_mutation(lower) or ("", "")
+        action, unit, user_mode = parse_systemd_mutation(lower) or ("", "", False)
         kind = "systemd_mutation"
         risk = "high"
-        authorization = "privileged service operation"
+        authorization = "user-scoped service operation" if user_mode else "privileged service operation"
         inverse = {"start": "stop", "stop": "start", "enable": "disable", "disable": "enable"}.get(action)
         rollback = {"available": bool(inverse), "strategy": "fresh-plan-required", "inverse": [inverse, unit] if inverse else [], "warning": "Restart has no automatic inverse; inspect service state and create a fresh plan." if not inverse else "Inverse action still requires a fresh plan and confirmation."}
-        if not detect_context()["systemd"] or probe_executable("systemctl")["state"] != "installed":
+        context = detect_context()
+        user_bus_available = context.get("systemd_context", {}).get("user_bus", {}).get("state") == "available"
+        systemd_available = user_bus_available if user_mode else context["systemd"]
+        if not systemd_available or probe_executable("systemctl")["state"] != "installed":
             status = "unavailable"
-            missing.append("systemd")
-            notes.append("Systemd is not usable in this context; no service mutation was created.")
+            missing.append("systemd-user-bus" if user_mode else "systemd")
+            notes.append("The requested systemd context is not usable; no service mutation was created.")
         else:
-            specs.append(adapter_command("linux.systemd.mutate", "systemctl", ["systemctl", "show", unit, "--property=Id,Description,LoadState,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Freshly verify the description, active state, and persistence state of {unit} before mutation.", privilege="user"))
-            specs.append(adapter_command("linux.systemd.mutate", "systemctl", ["systemctl", "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {action} operation on {unit}; no user bus or sudo escalation is inferred.", privilege="root-required"))
+            prefix = ["systemctl", "--user"] if user_mode else ["systemctl"]
+            privilege = "user" if user_mode else "root-required"
+            specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "show", unit, "--property=Id,Description,LoadState,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Freshly verify the {('user ' if user_mode else '')}description, active state, and persistence state of {unit} before mutation.", privilege="user"))
+            specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {('user ' if user_mode else '')}{action} operation on {unit}; no sudo escalation is inferred.", privilege=privilege))
             status = "planned"
-            notes += [f"Fresh systemd state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
+            notes += [f"Fresh systemd {('user-bus ' if user_mode else '')}state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
     elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "curl", "http headers", "web application", "enumerate the web", "scan ")):
         kind = "authorized_engagement"
         risk = "high"
@@ -1279,12 +1319,18 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     elif parse_service(lower):
         unit = parse_service(lower)
         assert unit is not None
-        if (not detect_context()["systemd"] or any(probe_executable(tool)["state"] != "installed" for tool in ("systemctl", "journalctl"))):
-            status = "unavailable"; missing.extend([tool for tool in ("systemctl", "journalctl") if probe_executable(tool)["state"] != "installed"]); notes.append("Systemd is not usable in this context; no service command was run.")
+        user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", lower))
+        context = detect_context()
+        user_bus_available = context.get("systemd_context", {}).get("user_bus", {}).get("state") == "available"
+        systemd_available = user_bus_available if user_mode else context["systemd"]
+        if (not systemd_available or any(probe_executable(tool)["state"] != "installed" for tool in ("systemctl", "journalctl"))):
+            status = "unavailable"; missing.extend([tool for tool in ("systemctl", "journalctl") if probe_executable(tool)["state"] != "installed"]); notes.append("The requested systemd context is not usable; no service command was run.")
         else:
+            prefix = ["systemctl", "--user"] if user_mode else ["systemctl"]
+            journal_prefix = ["journalctl", "--user"] if user_mode else ["journalctl"]
             specs.extend([
-                adapter_command("linux.systemd.inspect", "systemctl", ["systemctl", "show", unit, "--property=Id,Description,LoadState,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Read the factual state and persistence of {unit}."),
-                adapter_command("linux.systemd.inspect", "journalctl", ["journalctl", "-u", unit, "-n", "80", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation=f"Read the last bounded journal lines for {unit}; no service mutation is requested."),
+                adapter_command("linux.systemd.inspect", "systemctl", [*prefix, "show", unit, "--property=Id,Description,LoadState,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Read the factual {('user ' if user_mode else '')}state and persistence of {unit}."),
+                adapter_command("linux.systemd.inspect", "journalctl", [*journal_prefix, "-u", unit, "-n", "80", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation=f"Read the last bounded {('user ' if user_mode else '')}journal lines for {unit}; no service mutation is requested."),
             ])
             status = "planned"; notes.append("Read-only systemd and journal inspection. Restart/enable/disable require a separate fresh plan and confirmation.")
     elif any(word in lower for word in ("git status", "repository status", "git hygiene", "check my repo")):

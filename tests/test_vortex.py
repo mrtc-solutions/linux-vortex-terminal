@@ -14,7 +14,7 @@ from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
 from backend.facts import parse_apt_preflight, parse_package_facts, parse_systemd_show
 from backend.vortex_backend import (
     ExecutionManager, PolicyError, SessionManager, Store, build_plan, command_spec,
-    apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, probe_executable, plan_digest, target_in_engagement,
+    apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, parse_systemd_mutation, probe_executable, plan_digest, systemd_user_bus_state, target_in_engagement,
 )
 
 
@@ -339,6 +339,17 @@ The following packages will be upgraded:
         query = next(command for command in plan['commands'] if command['executable'] == 'dpkg-query' and '-W' in command['argv'])
         self.assertTrue(query['allow_failure'])
         self.assertTrue(any(command['executable'] == 'apt-get' and '-s' in command['argv'] for command in plan['commands']))
+
+    def test_systemd_user_context_is_detected_without_fallback_to_root(self):
+        self.assertEqual(parse_systemd_mutation('restart --user demo.service'), ('restart', 'demo.service', True))
+        bus = systemd_user_bus_state()
+        self.assertIn(bus['state'], ('available', 'absent', 'unavailable'))
+        plan = build_plan(self.store, 'restart --user demo.service', self.tmp.name)
+        if plan['status'] == 'planned':
+            self.assertEqual(plan['commands'][0]['argv'][1:3], ['--user', 'show'])
+            self.assertEqual(plan['commands'][1]['privilege'], 'user')
+        else:
+            self.assertEqual(plan['commands'], [])
 
     def test_systemd_mutation_is_guarded_and_unit_typed(self):
         plan = build_plan(self.store, 'restart nginx', self.tmp.name)

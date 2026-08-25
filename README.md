@@ -61,7 +61,7 @@ VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
 | Full PTY tabs/panes and shell integration | Planned |
 | Scoped nmap/curl planning and evidence parsers | Implemented + tested; tool availability varies |
 | Real apt preflight, impact parsing, and guarded package plans | Implemented + tested; Linux VM mutation gate remains |
-| Systemd state parsing and guarded two-step mutation plans | Implemented + tested; host context varies |
+| Systemd state parsing, user-bus detection, and guarded plans | Implemented + tested; host context varies |
 | Docker/Podman read-only container inspection | Implemented + tested; runtime availability varies |
 | SSH effective-config diagnostics | Implemented + tested; no connection or key read |
 | Nuclei/content-discovery active adapters | Planned; reviewed templates/wordlists required |

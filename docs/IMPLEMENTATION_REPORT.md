@@ -48,7 +48,8 @@
   output caps, cancellation, offline mode, URL/port scope, plan tampering, and
   exact approval-token enforcement, Nmap XML/HTTP parsing, malformed artifact
   handling, artifact size/symlink boundaries, guarded apt/systemd plan
-  construction, and apt/systemd output-fact parsing.
+  construction, apt/systemd output-fact parsing, container absence, SSH config,
+  and systemd user-bus detection.
 
 ## Commands run
 

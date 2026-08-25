@@ -476,9 +476,10 @@ explicit operator-direct path retain full Linux capability. Tests use planning
 and policy checks only; no shared-host apt or service mutation is run.
 
 Remaining Priority 3 work is richer held/reboot/incomplete-state reporting,
-lock behavior on supported Linux, systemd user-bus semantics, fresh privileged
-disposable-VM install/remove and service acceptance tests, interactive privilege
-flows, and rollback/recovery metadata.
+lock behavior on supported Linux, fresh privileged disposable-VM install/remove
+and service acceptance tests, interactive privilege flows, and rollback/recovery
+metadata. User-bus detection and strict `systemctl --user` routing are now
+implemented.
 
 ### Priority 3 — apt/systemd factual result parsing
 
