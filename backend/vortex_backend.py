@@ -2176,6 +2176,14 @@ class VortexHandler(BaseHTTPRequestHandler):
                 from config import load_settings
                 from health import setup_checks
                 return self._json(200, {"setup": setup_checks(self.store, load_settings())})
+            if path == "/api/dependencies":
+                deps = _load("dependencies")
+                return self._json(200, {"dependencies": deps.inventory()})
+            if path == "/api/dependencies/proposal":
+                deps = _load("dependencies")
+                query = urllib.parse.parse_qs(parsed.query)
+                item_id = (query.get("id") or [""])[0]
+                return self._json(200, {"install": deps.proposal_for(item_id)})
             if path == "/api/sandbox":
                 from sandbox import isolation_status
                 return self._json(200, {"sandbox": isolation_status()})
@@ -2504,6 +2512,18 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/setup/complete":
                 from config import save_settings
                 return self._json(200, {"settings": save_settings({"first_run_complete": True})})
+            if path == "/api/dependencies/plan":
+                deps = _load("dependencies")
+                item_id = str(body.get("id") or "")
+                proposal = deps.proposal_for(item_id)
+                if proposal.get("installed") or proposal.get("method") != "apt" or not proposal.get("plan_request"):
+                    return self._json(200, {"install": proposal, "planned": False, "auto_install": False})
+                result = _load("orchestrate").run_turn(
+                    self.store, self.workspace, self.executor, proposal["plan_request"],
+                    cwd=body.get("cwd"), engagement_id=None, conversation_id=body.get("conversation_id"),
+                    settings=_load("config").load_settings(),
+                )
+                return self._json(200, {"install": proposal, "planned": True, "auto_install": False, **result})
             if path.startswith("/api/tasks/") and path.endswith("/resume"):
                 from config import load_settings
                 from orchestrate import run_turn

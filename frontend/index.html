@@ -16,7 +16,19 @@
       <h1>Welcome to VORTEX</h1>
       <p>These checks use the live host. Missing optional components stay unavailable; nothing is silently installed.</p>
       <div id="setup-steps" class="setup-steps"></div>
-      <div class="form-foot"><button class="primary-button" id="complete-setup">CONTINUE</button></div>
+      <div class="form-foot"><button class="secondary-button" id="open-deps-from-setup">MISSING DEPENDENCIES</button><button class="primary-button" id="complete-setup">CONTINUE</button></div>
+    </div>
+  </div>
+  <div id="dep-window" class="dep-window" hidden>
+    <div class="dep-card">
+      <div class="panel-head">
+        <div><span class="panel-kicker">LIVE HOST PROBES</span><h2>Missing dependencies</h2></div>
+        <button class="close-button" id="close-deps" aria-label="Close">×</button>
+      </div>
+      <p class="dep-intro">Installed means probed on this host. INSTALL builds a reviewed apt plan or shows an operator-controlled proposal. VORTEX never silently installs software and never captures a sudo password.</p>
+      <div id="dep-summary" class="audit-strip">Probing host…</div>
+      <div id="dep-list" class="dep-list"></div>
+      <div id="dep-detail" class="dep-detail" hidden></div>
     </div>
   </div>
   <canvas id="matrix" aria-hidden="true"></canvas>
@@ -53,7 +65,7 @@
     <main class="main-content">
       <header class="topbar">
         <div class="breadcrumb"><span class="crumb-dim">WORKSPACE</span><span class="slash">/</span><span id="view-title">OVERVIEW</span></div>
-        <div class="top-actions"><div class="backend-status" id="backend-status"><span class="status-dot"></span><span id="backend-label">BACKEND ONLINE</span></div><button class="secondary-button danger-btn" id="stop-all" title="Stop all VORTEX-controlled activity">STOP ALL</button><button class="icon-button" id="theme-toggle" title="Toggle matrix rain" aria-label="Toggle matrix rain">◌</button><div class="avatar">OP</div></div>
+        <div class="top-actions"><div class="backend-status" id="backend-status"><span class="status-dot"></span><span id="backend-label">BACKEND ONLINE</span></div><button class="secondary-button" id="open-deps" title="Show missing host dependencies">DEPENDENCIES</button><button class="secondary-button danger-btn" id="stop-all" title="Stop all VORTEX-controlled activity">STOP ALL</button><button class="icon-button" id="theme-toggle" title="Toggle matrix rain" aria-label="Toggle matrix rain">◌</button><div class="avatar">OP</div></div>
       </header>
 
       <div class="content" id="content">
@@ -101,7 +113,7 @@
 
         <section class="view" id="view-system"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>FACTUAL HEALTH CHECKS</div><h1>System health</h1><p>Every status comes from a live probe. Missing subsystems are reported, not invented.</p></div><button class="secondary-button" id="refresh-health">REFRESH ↻</button></div><div class="tool-grid" id="health-grid"></div></section>
 
-        <section class="view" id="view-tools"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>FACTUAL HOST PROBES</div><h1>Tool health</h1><p>Installed means probed on this host. Catalog entries never become findings or fake integrations.</p></div><button class="secondary-button" id="refresh-tools">REFRESH PROBES ↻</button></div><div class="tool-grid" id="tool-grid"></div></section>
+        <section class="view" id="view-tools"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>FACTUAL HOST PROBES</div><h1>Tool health</h1><p>Installed means probed on this host. Catalog entries never become findings or fake integrations.</p></div><div><button class="secondary-button" id="open-deps-from-tools">MISSING</button> <button class="secondary-button" id="refresh-tools">REFRESH PROBES ↻</button></div></div><div class="tool-grid" id="tool-grid"></div></section>
 
         <section class="view" id="view-settings"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>LOCAL PREFERENCES</div><h1>Settings</h1><p>Vortex defaults to offline, local, redacted, and confirmation-first.</p></div></div><div class="settings-grid"><section class="panel setting-card"><div class="setting-icon cyan-bg">◌</div><div><h2>Matrix rain</h2><p>Decorative binary rain behind the workspace. It never receives input or overlays terminal output.</p></div><select id="matrix-setting"><option value="medium">Medium</option><option value="low">Low</option><option value="high">High</option><option value="off">Off</option></select></section><section class="panel setting-card"><div class="setting-icon amber-bg">⌁</div><div><h2>Execution policy</h2><p>Safe always confirms. Standard may auto-run low-risk local diagnostics. Expert never bypasses Guardian or audit.</p></div><select id="policy-setting"><option value="safe">Safe</option><option value="standard">Standard</option><option value="expert">Expert</option></select></section><section class="panel setting-card"><div class="setting-icon green-bg">✓</div><div><h2>Privacy mode</h2><p>Local-only by default. Hybrid/cloud never send terminal output unless you change this and configure a provider.</p></div><select id="privacy-setting"><option value="local">Local-only</option><option value="hybrid">Hybrid</option><option value="cloud">Cloud</option></select></section><section class="panel setting-card"><div class="setting-icon violet-bg">⌘</div><div><h2>Developer mode</h2><p>Shows Guardian decisions, task IDs, and adapter health in the plan card.</p></div><select id="dev-setting"><option value="off">Off</option><option value="on">On</option></select></section><section class="panel setting-card"><div class="setting-icon amber-bg">⌁</div><div><h2>Local model</h2><p>Ollama on loopback only. Cloud providers stay disabled unless explicitly configured.</p></div><span class="badge badge-muted" id="model-badge">DISABLED</span></section><section class="panel setting-card"><div class="setting-icon amber-bg">⌁</div><div><h2>Offline mode</h2><p>Blocks outbound network plans and external model calls. Local tools and memory remain available.</p></div><select id="offline-setting"><option value="off">On-network allowed</option><option value="on">Offline</option></select></section>
 <section class="panel setting-card"><div class="setting-icon cyan-bg">◌</div><div><h2>Lab mode</h2><p>Marks this workspace as an authorized laboratory. External targets still require an engagement.</p></div><select id="lab-setting"><option value="off">Off</option><option value="on">Lab</option></select></section>

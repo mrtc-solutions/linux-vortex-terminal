@@ -369,6 +369,66 @@
         ['secret-ollama', 'secret-openai', 'secret-anthropic'].forEach(id => { if ($(id)) $(id).value = ''; });
       } catch (e) { toast(e.message, true); }
     });
+    async function loadDependencies() {
+      const host = $('dep-window');
+      const list = $('dep-list');
+      const summary = $('dep-summary');
+      if (!host || !list) return;
+      host.hidden = false;
+      list.textContent = 'Probing this host…';
+      try {
+        const data = await api('/api/dependencies');
+        const deps = data.dependencies || {};
+        const missing = deps.missing || [];
+        const counts = deps.counts || {};
+        if (summary) summary.textContent = `${counts.installed || 0}/${counts.total || 0} present · ${counts.missing || 0} missing · auto_install=${deps.auto_install === false ? 'no' : 'no'}`;
+        if (!missing.length) {
+          list.innerHTML = '<div class="empty-inline">No missing catalog items on this host.</div>';
+          return;
+        }
+        list.innerHTML = missing.map(item => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')}</small></div><span class="badge ${item.required ? 'badge-red' : 'badge-muted'}">${item.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="text-button" data-dep-install="${esc(item.id)}">INSTALL</button></div>`).join('');
+        list.querySelectorAll('[data-dep-install]').forEach(btn => btn.addEventListener('click', () => window.openDependency(btn.dataset.depInstall)));
+      } catch (e) { toast(e.message, true); }
+    }
+
+    window.openDependencies = loadDependencies;
+    window.openDependency = async function (itemId) {
+      const host = $('dep-window');
+      const detail = $('dep-detail');
+      if (host) host.hidden = false;
+      if (!detail) return;
+      detail.hidden = false;
+      detail.textContent = 'Loading proposal…';
+      try {
+        const data = await api('/api/dependencies/proposal?id=' + encodeURIComponent(itemId));
+        const item = data.install || {};
+        const commands = (item.commands || []).map(line => esc(line)).join('\n');
+        const canPlan = item.method === 'apt' && item.plan_request && !item.installed;
+        detail.innerHTML = `<strong>${esc(item.title || itemId)}</strong><p>${esc(item.message || '')}</p><p>Source: ${esc(item.source || 'n/a')} · License: ${esc(item.license || 'n/a')}</p><pre>${commands || 'No command is executed by VORTEX.'}</pre>${canPlan ? `<div class="form-foot"><button class="primary-button" id="dep-plan">CREATE APT PLAN</button></div>` : '<p class="form-note">This item is operator-installed. VORTEX will not download it.</p>'}`;
+        $('dep-plan')?.addEventListener('click', async () => {
+          try {
+            const planned = await api('/api/dependencies/plan', { method: 'POST', body: { id: itemId, cwd: state.doctor?.cwd, conversation_id: state.conversationId } });
+            if (planned.planned && planned.plan) {
+              host.hidden = true;
+              state.conversationId = planned.conversation?.id || state.conversationId;
+              state.task = planned.task;
+              state.plan = planned.plan;
+              setView('overview');
+              if (origRenderPlan) origRenderPlan(planned.plan);
+              toast('Reviewed apt plan ready. Approve it only if you administer this host.');
+            } else {
+              toast(planned.install?.message || 'No automatic install is available.');
+            }
+          } catch (e) { toast(e.message, true); }
+        });
+      } catch (e) { toast(e.message, true); }
+    };
+
+    $('open-deps')?.addEventListener('click', loadDependencies);
+    $('open-deps-from-setup')?.addEventListener('click', loadDependencies);
+    $('open-deps-from-tools')?.addEventListener('click', loadDependencies);
+    $('close-deps')?.addEventListener('click', () => { if ($('dep-window')) $('dep-window').hidden = true; });
+
     api('/api/models').then(data => {
       const local = data.model?.local || {};
       if ($('model-badge')) {

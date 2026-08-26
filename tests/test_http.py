@@ -117,6 +117,25 @@ class HttpApiTests(unittest.TestCase):
         self.assertTrue(events["events"])
         self.assertEqual(events["task"]["id"], turn["task"]["id"])
 
+    def test_dependencies_inventory_and_agent_proposal(self):
+        data = self._json("GET", "/api/dependencies")
+        deps = data["dependencies"]
+        self.assertFalse(deps["auto_install"])
+        self.assertGreater(deps["counts"]["missing"], 0)
+        self.assertTrue(any(item["id"] == "agent:cai" for item in deps["missing"]))
+        proposal = self._json("GET", "/api/dependencies/proposal?id=agent:cai")
+        self.assertFalse(proposal["install"]["auto_install"])
+        self.assertTrue(proposal["install"].get("message"))
+        planned = self._json("POST", "/api/dependencies/plan", {"id": "agent:cai", "cwd": self.tmp.name})
+        self.assertFalse(planned["planned"])
+        self.assertFalse(planned["auto_install"])
+        nmap = self._json("GET", "/api/dependencies/proposal?id=tool:nmap")
+        if not nmap["install"].get("installed"):
+            apt = self._json("POST", "/api/dependencies/plan", {"id": "tool:nmap", "cwd": self.tmp.name})
+            self.assertTrue(apt["planned"])
+            self.assertEqual(apt["plan"]["kind"], "package_operation")
+            self.assertFalse(apt["auto_install"])
+
     def test_secret_values_never_returned(self):
         saved = self._json("POST", "/api/secrets", {"slot": "ollama_token", "value": "sk-never-echo"})
         self.assertIsNone(saved["secrets"]["values"])
