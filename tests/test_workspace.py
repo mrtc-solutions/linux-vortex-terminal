@@ -140,6 +140,10 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.workspace.get_task(task["id"])["state"], "CANCELLED")
 
+    def test_cli_deps_lists_inventory(self):
+        from cli import vortex as vortex_cli
+        self.assertEqual(vortex_cli.main(["--json", "deps"]), 0)
+
     def test_core_tools_map_to_apt_packages(self):
         from backend.dependencies import APT_PACKAGES, proposal_for
         self.assertEqual(APT_PACKAGES["ss"], "iproute2")
@@ -213,8 +217,12 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_agents_never_fabricate_success(self):
         items = discover()
-        self.assertEqual(len(items), 9)
-        for item in items:
+        self.assertGreaterEqual(len(items), 10)
+        local = next(item for item in items if item["id"] == "vortex-local")
+        self.assertTrue(local["health"]["healthy"])
+        externals = [item for item in items if item["id"] != "vortex-local"]
+        self.assertEqual(len(externals), 9)
+        for item in externals:
             self.assertIn(item["status"], {"missing", "installed"})
             if not item["health"]["healthy"]:
                 self.assertEqual(item["status"], "missing")
@@ -222,6 +230,7 @@ class WorkspaceTests(unittest.TestCase):
         plan = {"kind": "authorized_engagement", "commands": [{"display": "nmap"}]}
         result = consult(plan, {"id": "VTX-test"})
         self.assertTrue(result["critic"]["verdict"] in {"uncertain", "advisory_only"})
+        self.assertIn("vortex-local", result["selected"])
         for row in result["consultations"]:
             self.assertNotEqual(row.get("state"), "succeeded")
             self.assertIsNone(row.get("result"))

@@ -136,6 +136,15 @@ class HttpApiTests(unittest.TestCase):
             self.assertEqual(apt["plan"]["kind"], "package_operation")
             self.assertFalse(apt["auto_install"])
 
+    def test_turn_includes_observation_and_episode_route(self):
+        turn = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": self.tmp.name})
+        self.assertTrue(turn.get("observation"))
+        self.assertTrue(turn["observation"].get("untrusted_output"))
+        self.assertIn("vortex-local", (turn.get("council") or {}).get("selected") or [])
+        episode = self._json("GET", f"/api/tasks/{turn['task']['id']}/episode")
+        self.assertEqual(episode["task"]["id"], turn["task"]["id"])
+        self.assertIsNotNone(episode.get("observation"))
+
     def test_secret_values_never_returned(self):
         saved = self._json("POST", "/api/secrets", {"slot": "ollama_token", "value": "sk-never-echo"})
         self.assertIsNone(saved["secrets"]["values"])

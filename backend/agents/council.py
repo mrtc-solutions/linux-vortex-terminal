@@ -4,11 +4,11 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from . import cai, darkmoon, hackerai, halo, hexstrike, nebula, pentagi, pentestgpt, strix
+from . import cai, darkmoon, hackerai, halo, hexstrike, local, nebula, pentagi, pentestgpt, strix
 
 ADAPTERS = {
     module.ADAPTER.manifest.id: module.ADAPTER
-    for module in (hackerai, nebula, cai, pentestgpt, hexstrike, halo, pentagi, strix, darkmoon)
+    for module in (local, hackerai, nebula, cai, pentestgpt, hexstrike, halo, pentagi, strix, darkmoon)
 }
 
 
@@ -45,8 +45,10 @@ def select_agents(plan: dict[str, Any]) -> list[str]:
         preferred = ["cai", "nebula"]
     else:
         preferred = []
-    available = []
+    available = ["vortex-local"] if "vortex-local" in ADAPTERS else []
     for agent_id in preferred:
+        if agent_id == "vortex-local":
+            continue
         health = ADAPTERS[agent_id].health_check()
         if health.get("healthy"):
             available.append(agent_id)

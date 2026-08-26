@@ -121,7 +121,7 @@ def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str
         {"id": "git", "title": "Git", "ok": git_ok, "required": False, "detail": "installed" if git_ok else "absent"},
         {"id": "docker", "title": "Docker or Podman", "ok": docker, "required": False, "detail": health["components"]["docker"].get("probe")},
         {"id": "tools", "title": "Linux tools", "ok": tools_n > 0, "required": True, "detail": f"{tools_n} detected"},
-        {"id": "agents", "title": "AI agents", "ok": False, "required": False, "detail": f"{agents_n} available; missing agents stay UNAVAILABLE"},
+        {"id": "agents", "title": "AI agents", "ok": str(agents_n).split("/")[0] not in {"0", "None", ""}, "required": False, "detail": f"{agents_n} available; missing third-party agents stay UNAVAILABLE"},
         {"id": "models", "title": "Local model (Ollama)", "ok": ollama, "required": False, "detail": health["components"]["ollama"]["state"]},
         {"id": "database", "title": "Local database", "ok": db_ok, "required": True, "detail": "SQLite WAL + audit chain"},
         {"id": "policy", "title": "Security policy", "ok": True, "required": True, "detail": settings.get("profile") or "safe"},

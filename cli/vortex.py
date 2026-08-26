@@ -72,7 +72,7 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
@@ -235,6 +235,7 @@ def main(argv=None):
     conv = sub.add_parser('conversations'); conv.add_argument('action', choices=['list','show','export'], nargs='?', default='list'); conv.add_argument('conversation_id', nargs='?')
     sub.add_parser('sandbox')
     sub.add_parser('plugins')
+    sub.add_parser('deps')
     sub.add_parser('benchmark')
     art = sub.add_parser('artifact'); art.add_argument('action', choices=['inspect','analyze'], nargs='?', default='inspect'); art.add_argument('path'); art.add_argument('--type', choices=['auto','nmap-xml','http-headers','text'], default='auto')
     b = sub.add_parser('backup'); b.add_argument('path'); b.add_argument('--force', action='store_true')
@@ -300,6 +301,9 @@ def main(argv=None):
         if args.subcommand == 'plugins':
             from backend.plugins.loader import list_manifests
             emit({'plugins': list_manifests()}, args.as_json); return 0
+        if args.subcommand == 'deps':
+            from backend.dependencies import inventory
+            emit({'dependencies': inventory()}, args.as_json); return 0
         if args.subcommand == 'benchmark':
             from backend.benchmark import run_suite
             from backend.workspace import Workspace
