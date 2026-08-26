@@ -98,8 +98,12 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
 
 
 def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: dict[str, Any], executor: Any = None, store: Any = None, depth: int = 0) -> dict[str, Any] | None:
-    from reports.engine import markdown
-    from replan import evaluate_objective
+    try:
+        from reports.engine import markdown
+        from replan import evaluate_objective
+    except ImportError:
+        from backend.reports.engine import markdown
+        from backend.replan import evaluate_objective
 
     task = workspace.get_task(task_id)
     if not task:
@@ -148,9 +152,14 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
             })
     if depth < 2 and executor is not None and store is not None and objective.get("next_request") and not objective.get("achieved"):
         try:
-            from config import load_settings
-            from security.guardian import evaluate
-            from vortex_backend import build_plan
+            try:
+                from config import load_settings
+                from security.guardian import evaluate
+                from vortex_backend import build_plan
+            except ImportError:
+                from backend.config import load_settings
+                from backend.security.guardian import evaluate
+                from backend.vortex_backend import build_plan
             settings = load_settings()
             nxt = build_plan(store, objective["next_request"], plan.get("cwd"), plan.get("engagement_id"), offline=bool(settings.get("offline")))
             engagement = workspace.enrich_engagement(store.get_engagement(plan.get("engagement_id"))) if plan.get("engagement_id") else None

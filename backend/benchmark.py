@@ -13,7 +13,10 @@ CASES = (
 
 
 def run_suite(store: Any, workspace: Any, executor: Any, cwd: str | None = None) -> dict[str, Any]:
-    from orchestrate import run_turn
+    try:
+        from orchestrate import run_turn
+    except ImportError:
+        from backend.orchestrate import run_turn
     results = []
     for case in CASES:
         started = time.monotonic()

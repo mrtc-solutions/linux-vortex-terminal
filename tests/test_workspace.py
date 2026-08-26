@@ -35,6 +35,21 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(db["ok"])
         self.assertFalse(setup["first_run_complete"])
 
+    def test_os_release_and_lscpu_plans(self):
+        distro = build_plan(self.store, "what distro is this", self.tmp.name)
+        self.assertEqual(distro["kind"], "os_release")
+        self.assertIn(distro["status"], ("planned", "unavailable"))
+        if distro["status"] == "planned":
+            self.assertEqual(distro["commands"][0]["argv"], ["cat", "/etc/os-release"])
+        cpu = build_plan(self.store, "lscpu", self.tmp.name)
+        self.assertEqual(cpu["kind"], "cpu")
+
+    def test_conversation_search_matches_messages(self):
+        convo = self.workspace.create_conversation("alpha")
+        self.workspace.add_message(convo["id"], "user", "unique-needle-vortex-xyz")
+        found = self.workspace.list_conversations("unique-needle-vortex-xyz")
+        self.assertTrue(any(item["id"] == convo["id"] for item in found))
+
     def test_clock_and_interface_plans(self):
         clock = build_plan(self.store, "what time is it", self.tmp.name)
         self.assertEqual(clock["kind"], "clock")

@@ -17,6 +17,8 @@ LOW_ADAPTERS = {
     "linux.network.sockets",
     "linux.network.interfaces",
     "linux.system.clock",
+    "linux.system.os-release",
+    "linux.system.cpu",
     "linux.development.git-status",
     "linux.systemd.inspect",
     "linux.containers.inspect",

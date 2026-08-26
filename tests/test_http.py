@@ -88,6 +88,35 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(report["report"]["operations"], 0)
         self.assertEqual(report["report"]["engagement"]["id"], eng_id)
 
+    def test_capabilities_and_close_engagement(self):
+        caps = self._json("GET", "/api/capabilities")
+        self.assertEqual(caps["product"], "VORTEX")
+        self.assertIn("typed-plan-execution", caps["implemented"])
+        self.assertIn("plugin-code-execution", caps["intentionally_not_implemented"])
+        created = self._json("POST", "/api/engagements", {
+            "name": "lab-close", "authorization": "ticket-2", "targets": ["lab.example.test"],
+        }, expected=201)
+        closed = self._json("POST", f"/api/engagements/{created['engagement']['id']}/close", {})
+        self.assertEqual(closed["engagement"]["status"], "closed")
+
+    def test_static_path_traversal_rejected(self):
+        request = urllib.request.Request(self.base + "/assets/../backend/vortex_backend.py")
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                status = response.status
+                body = response.read()
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            body = exc.read()
+        self.assertIn(status, (404, 400))
+        self.assertNotIn(b"ExecutionManager", body)
+
+    def test_task_events_route(self):
+        turn = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": self.tmp.name})
+        events = self._json("GET", f"/api/tasks/{turn['task']['id']}/events")
+        self.assertTrue(events["events"])
+        self.assertEqual(events["task"]["id"], turn["task"]["id"])
+
     def test_secret_values_never_returned(self):
         saved = self._json("POST", "/api/secrets", {"slot": "ollama_token", "value": "sk-never-echo"})
         self.assertIsNone(saved["secrets"]["values"])

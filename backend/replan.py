@@ -5,7 +5,7 @@ from typing import Any
 
 ACHIEVED_KINDS = {
     "identity", "clock", "filesystem_list", "filesystem", "processes",
-    "network_interfaces", "plan",
+    "network_interfaces", "plan", "os_release", "cpu",
 }
 
 

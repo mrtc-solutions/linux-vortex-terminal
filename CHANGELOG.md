@@ -7,6 +7,8 @@
   include only that engagement's operations.
 - Guardian destructive checks are word-level (`adduser` is not treated as `dd`).
   Excluded targets match hosts, not arbitrary substrings.
+- os-release / lscpu adapters, engagement close, task events, capabilities
+  document, session SSE, static path-traversal tests, restored report engine.
 - Workspace: conversations (branch on edit, export, search), VTX tasks with
   resume/restart/delete/pause, Guardian, Agent Council discovery, memory/procedures,
   system health, first-run probes, STOP ALL, report downloads (MD/HTML/JSON/PDF).

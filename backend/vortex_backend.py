@@ -42,6 +42,13 @@ _BACKEND_DIR = Path(__file__).resolve().parent
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
+
+def _load(name: str):
+    try:
+        return __import__(name, fromlist=["*"])
+    except ImportError:
+        return __import__("backend." + name, fromlist=["*"])
+
 try:
     from .adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from .artifacts import ArtifactError, analyze_operation_http, analyze_path
@@ -724,6 +731,14 @@ class Store:
 
     def get_engagement(self, engagement_id: str) -> dict[str, Any] | None:
         return next((x for x in self.list_engagements() if x["id"] == engagement_id), None)
+
+    def close_engagement(self, engagement_id: str) -> bool:
+        with self.lock, self.connect() as db:
+            cur = db.execute("UPDATE engagements SET status='closed' WHERE id=? AND status='active'", (engagement_id,))
+            changed = cur.rowcount > 0
+        if changed:
+            self.append_audit("engagement_closed", {"engagement_id": engagement_id})
+        return changed
 
 
 class SessionManager:
@@ -1458,6 +1473,20 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             specs.append(adapter_command("linux.system.clock", "date", ["date", "--iso-8601=seconds"], cwd, required="date", explanation="Report the host clock as observed."))
             status = "planned"; notes.append("Read-only clock observation.")
+    elif any(phrase in lower for phrase in ("os-release", "what distro", "which distro", "linux distribution", "os release")):
+        kind = "os_release"
+        if probe_executable("cat")["state"] != "installed" or not Path("/etc/os-release").is_file():
+            status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cannot observe /etc/os-release.")
+        else:
+            specs.append(adapter_command("linux.system.os-release", "cat", ["cat", "/etc/os-release"], cwd, required="cat", explanation="Read the observed /etc/os-release file only."))
+            status = "planned"; notes.append("Read-only distribution identification. No packages are changed.")
+    elif "lscpu" in lower or "cpu details" in lower or "processor details" in lower:
+        kind = "cpu"
+        if probe_executable("lscpu")["state"] != "installed":
+            status = "unavailable"; missing.append("lscpu"); notes.append("TOOL MISSING: lscpu; no processor table was observed.")
+        else:
+            specs.append(adapter_command("linux.system.cpu", "lscpu", ["lscpu"], cwd, required="lscpu", explanation="Report observed CPU topology from the host."))
+            status = "planned"; notes.append("Read-only processor inspection.")
     elif any(word in lower for word in ("port", "listen", "socket")):
         if probe_executable("ss")["state"] != "installed":
             status = "unavailable"; missing.append("ss"); notes.append("TOOL MISSING: ss. Install instructions may be shown separately; no socket facts were observed.")
@@ -2039,6 +2068,45 @@ def parse_expiry(raw: Any, *, default_seconds: int) -> str:
     return value.isoformat(timespec="milliseconds")
 
 
+def capabilities_document() -> dict[str, Any]:
+    docker = probe_executable("docker")
+    podman = probe_executable("podman")
+    nmap = probe_executable("nmap")
+    try:
+        agents = _load("agents.council").discover()
+    except Exception:
+        agents = []
+    installed_agents = [item["id"] for item in agents if item.get("health", {}).get("healthy")]
+    return {
+        "product": "VORTEX",
+        "version": APP_VERSION,
+        "implemented": [
+            "typed-plan-execution", "pty-sessions", "guardian", "engagements",
+            "workspace-turn", "tasks", "conversations", "reports", "assessment-reports",
+            "secret-slots", "sse-operations", "sse-sessions", "stop-all", "audit-chain",
+        ],
+        "host_probes": {
+            "docker": docker.get("state"),
+            "podman": podman.get("state"),
+            "nmap": nmap.get("state"),
+            "agents_installed": installed_agents,
+            "agents_catalog": [item.get("id") for item in agents],
+        },
+        "unavailable_unless_installed": [
+            "docker-sandbox-execution",
+            "ollama-inference",
+            "external-agent-consult",
+            "nuclei-ffuf-nikto-amass-msf-execution",
+        ],
+        "intentionally_not_implemented": [
+            "fastapi-postgresql-pgvector",
+            "plugin-code-execution",
+            "silent-third-party-install",
+            "unrestricted-llm-os-control",
+        ],
+    }
+
+
 class VortexHandler(BaseHTTPRequestHandler):
     store: Store
     executor: ExecutionManager
@@ -2092,6 +2160,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                 from config import load_settings
                 from health import collect
                 return self._json(200, {"health": collect(self.store, self.sessions, load_settings())})
+            if path == "/api/capabilities":
+                return self._json(200, capabilities_document())
             if path == "/api/agents":
                 from agents.council import discover
                 return self._json(200, {"agents": discover()})
@@ -2143,7 +2213,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 from tools.registry import by_category, inventory
                 return self._json(200, {"tools": inventory(), "categories": by_category()})
             if path == "/api/reports/system":
-                from reports.engine import render_system
+                render_system = _load("reports.engine").render_system
                 from tools.registry import inventory
                 query = urllib.parse.parse_qs(parsed.query)
                 fmt = (query.get("format") or ["json"])[0]
@@ -2177,7 +2247,13 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"conversation": item, "messages": self.workspace.list_messages(cid)})
             if path == "/api/tasks":
                 return self._json(200, {"tasks": self.workspace.list_tasks(), "interrupted": self.workspace.interrupted_tasks()})
-            if path.startswith("/api/tasks/"):
+            if path.startswith("/api/tasks/") and path.endswith("/events"):
+                task_id = path.split("/")[-2]
+                item = self.workspace.get_task(task_id)
+                if not item:
+                    return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                return self._json(200, {"task": item, "events": self.workspace.list_task_events(task_id)})
+            if path.startswith("/api/tasks/") and path.count("/") == 3:
                 item = self.workspace.get_task(path.rsplit("/", 1)[-1])
                 return self._json(200 if item else 404, {"task": item} if item else {"error": {"code": "not_found", "message": "task not found"}})
             if path == "/api/memory":
@@ -2196,7 +2272,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 operation = self.store.get_operation(report.get("operation_id") or "") or {"status": report.get("body", {}).get("status"), "commands": [], "id": report.get("operation_id"), "plan_id": "", "analysis": {"fact": report.get("body", {}).get("markdown", "")}}
                 plan = self.store.get_plan(operation.get("plan_id") or "") if operation.get("plan_id") else {}
                 task = self.workspace.get_task(report.get("task_id") or "") if report.get("task_id") else None
-                from reports.engine import render
+                render = _load("reports.engine").render
                 data, content_type, ext = render(fmt, operation, plan or {}, task)
                 self.send_response(200)
                 self._headers(content_type)
@@ -2211,6 +2287,26 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/sessions": return self._json(200, {"sessions": self.sessions.list()})
             if path.startswith("/api/sessions/"):
                 parts = path.split("/")
+                if len(parts) == 5 and parts[-1] == "stream":
+                    session_id = parts[-2]
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Accel-Buffering", "no")
+                    self.end_headers()
+                    since = 0
+                    for _ in range(300):
+                        payload = self.sessions.events_since(session_id, since)
+                        self.wfile.write(f"data: {json.dumps({'schema_version': SCHEMA_VERSION, **payload})}\n\n".encode())
+                        self.wfile.flush()
+                        events = payload.get("events") or []
+                        if events:
+                            since = events[-1]["seq"]
+                        status = (payload.get("session") or {}).get("status")
+                        if not payload.get("session") or status not in ("starting", "running"):
+                            break
+                        time.sleep(0.2)
+                    return
                 if len(parts) == 5 and parts[-1] == "events":
                     query = urllib.parse.parse_qs(parsed.query)
                     return self._json(200, self.sessions.events_since(parts[-2], query.get("since", [0])[0]))
@@ -2376,6 +2472,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                 parts = path.split("/")
                 branch = self.workspace.edit_and_branch(parts[3], parts[5], str(body.get("content") or ""))
                 return self._json(201, {"conversation": branch, "messages": self.workspace.list_messages(branch["id"])})
+            if path.startswith("/api/engagements/") and path.endswith("/close"):
+                eng_id = path.split("/")[-2]
+                if not self.store.close_engagement(eng_id):
+                    return self._json(404, {"error": {"code": "not_found", "message": "engagement not found or already closed"}})
+                return self._json(200, {"engagement": self.workspace.enrich_engagement(self.store.get_engagement(eng_id))})
             if path.startswith("/api/plans/") and path.endswith("/reject"):
                 plan_id = path.split("/")[-2]
                 result = self.workspace.reject_task_plan(plan_id, body.get("task_id"), self.executor)

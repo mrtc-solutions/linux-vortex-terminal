@@ -103,7 +103,15 @@ class Workspace:
         items = [dict(row) for row in rows]
         if query:
             needle = query.lower()
-            items = [item for item in items if needle in json.dumps(item).lower()]
+            matched_ids = set()
+            safe = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            with self.store.connect() as db:
+                hits = db.execute(
+                    "SELECT DISTINCT conversation_id FROM messages WHERE content LIKE ? ESCAPE '\\'",
+                    (f"%{safe}%",),
+                ).fetchall()
+                matched_ids = {row[0] for row in hits}
+            items = [item for item in items if needle in json.dumps(item).lower() or item["id"] in matched_ids]
         return items
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
