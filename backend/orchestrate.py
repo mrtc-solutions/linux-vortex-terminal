@@ -29,9 +29,14 @@ def interpret_operation(plan: dict[str, Any], operation: dict[str, Any]) -> str:
 
 
 def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: str | None, engagement_id: str | None, conversation_id: str | None, settings: dict[str, Any], confirm: bool = False, approval_token: str | None = None) -> dict[str, Any]:
-    from agents.council import consult
-    from security.guardian import evaluate
-    from vortex_backend import build_plan
+    try:
+        from agents.council import consult
+        from security.guardian import evaluate
+        from vortex_backend import build_plan
+    except ImportError:
+        from backend.agents.council import consult
+        from backend.security.guardian import evaluate
+        from backend.vortex_backend import build_plan
 
     settings = settings or {}
     offline = bool(settings.get("offline"))

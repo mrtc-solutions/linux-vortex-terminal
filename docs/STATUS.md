@@ -24,6 +24,8 @@ tools and observed output only. Test doubles exist only inside tests.
 | Secret slots (values never returned) | Done + tested |
 | Static path-traversal rejection | Done + tested |
 | Capabilities document (`GET /api/capabilities`) | Done + tested |
+| Missing-dependency window + INSTALL buttons | Done + tested (apt plans / operator proposals; no silent install) |
+| CLI `tasks pause` / `tasks reject` | Done + tested |
 | Ollama loopback probe | Done; unavailable here |
 | Docker isolation **execution** | Probe only; runtime missing here |
 | Plugin code loading | Deliberately not implemented |

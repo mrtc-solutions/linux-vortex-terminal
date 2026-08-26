@@ -273,6 +273,14 @@ def main(argv=None):
             workspace = Workspace(store)
             if getattr(args, 'action', 'list') == 'show' and getattr(args, 'task_id', None):
                 emit({'task': workspace.get_task(args.task_id)}, args.as_json); return 0
+            if args.action in ('pause', 'reject') and args.task_id:
+                manager = ExecutionManager(store)
+                if args.action == 'pause':
+                    emit({'task': workspace.pause_task(args.task_id, manager)}, args.as_json); return 0
+                task = workspace.get_task(args.task_id)
+                if not task or not task.get('plan_id'):
+                    raise ValueError('task or plan not found')
+                emit(workspace.reject_task_plan(task['plan_id'], task['id'], manager), args.as_json); return 0
             emit({'tasks': workspace.list_tasks(), 'interrupted': workspace.interrupted_tasks()}, args.as_json); return 0
         if args.subcommand == 'memory':
             from backend.workspace import Workspace

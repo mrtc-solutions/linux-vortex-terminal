@@ -114,6 +114,26 @@ class WorkspaceTests(unittest.TestCase):
         matched = self.workspace.operations_for_engagement("eng-filter")
         self.assertEqual([item["id"] for item in matched], ["op-in"])
 
+    def test_cli_tasks_pause_and_reject(self):
+        from cli import vortex as vortex_cli
+        plan = build_plan(self.store, "whoami", self.tmp.name)
+        task = self.workspace.create_task("whoami")
+        self.workspace.update_task(task["id"], plan_id=plan["id"], state="WAITING_FOR_APPROVAL")
+        code = vortex_cli.main(["--json", "tasks", "pause", task["id"]])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.workspace.get_task(task["id"])["state"], "PAUSED")
+        code = vortex_cli.main(["--json", "tasks", "reject", task["id"]])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.workspace.get_task(task["id"])["state"], "CANCELLED")
+
+    def test_core_tools_map_to_apt_packages(self):
+        from backend.dependencies import APT_PACKAGES, proposal_for
+        self.assertEqual(APT_PACKAGES["ss"], "iproute2")
+        item = proposal_for("tool:nmap")
+        if not item.get("installed"):
+            self.assertEqual(item.get("method"), "apt")
+            self.assertFalse(item.get("auto_install"))
+
     def test_pause_and_reject_helpers(self):
         plan = build_plan(self.store, "whoami", self.tmp.name)
         task = self.workspace.create_task("whoami")

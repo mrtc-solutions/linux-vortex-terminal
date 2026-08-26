@@ -29,6 +29,21 @@ APT_PACKAGES: dict[str, str] = {
     "amass": "amass",
     "msfconsole": "metasploit-framework",
     "nuclei": "nuclei",
+    "ss": "iproute2",
+    "ip": "iproute2",
+    "df": "coreutils",
+    "du": "coreutils",
+    "ls": "coreutils",
+    "cat": "coreutils",
+    "date": "coreutils",
+    "whoami": "coreutils",
+    "id": "coreutils",
+    "pwd": "coreutils",
+    "uname": "coreutils",
+    "hostname": "hostname",
+    "ps": "procps",
+    "free": "procps",
+    "uptime": "procps",
 }
 
 CORE_TOOLS = ("curl", "git", "python3", "ss", "ip", "df", "ps", "whoami")
