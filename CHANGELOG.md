@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-08-26
+
+- Reviewed nuclei / nikto / amass / ffuf / gobuster argv adapters. Missing
+  binaries or wordlists stay UNAVAILABLE; no command is fabricated.
+- `vortex install --user`, `vortex serve`, and `vortex turn` for real
+  operator install and use. Session UI prefers EventSource.
+- Step-by-step operator guide: `docs/USER_GUIDE.md`.
+
 ## 0.2.0 — 2026-08-25
 
 - Workspace SEND uses `/api/workspace/turn`. REJECT and PAUSE are real HTTP

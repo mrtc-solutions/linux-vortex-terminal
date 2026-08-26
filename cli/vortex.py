@@ -72,13 +72,32 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
 
 SHELL_START = "# >>> vortex shell integration >>>"
 SHELL_END = "# <<< vortex shell integration <<<"
+
+
+def install_user(prefix=None, user=True):
+    """Write a user-local launcher. Never uses sudo and never installs packages."""
+    del user
+    root = Path(__file__).resolve().parent.parent
+    dest_dir = Path(prefix).expanduser() if prefix else Path.home() / ".local" / "bin"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "vortex"
+    dest.write_text(f'#!/usr/bin/env sh\nexec python3 "{root / "cli" / "vortex.py"}" "$@"\n', encoding="utf-8")
+    dest.chmod(0o755)
+    return {
+        "ok": True,
+        "method": "user-local",
+        "auto_install_packages": False,
+        "path": str(dest),
+        "source": str(root),
+        "message": "User-local launcher written. Add ~/.local/bin to PATH if needed. No apt packages were installed.",
+    }
 
 
 def shell_rc_path(shell, home=None):
@@ -237,6 +256,9 @@ def main(argv=None):
     sub.add_parser('plugins')
     sub.add_parser('deps')
     sub.add_parser('benchmark')
+    sv = sub.add_parser('serve'); sv.add_argument('--bind-host', dest='bind_host', default=os.environ.get('VORTEX_HOST', '127.0.0.1')); sv.add_argument('--bind-port', dest='bind_port', type=int, default=int(os.environ.get('VORTEX_PORT', '8765'))); sv.add_argument('--token', default=os.environ.get('VORTEX_SIDECAR_TOKEN'))
+    ins = sub.add_parser('install'); ins.add_argument('--user', action='store_true', dest='user_install'); ins.add_argument('--prefix', default=None)
+    tn = sub.add_parser('turn'); tn.add_argument('request')
     art = sub.add_parser('artifact'); art.add_argument('action', choices=['inspect','analyze'], nargs='?', default='inspect'); art.add_argument('path'); art.add_argument('--type', choices=['auto','nmap-xml','http-headers','text'], default='auto')
     b = sub.add_parser('backup'); b.add_argument('path'); b.add_argument('--force', action='store_true')
     db = sub.add_parser('db'); db.add_argument('action', choices=['integrity'], nargs='?', default='integrity')
@@ -304,6 +326,24 @@ def main(argv=None):
         if args.subcommand == 'deps':
             from backend.dependencies import inventory
             emit({'dependencies': inventory()}, args.as_json); return 0
+        if args.subcommand == 'serve':
+            from backend.vortex_backend import serve
+            serve(getattr(args, 'bind_host', '127.0.0.1'), int(getattr(args, 'bind_port', 8765)), getattr(args, 'token', None))
+            return 0
+        if args.subcommand == 'install':
+            result = install_user(getattr(args, 'prefix', None))
+            emit({'install': result}, args.as_json)
+            return 0 if result.get('ok') else EXIT_CODES['failure']
+        if args.subcommand == 'turn':
+            from backend.config import load_settings
+            from backend.orchestrate import run_turn
+            from backend.workspace import Workspace
+            settings = load_settings()
+            if args.offline:
+                settings['offline'] = True
+            result = run_turn(store, Workspace(store), ExecutionManager(store), args.request, cwd=args.cwd, engagement_id=args.engagement_id, conversation_id=None, settings=settings, confirm=bool(args.yes), approval_token=None)
+            emit(result, args.as_json)
+            return 0
         if args.subcommand == 'benchmark':
             from backend.benchmark import run_suite
             from backend.workspace import Workspace

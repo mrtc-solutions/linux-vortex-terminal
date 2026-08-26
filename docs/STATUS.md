@@ -3,7 +3,7 @@
 VORTEX 0.2.0 is a real Linux application. Production paths use installed host
 tools and observed output only. Test doubles exist only inside tests.
 
-**81 Python tests + JS terminal emulator: passing.**
+**84 Python tests + JS terminal emulator: passing.**
 
 ## Directive coverage
 
@@ -28,11 +28,14 @@ tools and observed output only. Test doubles exist only inside tests.
 | CLI `tasks pause` / `tasks reject` / `deps` | Done + tested |
 | Observe → typed action → host-state reward (WAA-inspired, Linux argv) | Done + tested |
 | Built-in `vortex-local` advisor (always present, never executes) | Done + tested |
+| nuclei / ffuf / nikto / amass / gobuster execution adapters | Done + tested; host binary + engagement required |
+| User-local install, `vortex serve`, `vortex turn`, USER_GUIDE | Done + tested |
+| Session EventSource | Done (poll fallback remains) |
 | Ollama loopback probe | Done; unavailable here |
 | Docker isolation **execution** | Probe only; runtime missing here |
 | Plugin code loading | Deliberately not implemented |
 | FastAPI / PostgreSQL / pgvector | Intentionally not added |
-| Nuclei/ffuf/nikto/amass/msf execution | Catalog probe only |
+| sqlmap / msf execution | Catalog probe only |
 | Signed 1.0 `.deb` | Not a 1.0 gate pass |
 
 ## Remaining host / release gates (cannot be faked)
@@ -43,4 +46,4 @@ These stay UNAVAILABLE until the host has the software or a release VM:
 2. Disposable-VM apt/systemd mutation acceptance
 3. Full xterm + durable PTY attach across sidecar restarts
 4. Signed `.deb` install/upgrade/uninstall evidence
-5. Scanner execution on a host that has nuclei/ffuf/nmap and reviewed wordlists
+5. Scanner execution on a host that actually has nuclei/ffuf/nmap and reviewed wordlists (adapters exist; this host does not)

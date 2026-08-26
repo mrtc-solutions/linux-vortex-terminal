@@ -18,6 +18,13 @@ Nothing is fabricated to make the UI look complete.
 Requires Linux and Python 3.11+. Core use has no pip dependency.
 
 ```bash
+# Verify
+python3 -m unittest discover -s tests -q
+
+# User-local launcher (no sudo, no apt)
+./vortex install --user
+export PATH="$HOME/.local/bin:$PATH"
+
 ./vortex --help
 ./vortex doctor --json
 ./vortex health --json
@@ -27,13 +34,15 @@ Requires Linux and Python 3.11+. Core use has no pip dependency.
 ./vortex sandbox --json
 ./vortex plan "system health"
 ./vortex plan "whoami"
-./vortex plan "check my disk space"
+./vortex --profile standard --yes turn "whoami"
 ./vortex db integrity
-./vortex "git status"
 
-# Optional local preview (binds 0.0.0.0 for a dev preview)
+# Local workbench (127.0.0.1) or Arena preview (0.0.0.0)
+./vortex serve --bind-host 127.0.0.1 --bind-port 8765
 npm run preview
 ```
+
+Step-by-step install and use: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
 Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 
@@ -52,6 +61,9 @@ Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 | Kali/Linux tool registry with live probes | Implemented + tested |
 | Agent Council (9 third-party + builtin `vortex-local`) | Implemented + tested; third-party missing stay UNAVAILABLE |
 | Observe → act → host-state reward | Implemented + tested |
+| nuclei / ffuf / nikto / amass / gobuster adapters | Implemented + tested; UNAVAILABLE without the binary, engagement, and (for ffuf/gobuster) a host wordlist |
+| User-local install / `vortex serve` / `vortex turn` | Implemented + tested |
+| Session EventSource with poll fallback | Implemented |
 | Missing-dependency window / `vortex deps` | Implemented + tested; no silent install |
 | Reports Markdown / HTML / JSON / PDF from observed operations | Implemented + tested |
 | System inventory report from doctor + tool probes | Implemented |
@@ -70,7 +82,8 @@ Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 These are either unimplemented, or implemented only as honest unavailable states:
 
 - Calling CAI / Strix / Nebula / PentestGPT / HexStrike / PentAGI / HackerAI / HALO / DarkMoon consult APIs (no reviewed non-interactive consult; binaries not installed here)
-- Nuclei / ffuf / gobuster / nikto / amass / Metasploit **execution** adapters (catalog probes only)
+- sqlmap / Metasploit **execution** adapters (catalog probes only)
+- Scanner tools when the binary or wordlist is not on the host (honest UNAVAILABLE)
 - FastAPI + PostgreSQL + pgvector (local SQLite modular monolith by design)
 - Durable WebSocket PTY attach (operation SSE exists; session UI still polls)
 - Starting unreviewed Docker images as a sandbox
@@ -90,6 +103,7 @@ cannot authorize execution. Tool output is stored as data, not instructions.
 ## Documentation
 
 - [`LINUX_VORTEX_TERMINAL_BUILD_PLAN.md`](LINUX_VORTEX_TERMINAL_BUILD_PLAN.md) — original binding plan
+- [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — install, test, and operate as a real app
 - [`docs/STATUS.md`](docs/STATUS.md) — tested vs remaining gates
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow
 - [`docs/IMPLEMENTATION_REPORT.md`](docs/IMPLEMENTATION_REPORT.md) — current slice

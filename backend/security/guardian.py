@@ -33,6 +33,11 @@ MEDIUM_ADAPTERS = {
 HIGH_ADAPTERS = {
     "security.nmap.discovery",
     "security.http.headers",
+    "security.nuclei.templates",
+    "security.nikto.web",
+    "security.amass.passive",
+    "security.ffuf.discovery",
+    "security.gobuster.discovery",
     "linux.ssh.connection",
 }
 LOW_NETWORK = {"no-network", "loopback-only"}

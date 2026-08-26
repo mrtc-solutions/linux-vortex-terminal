@@ -1,7 +1,9 @@
 # Linux packaging
 
-The first release target is a signed `.deb` for supported Linux. Packaging is
-intentionally marked as Phase 7 until PTY/session, report, model, and migration
-contracts are complete. `packaging/deb/build.sh` refuses to emit a misleading
-artifact; it documents the pinned-builder gate instead. No desktop autostart,
-systemd unit, listener, or user-data creation belongs in the package.
+`packaging/deb/build.sh` builds a real, unsigned CLI `.deb` (default version
+0.2.0) that installs the Python sidecar, frontend, and `vortex` launcher.
+It never starts a daemon, never creates user data, and never installs
+agents. A signed 1.0 package remains a release-VM gate.
+
+Operator-local install without root: `./vortex install --user` or
+`scripts/install-user.sh`. See `docs/USER_GUIDE.md`.

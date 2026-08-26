@@ -92,7 +92,9 @@ class HttpApiTests(unittest.TestCase):
         caps = self._json("GET", "/api/capabilities")
         self.assertEqual(caps["product"], "VORTEX")
         self.assertIn("typed-plan-execution", caps["implemented"])
+        self.assertIn("nuclei-ffuf-nikto-amass-gobuster-adapters", caps["implemented"])
         self.assertIn("plugin-code-execution", caps["intentionally_not_implemented"])
+        self.assertIn("sqlmap-msfconsole-execution", caps["unavailable_unless_installed"])
         created = self._json("POST", "/api/engagements", {
             "name": "lab-close", "authorization": "ticket-2", "targets": ["lab.example.test"],
         }, expected=201)

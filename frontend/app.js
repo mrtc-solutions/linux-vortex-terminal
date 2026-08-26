@@ -181,18 +181,44 @@ async function loadSessions() {
     if (state.sessions.some(session => session.status === 'running')) pollSessions();
   } catch (e) { toast(e.message, true); }
 }
+function applySessionPayload(sessionId, data) {
+  const output = ensureSessionPane(sessionId);
+  (data.events || []).forEach(event => { appendAnsi(output, event.data); state.sessionSeqs[sessionId] = Math.max(state.sessionSeqs[sessionId] || 0, event.seq); });
+  const index = state.sessions.findIndex(item => item.id === sessionId);
+  if (index >= 0 && data.session) state.sessions[index] = data.session;
+}
+
+function streamSession(sessionId) {
+  if (!window.EventSource || state.sessionStreams?.[sessionId]) return false;
+  state.sessionStreams = state.sessionStreams || {};
+  try {
+    const es = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/stream`);
+    state.sessionStreams[sessionId] = es;
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        applySessionPayload(sessionId, data);
+        state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();
+        const status = data.session?.status;
+        if (!data.session || !['starting', 'running'].includes(status)) { es.close(); delete state.sessionStreams[sessionId]; }
+      } catch (_) { /* keep listening */ }
+    };
+    es.onerror = () => { es.close(); delete state.sessionStreams[sessionId]; pollSessions(); };
+    return true;
+  } catch (_) { return false; }
+}
+
 async function pollSessions() {
+  const running = state.sessions.filter(session => session.status === 'running');
+  running.forEach(session => streamSession(session.id));
   if (state.sessionTimer) return;
   const tick = async () => {
     state.sessionTimer = null;
-    const running = state.sessions.filter(session => session.status === 'running');
-    for (const session of running) {
+    const live = state.sessions.filter(session => session.status === 'running' && !state.sessionStreams?.[session.id]);
+    for (const session of live) {
       try {
         const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/events?since=${state.sessionSeqs[session.id] || 0}`);
-        const output = ensureSessionPane(session.id);
-        (data.events || []).forEach(event => { appendAnsi(output, event.data); state.sessionSeqs[session.id] = Math.max(state.sessionSeqs[session.id] || 0, event.seq); });
-        const index = state.sessions.findIndex(item => item.id === session.id);
-        if (index >= 0 && data.session) state.sessions[index] = data.session;
+        applySessionPayload(session.id, data);
       } catch (e) { toast(e.message, true); }
     }
     state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();

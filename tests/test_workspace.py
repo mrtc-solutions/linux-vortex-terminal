@@ -144,6 +144,65 @@ class WorkspaceTests(unittest.TestCase):
         from cli import vortex as vortex_cli
         self.assertEqual(vortex_cli.main(["--json", "deps"]), 0)
 
+    def test_cli_user_install_writes_launcher(self):
+        from cli.vortex import install_user
+        prefix = Path(self.tmp.name) / "bin"
+        result = install_user(str(prefix))
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["auto_install_packages"])
+        launcher = Path(result["path"])
+        self.assertTrue(launcher.is_file())
+        text = launcher.read_text(encoding="utf-8")
+        self.assertIn("cli/vortex.py", text)
+        self.assertNotIn("sudo", text)
+
+    def test_reviewed_scan_builders_are_typed(self):
+        from backend.security.scanners import build_scan, discover_wordlist
+        nuclei = build_scan("nuclei", ["https://lab.example.test/"])
+        self.assertTrue(nuclei["ok"])
+        self.assertEqual(nuclei["argv"][0], "nuclei")
+        self.assertIn("-ni", nuclei["argv"])
+        self.assertIn("-duc", nuclei["argv"])
+        nikto = build_scan("nikto", ["https://lab.example.test/"])
+        self.assertEqual(nikto["argv"][:3], ["nikto", "-h", "https://lab.example.test/"])
+        amass = build_scan("amass", ["lab.example.test"])
+        self.assertEqual(amass["adapter_id"], "security.amass.passive")
+        self.assertIn("-passive", amass["argv"])
+        missing_list = build_scan("gobuster", ["https://lab.example.test/"])
+        self.assertFalse(missing_list["ok"])
+        wordlist = Path(self.tmp.name) / "common.txt"
+        wordlist.write_text("admin\nlogin\n", encoding="utf-8")
+        wordlist.chmod(0o644)
+        found = discover_wordlist(f"gobuster wordlist {wordlist}")
+        self.assertEqual(found["state"], "observed")
+        ffuf = build_scan("ffuf", ["https://lab.example.test/"], f"ffuf wordlist {wordlist}")
+        self.assertTrue(ffuf["ok"])
+        self.assertEqual(ffuf["argv"][0], "ffuf")
+        self.assertIn("FUZZ", ffuf["argv"][2])
+        unimplemented = build_scan("msfconsole", ["https://lab.example.test/"])
+        self.assertFalse(unimplemented["ok"])
+        self.assertIn("NOT IMPLEMENTED", unimplemented["reason"])
+
+    def test_scan_plan_requires_engagement_and_never_fakes_missing_tool(self):
+        from backend.vortex_backend import now_iso
+        bare = build_plan(self.store, "nuclei https://lab.example.test", self.tmp.name)
+        self.assertEqual(bare["kind"], "authorized_engagement")
+        self.assertEqual(bare["commands"], [])
+        self.assertIn(bare["status"], ("clarified", "unavailable"))
+        engagement = {
+            "id": "scan-eng", "created_at": now_iso(), "expires_at": "2099-08-25T00:00:00+00:00",
+            "name": "lab", "authorization": "t", "targets": ["https://lab.example.test"],
+            "classes": ["reconnaissance"], "status": "active",
+        }
+        self.store.create_engagement(engagement)
+        planned = build_plan(self.store, "nuclei https://lab.example.test", self.tmp.name, "scan-eng")
+        if planned["status"] == "planned":
+            self.assertEqual(planned["commands"][0]["adapter_id"], "security.nuclei.templates")
+        else:
+            self.assertEqual(planned["status"], "unavailable")
+            self.assertEqual(planned["commands"], [])
+            self.assertTrue(planned["missing_tools"] or any("TOOL MISSING" in note or "wordlist" in note.lower() or "nuclei" in note.lower() for note in planned["notes"]))
+
     def test_core_tools_map_to_apt_packages(self):
         from backend.dependencies import APT_PACKAGES, proposal_for
         self.assertEqual(APT_PACKAGES["ss"], "iproute2")

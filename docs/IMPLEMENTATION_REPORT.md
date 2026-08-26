@@ -11,7 +11,9 @@
 - Built-in `vortex-local` advisor is always present and never executes.
 - Third-party agent adapters probe binaries only; consult stays REQUIRES CONFIGURATION.
 - Missing tools are listed live. INSTALL builds an apt plan or an operator proposal.
-- 81 Python tests plus the JS terminal emulator.
+- nuclei/ffuf/nikto/amass/gobuster adapters emit real argv or UNAVAILABLE.
+- `vortex install --user`, `vortex serve`, `vortex turn`, and `docs/USER_GUIDE.md`.
+- 84 Python tests plus the JS terminal emulator.
 
 ## Honest limits
 

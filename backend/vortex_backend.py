@@ -1392,11 +1392,11 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {('user ' if user_mode else '')}{action} operation on {unit}; no sudo escalation is inferred.", privilege=privilege))
             status = "planned"
             notes += [f"Fresh systemd {('user-bus ' if user_mode else '')}state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
-    elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "curl", "http headers", "web application", "enumerate the web", "scan ")):
+    elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl", "http headers", "web application", "enumerate the web", "scan ")):
         kind = "authorized_engagement"
         risk = "high"
         authorization = "active engagement required"
-        tool = next((name for name in ("nmap", "nuclei", "ffuf", "nikto", "amass", "curl") if name in lower), "nmap")
+        tool = next((name for name in ("nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl") if name in lower), "nmap")
         targets = re.findall(r"https?://[^\s,]+|\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b", request)
         if offline:
             status = "unavailable"
@@ -1451,10 +1451,21 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                     adapter_id = "security.http.headers"
                     explanation = "Inspect real HTTP response headers without following redirects; any Location target requires a fresh scope check."
                 else:
-                    status = "unavailable"
-                    missing.append(tool)
-                    notes.append(f"ADAPTER NOT IMPLEMENTED: {tool}; no command was created.")
-                    adapter_id = None
+                    try:
+                        scanners = _load("security.scanners")
+                    except Exception:
+                        scanners = None
+                    proposal = scanners.build_scan(tool, normalized, request) if scanners else {"ok": False, "reason": f"ADAPTER NOT IMPLEMENTED: {tool}; no command was created."}
+                    if proposal.get("ok"):
+                        args = list(proposal["argv"])
+                        adapter_id = proposal["adapter_id"]
+                        explanation = proposal["explanation"]
+                    else:
+                        status = "unavailable"
+                        if proposal.get("missing"):
+                            missing.append(str(proposal["missing"]))
+                        notes.append(str(proposal.get("reason") or f"ADAPTER NOT IMPLEMENTED: {tool}; no command was created."))
+                        adapter_id = None
                 if adapter_id:
                     specs.append(adapter_command(adapter_id, tool, args, cwd, required=tool, scope=normalized, explanation=explanation))
                     status = "planned"
@@ -2085,6 +2096,7 @@ def capabilities_document() -> dict[str, Any]:
             "workspace-turn", "tasks", "conversations", "reports", "assessment-reports",
             "secret-slots", "sse-operations", "sse-sessions", "stop-all", "audit-chain",
             "episode-observe-act-evaluate",
+            "nuclei-ffuf-nikto-amass-gobuster-adapters",
         ],
         "host_probes": {
             "docker": docker.get("state"),
@@ -2097,7 +2109,7 @@ def capabilities_document() -> dict[str, Any]:
             "docker-sandbox-execution",
             "ollama-inference",
             "external-agent-consult",
-            "nuclei-ffuf-nikto-amass-msf-execution",
+            "sqlmap-msfconsole-execution",
         ],
         "intentionally_not_implemented": [
             "fastapi-postgresql-pgvector",

@@ -12,6 +12,11 @@ def route(intent: str) -> dict[str, Any]:
         (("listen", "port", "socket"), "linux.network.sockets"),
         (("git",), "linux.development.git-status"),
         (("nmap",), "security.nmap.discovery"),
+        (("nuclei",), "security.nuclei.templates"),
+        (("nikto",), "security.nikto.web"),
+        (("amass",), "security.amass.passive"),
+        (("ffuf",), "security.ffuf.discovery"),
+        (("gobuster",), "security.gobuster.discovery"),
         (("curl", "http"), "security.http.headers"),
         (("docker", "podman", "container"), "linux.containers.inspect"),
     )
