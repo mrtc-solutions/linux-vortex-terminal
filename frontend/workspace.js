@@ -53,6 +53,7 @@
       ['GUARDIAN', guardian?.decision || '—'],
       ['EXECUTION', operation?.status || task?.state || 'idle'],
       ['FINDINGS', findings && findings.length ? String(findings.length) : 'none'],
+      ['REWARD', task?.result?.episode?.evaluation?.reward === 0 || task?.result?.episode?.evaluation?.reward ? String(task.result.episode.evaluation.reward) : '—'],
     ];
     el.innerHTML = rows.map(([a, b]) => `<div class="context-row"><label>${esc(a)}</label><span>${esc(b)}</span></div>`).join('');
   }

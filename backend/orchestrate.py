@@ -50,11 +50,16 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
     workspace.update_task(task["id"], state="PLANNING")
     workspace.add_task_event(task["id"], "created", {"request": request[:200]})
     plan = build_plan(store, request, cwd, engagement_id, offline=offline)
+    try:
+        from episode import observe
+    except ImportError:
+        from backend.episode import observe
+    observation = observe(plan)
     procedure = workspace.matching_procedure(plan.get("kind") or request)
     if procedure:
         plan.setdefault("notes", []).insert(0, f"Retrieved validated procedure {procedure['name']} (used {procedure.get('uses', 1)} time(s)). Commands still come from reviewed adapters.")
     started = time.monotonic()
-    council = consult(plan, task)
+    council = consult(plan, task, observation=observation)
     latency = int((time.monotonic() - started) * 1000)
     for item in council.get("consultations") or []:
         workspace.record_agent_run(str(item.get("agent") or "unknown"), str(item.get("state") or "unavailable"), task["id"], latency, {"message": item.get("message")})
@@ -65,7 +70,7 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         log_event(store, "turn", {"task_id": task["id"], "kind": plan.get("kind"), "guardian": guardian.get("decision"), "risk": guardian.get("risk")})
     except Exception:
         pass
-    workspace.update_task(task["id"], plan_id=plan["id"], risk=guardian["risk"], result={"kind": plan.get("kind"), "plan_status": plan.get("status"), "guardian": guardian, "council": council, "procedure": procedure["name"] if procedure else None})
+    workspace.update_task(task["id"], plan_id=plan["id"], risk=guardian["risk"], result={"kind": plan.get("kind"), "plan_status": plan.get("status"), "guardian": guardian, "council": council, "procedure": procedure["name"] if procedure else None, "observation": observation})
     operation = None
     auto = False
     if guardian["blocked"] or plan["status"] in {"clarified", "unavailable", "rejected"} or not plan.get("commands"):
@@ -99,6 +104,7 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         "operation": operation,
         "auto_executed": auto,
         "explanation": explanation,
+        "observation": observation,
     }
 
 
@@ -106,9 +112,11 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
     try:
         from reports.engine import markdown
         from replan import evaluate_objective
+        from episode import step as episode_step
     except ImportError:
         from backend.reports.engine import markdown
         from backend.replan import evaluate_objective
+        from backend.episode import step as episode_step
 
     task = workspace.get_task(task_id)
     if not task:

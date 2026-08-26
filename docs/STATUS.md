@@ -26,6 +26,7 @@ tools and observed output only. Test doubles exist only inside tests.
 | Capabilities document (`GET /api/capabilities`) | Done + tested |
 | Missing-dependency window + INSTALL buttons | Done + tested (apt plans / operator proposals; no silent install) |
 | CLI `tasks pause` / `tasks reject` | Done + tested |
+| Observe → typed action → host-state reward (WAA-inspired, Linux argv) | Done + tested |
 | Ollama loopback probe | Done; unavailable here |
 | Docker isolation **execution** | Probe only; runtime missing here |
 | Plugin code loading | Deliberately not implemented |

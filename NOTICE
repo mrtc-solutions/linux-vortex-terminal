@@ -14,3 +14,8 @@ executable and never fabricate a successful consult.
 
 Do not copy proprietary code into VORTEX. Install agents only with operator
 approval and respect each project's license and trademark terms.
+
+The observe → typed action → host-state reward loop in `backend/episode.py`
+is conceptually informed by Windows Agent Arena's POMDP task framing
+(https://github.com/microsoft/WindowsAgentArena, MIT). No WAA source is
+vendored; VORTEX executes reviewed Linux argv only.

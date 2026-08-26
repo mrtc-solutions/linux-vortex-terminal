@@ -114,6 +114,19 @@ class WorkspaceTests(unittest.TestCase):
         matched = self.workspace.operations_for_engagement("eng-filter")
         self.assertEqual([item["id"] for item in matched], ["op-in"])
 
+    def test_episode_reward_is_zero_without_observed_success(self):
+        from backend.episode import reward, step
+        missing = {"kind": "container_diagnose", "status": "unavailable", "missing_tools": ["docker"], "request": "diagnose docker", "commands": []}
+        scored = reward(missing, None)
+        self.assertEqual(scored["reward"], 0.0)
+        self.assertFalse(scored["achieved"])
+        self.assertEqual(scored["source"], "observed-host-state")
+        plan = build_plan(self.store, "whoami", self.tmp.name)
+        record = step(plan, {"status": "succeeded", "commands": [{"exit_code": 0, "stdout": "user\\n"}]})
+        self.assertEqual(record["evaluation"]["reward"], 1.0)
+        self.assertTrue(record["observation"]["untrusted_output"])
+        self.assertIn("linux.system.identity", record["observation"]["legal_adapters"])
+
     def test_cli_tasks_pause_and_reject(self):
         from cli import vortex as vortex_cli
         self.assertEqual(vortex_cli.main(["--json", "tasks", "pause"]), 1)

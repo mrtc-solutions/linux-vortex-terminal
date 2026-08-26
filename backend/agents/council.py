@@ -79,12 +79,15 @@ def critic(plan: dict[str, Any], consultations: list[dict[str, Any]]) -> dict[st
     }
 
 
-def consult(plan: dict[str, Any], task: dict[str, Any] | None = None) -> dict[str, Any]:
+def consult(plan: dict[str, Any], task: dict[str, Any] | None = None, observation: dict[str, Any] | None = None) -> dict[str, Any]:
     budget = resource_budget()
     selected = select_agents(plan)
+    payload = dict(task or {"id": plan.get("id"), "request": plan.get("request")})
+    if observation:
+        payload["observation"] = observation
     consultations = []
     for agent_id in selected:
-        result = ADAPTERS[agent_id].submit_task(task or {"id": plan.get("id"), "request": plan.get("request")})
+        result = ADAPTERS[agent_id].submit_task(payload)
         consultations.append(result)
         if budget["mode"] == "sequential":
             continue
@@ -96,5 +99,6 @@ def consult(plan: dict[str, Any], task: dict[str, Any] | None = None) -> dict[st
         "budget": budget,
         "consultations": consultations,
         "critic": review,
-        "note": "External agents never receive process control. Guardian remains independent.",
+        "observation_provided": bool(observation),
+        "note": "External agents receive observation data only. They never receive process control. Guardian remains independent.",
     }

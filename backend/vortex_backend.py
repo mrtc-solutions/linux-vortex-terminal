@@ -2261,6 +2261,17 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not item:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
                 return self._json(200, {"task": item, "events": self.workspace.list_task_events(task_id)})
+            if path.startswith("/api/tasks/") and path.endswith("/episode"):
+                task_id = path.split("/")[-2]
+                item = self.workspace.get_task(task_id)
+                if not item:
+                    return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                return self._json(200, {
+                    "task": item,
+                    "observation": (item.get("result") or {}).get("observation"),
+                    "episode": (item.get("result") or {}).get("episode"),
+                    "events": [row for row in self.workspace.list_task_events(task_id) if row.get("kind") == "episode_step"],
+                })
             if path.startswith("/api/tasks/") and path.count("/") == 3:
                 item = self.workspace.get_task(path.rsplit("/", 1)[-1])
                 return self._json(200 if item else 404, {"task": item} if item else {"error": {"code": "not_found", "message": "task not found"}})
