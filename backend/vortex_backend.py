@@ -2084,6 +2084,7 @@ def capabilities_document() -> dict[str, Any]:
             "typed-plan-execution", "pty-sessions", "guardian", "engagements",
             "workspace-turn", "tasks", "conversations", "reports", "assessment-reports",
             "secret-slots", "sse-operations", "sse-sessions", "stop-all", "audit-chain",
+            "episode-observe-act-evaluate",
         ],
         "host_probes": {
             "docker": docker.get("state"),
