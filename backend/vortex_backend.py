@@ -1972,7 +1972,7 @@ class ExecutionManager:
         workspace = getattr(self, "workspace", None)
         if workspace is not None:
             try:
-                from orchestrate import finish_task
+                finish_task = _load("orchestrate").finish_task
                 task = workspace.find_task_by_plan(plan["id"])
                 if task:
                     finish_task(workspace, task["id"], op, plan, executor=self, store=self.store)
@@ -2151,15 +2151,15 @@ class VortexHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/health":
                 try:
-                    from config import load_settings
-                    from health import collect
+                    load_settings = _load("config").load_settings
+                    collect = _load("health").collect
                     payload = collect(self.store, self.sessions, load_settings())
                     return self._json(200, {"ok": True, "version": APP_VERSION, "backend": "online", "health": payload, "offline": payload.get("offline"), "interrupted_tasks": self.workspace.interrupted_tasks()})
                 except Exception as exc:
                     return self._json(200, {"ok": False, "version": APP_VERSION, "backend": "online", "health_error": redact(str(exc))})
             if path == "/api/system/health":
-                from config import load_settings
-                from health import collect
+                load_settings = _load("config").load_settings
+                collect = _load("health").collect
                 return self._json(200, {"health": collect(self.store, self.sessions, load_settings())})
             if path == "/api/capabilities":
                 return self._json(200, capabilities_document())
@@ -2167,15 +2167,15 @@ class VortexHandler(BaseHTTPRequestHandler):
                 from agents.council import discover
                 return self._json(200, {"agents": discover()})
             if path == "/api/models":
-                from config import load_settings
+                load_settings = _load("config").load_settings
                 from models.router import model_status
                 return self._json(200, {"model": model_status(load_settings())})
             if path == "/api/settings":
-                from config import load_settings
+                load_settings = _load("config").load_settings
                 return self._json(200, {"settings": load_settings()})
             if path == "/api/setup":
-                from config import load_settings
-                from health import setup_checks
+                load_settings = _load("config").load_settings
+                setup_checks = _load("health").setup_checks
                 return self._json(200, {"setup": setup_checks(self.store, load_settings())})
             if path == "/api/dependencies":
                 deps = _load("dependencies")
@@ -2189,7 +2189,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 from sandbox import isolation_status
                 return self._json(200, {"sandbox": isolation_status()})
             if path == "/api/secrets":
-                from secretstore import status as secret_status
+                secret_status = _load("secretstore").status
                 return self._json(200, {"secrets": secret_status()})
             if path.startswith("/api/operations/") and path.endswith("/stream"):
                 op_id = path.split("/")[-2]
@@ -2509,20 +2509,20 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
                 return self._json(200, {"task": task})
             if path == "/api/secrets":
-                from secretstore import put
+                put = _load("secretstore").put
                 slot = str(body.get("slot") or "")
                 value = str(body.get("value") or "")
                 return self._json(200, {"secrets": put(slot, value)})
             if path == "/api/control/stop-all":
-                from orchestrate import stop_all
+                stop_all = _load("orchestrate").stop_all
                 result = stop_all(self.executor, self.sessions, self.workspace)
                 self.store.append_audit("stop_all", result)
                 return self._json(202, {"stop": result})
             if path == "/api/settings":
-                from config import save_settings
+                save_settings = _load("config").save_settings
                 return self._json(200, {"settings": save_settings(body if isinstance(body, dict) else {})})
             if path == "/api/setup/complete":
-                from config import save_settings
+                save_settings = _load("config").save_settings
                 return self._json(200, {"settings": save_settings({"first_run_complete": True})})
             if path == "/api/dependencies/plan":
                 deps = _load("dependencies")
@@ -2559,7 +2559,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
                 return self._json(200, {"task": task})
             if path.startswith("/api/operations/") and path.endswith("/complete-task"):
-                from orchestrate import finish_task
+                finish_task = _load("orchestrate").finish_task
                 operation_id = path.split("/")[-2]
                 operation = self.store.get_operation(operation_id)
                 if not operation:

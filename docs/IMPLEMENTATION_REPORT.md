@@ -1,29 +1,22 @@
 # Implementation report — VORTEX 0.2.0
 
-**Date:** 2026-08-25  
 **Status:** production-quality modular monolith; not a 1.0 release
 
-## Delivered beyond the 0.1 slice
+## What is real
 
-- Independent Guardian (`backend/security/guardian.py`) recomputes risk and
-  approval from command specs and policy. Models and agents cannot approve
-  themselves. Destructive matching is word-level (`adduser` is not `dd`).
-- Persistent conversations, VTX task IDs, edit-branching, export download,
-  search, reject, pause.
-- The overview SEND control posts `/api/workspace/turn` (plan + Guardian +
-  optional auto-run). Approve still uses the single execution authority.
-- Agent adapters as separate modules with live `health_check()`. Installed
-  binaries are not invoked until a reviewed consult interface exists.
-- Tool registry, system reports, assessment reports scoped to one engagement,
-  JSONL observability, plugin manifests, sandbox capability probe, first-run
-  checks, benchmark CLI, HTTP API tests, security tests.
-- 70+ Python tests plus the JS terminal emulator test.
+- One Python execution authority: `shell=False`, PTY, approval tokens, audit chain.
+- Independent Guardian. Agents and models cannot self-approve.
+- Workspace turn: plan → council (observation as data) → Guardian → optional execute.
+- Episode reward is 0 or 1 from observed Linux outcomes (`backend/episode.py`).
+- Built-in `vortex-local` advisor is always present and never executes.
+- Third-party agent adapters probe binaries only; consult stays REQUIRES CONFIGURATION.
+- Missing tools are listed live. INSTALL builds an apt plan or an operator proposal.
+- 81 Python tests plus the JS terminal emulator.
 
 ## Honest limits
 
-See `docs/STATUS.md`. This host has no Docker, no Ollama, and none of the nine
-external agent CLIs. Those subsystems report UNAVAILABLE rather than fake
-success.
+This host has no Docker, no Ollama, and none of the nine external agent CLIs.
+Those subsystems report UNAVAILABLE rather than fake success.
 
 Do not describe VORTEX 0.2.0 as a full autonomous pentest platform or as
 having working third-party agent conversations.

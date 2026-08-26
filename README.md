@@ -23,6 +23,7 @@ Requires Linux and Python 3.11+. Core use has no pip dependency.
 ./vortex health --json
 ./vortex tools
 ./vortex agents --json
+./vortex deps --json
 ./vortex sandbox --json
 ./vortex plan "system health"
 ./vortex plan "whoami"
@@ -49,7 +50,9 @@ Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 | Conversations, edit-branching, export, search | Implemented + tested |
 | Objective evaluation / replan proposal after observed results | Implemented + tested |
 | Kali/Linux tool registry with live probes | Implemented + tested |
-| Agent Council adapters (9) with binary health checks | Implemented + tested; missing stay UNAVAILABLE |
+| Agent Council (9 third-party + builtin `vortex-local`) | Implemented + tested; third-party missing stay UNAVAILABLE |
+| Observe → act → host-state reward | Implemented + tested |
+| Missing-dependency window / `vortex deps` | Implemented + tested; no silent install |
 | Reports Markdown / HTML / JSON / PDF from observed operations | Implemented + tested |
 | System inventory report from doctor + tool probes | Implemented |
 | Memory, experiences, validated procedures | Implemented + tested |

@@ -3,7 +3,7 @@
 VORTEX 0.2.0 is a real Linux application. Production paths use installed host
 tools and observed output only. Test doubles exist only inside tests.
 
-**75 Python tests + JS terminal emulator: passing.**
+**81 Python tests + JS terminal emulator: passing.**
 
 ## Directive coverage
 
@@ -16,7 +16,7 @@ tools and observed output only. Test doubles exist only inside tests.
 | Tasks (VTX-*), resume, pause, reject, events, replan | Done + tested |
 | Conversations, branch, export, message search | Done + tested |
 | Tool registry live probes | Done + tested |
-| Agent adapters + discovery | Done + tested; consult = REQUIRES CONFIGURATION |
+| Agent adapters + discovery (9 third-party + builtin `vortex-local`) | Done + tested; third-party consult = REQUIRES CONFIGURATION |
 | Reports MD/HTML/JSON/PDF + assessment (engagement-scoped) | Done + tested |
 | Memory / procedures / experiences | Done + tested |
 | Workspace SEND (`/api/workspace/turn`) | Done + tested |
@@ -25,10 +25,9 @@ tools and observed output only. Test doubles exist only inside tests.
 | Static path-traversal rejection | Done + tested |
 | Capabilities document (`GET /api/capabilities`) | Done + tested |
 | Missing-dependency window + INSTALL buttons | Done + tested (apt plans / operator proposals; no silent install) |
-| CLI `tasks pause` / `tasks reject` | Done + tested |
+| CLI `tasks pause` / `tasks reject` / `deps` | Done + tested |
 | Observe → typed action → host-state reward (WAA-inspired, Linux argv) | Done + tested |
 | Built-in `vortex-local` advisor (always present, never executes) | Done + tested |
-| CLI `vortex deps` | Done + tested |
 | Ollama loopback probe | Done; unavailable here |
 | Docker isolation **execution** | Probe only; runtime missing here |
 | Plugin code loading | Deliberately not implemented |
@@ -40,7 +39,7 @@ tools and observed output only. Test doubles exist only inside tests.
 
 These stay UNAVAILABLE until the host has the software or a release VM:
 
-1. Reviewed non-interactive consult APIs for agents that are actually installed
+1. Reviewed non-interactive consult APIs for third-party agents that are actually installed
 2. Disposable-VM apt/systemd mutation acceptance
 3. Full xterm + durable PTY attach across sidecar restarts
 4. Signed `.deb` install/upgrade/uninstall evidence
