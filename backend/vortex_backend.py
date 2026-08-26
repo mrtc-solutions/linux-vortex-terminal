@@ -2454,8 +2454,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                 rating = int(body.get("rating", 0)); correction = redact(str(body.get("correction", "")))[:2000]
                 self.store.append_audit("feedback_recorded", {"operation_id": body.get("operation_id"), "rating": max(1, min(5, rating)), "correction": correction}); return self._json(201, {"saved": True})
             if path == "/api/workspace/turn":
-                from config import load_settings
-                from orchestrate import run_turn
+                load_settings = _load("config").load_settings
+                run_turn = _load("orchestrate").run_turn
                 request = body.get("request")
                 if not isinstance(request, str) or not request.strip():
                     raise ValueError("request must be a string")
@@ -2525,16 +2525,16 @@ class VortexHandler(BaseHTTPRequestHandler):
                 )
                 return self._json(200, {"install": proposal, "planned": True, "auto_install": False, **result})
             if path.startswith("/api/tasks/") and path.endswith("/resume"):
-                from config import load_settings
-                from orchestrate import run_turn
+                load_settings = _load("config").load_settings
+                run_turn = _load("orchestrate").run_turn
                 task = self.workspace.get_task(path.split("/")[-2])
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
                 result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=body.get("cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
                 return self._json(200, result)
             if path.startswith("/api/tasks/") and path.endswith("/restart"):
-                from config import load_settings
-                from orchestrate import run_turn
+                load_settings = _load("config").load_settings
+                run_turn = _load("orchestrate").run_turn
                 task = self.workspace.get_task(path.split("/")[-2])
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})

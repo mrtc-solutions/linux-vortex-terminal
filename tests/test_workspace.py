@@ -116,6 +116,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_cli_tasks_pause_and_reject(self):
         from cli import vortex as vortex_cli
+        self.assertEqual(vortex_cli.main(["--json", "tasks", "pause"]), 1)
         plan = build_plan(self.store, "whoami", self.tmp.name)
         task = self.workspace.create_task("whoami")
         self.workspace.update_task(task["id"], plan_id=plan["id"], state="WAITING_FOR_APPROVAL")
