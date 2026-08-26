@@ -27,6 +27,8 @@ tools and observed output only. Test doubles exist only inside tests.
 | Missing-dependency window + INSTALL buttons | Done + tested (apt plans / operator proposals; no silent install) |
 | CLI `tasks pause` / `tasks reject` | Done + tested |
 | Observe → typed action → host-state reward (WAA-inspired, Linux argv) | Done + tested |
+| Built-in `vortex-local` advisor (always present, never executes) | Done + tested |
+| CLI `vortex deps` | Done + tested |
 | Ollama loopback probe | Done; unavailable here |
 | Docker isolation **execution** | Probe only; runtime missing here |
 | Plugin code loading | Deliberately not implemented |
