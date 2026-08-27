@@ -213,6 +213,19 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(unimplemented["ok"])
         self.assertIn("NOT IMPLEMENTED", unimplemented["reason"])
 
+    def test_expired_engagement_cannot_plan_outbound_work(self):
+        from backend.vortex_backend import now_iso
+        engagement = {
+            "id": "expired-eng", "created_at": now_iso(), "expires_at": "2020-01-01T00:00:00+00:00",
+            "name": "lab", "authorization": "t", "targets": ["https://lab.example.test"],
+            "classes": ["reconnaissance"], "status": "active",
+        }
+        self.store.create_engagement(engagement)
+        plan = build_plan(self.store, "curl https://lab.example.test", self.tmp.name, "expired-eng")
+        self.assertEqual(plan["status"], "rejected")
+        self.assertEqual(plan["commands"], [])
+        self.assertTrue(any("expired" in note.lower() or "closed" in note.lower() for note in plan["notes"]))
+
     def test_closed_engagement_cannot_plan_outbound_work(self):
         from backend.vortex_backend import now_iso
         engagement = {

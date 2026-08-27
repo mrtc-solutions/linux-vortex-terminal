@@ -1240,9 +1240,16 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     rollback: dict[str, Any] = {"available": False, "advice": "No automatic rollback metadata is available for this plan."}
     network_facts: dict[str, Any] = {}
     engagement = store.get_engagement(engagement_id) if engagement_id else None
-    closed_engagement = bool(engagement and engagement.get("status") != "active")
-    if closed_engagement:
-        engagement = None
+    closed_engagement = False
+    if engagement:
+        expired = False
+        try:
+            expired = time.time() > datetime.fromisoformat(str(engagement.get("expires_at"))).timestamp()
+        except (TypeError, ValueError):
+            expired = True
+        if engagement.get("status") != "active" or expired:
+            closed_engagement = True
+            engagement = None
 
     if lower.startswith("explain ") or lower.startswith("what does ") or lower.startswith("why does "):
         kind = "explanation"
@@ -1277,7 +1284,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 status = "unavailable"; notes.append("OFFLINE mode blocks outbound SSH diagnostics; no connection was attempted.")
             elif not engagement:
                 if closed_engagement:
-                    status = "rejected"; notes.append("Engagement is closed; no SSH connection was planned.")
+                    status = "rejected"; notes.append("Engagement is closed or expired; no SSH connection was planned.")
                 else:
                     status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex never bypasses host verification."]
             elif not target_in_engagement(target, engagement):
@@ -1410,7 +1417,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         elif not engagement:
             if closed_engagement:
                 status = "rejected"
-                notes.append("Engagement is closed; no assessment command was created.")
+                notes.append("Engagement is closed or expired; no assessment command was created.")
             else:
                 status = "clarified"
                 notes += ["Active cybersecurity work requires an engagement before a target or network tool can run.", "Create an engagement with an owner/authorization reference, canonical targets, limits, and an expiry."]
