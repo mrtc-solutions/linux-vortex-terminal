@@ -139,6 +139,20 @@ class VortexSecurityTests(unittest.TestCase):
         })
         self.assertTrue(decision["blocked"])
 
+    def test_string_auto_low_risk_cannot_auto_execute(self):
+        plan = build_plan(self.store, "whoami", self.tmp.name)
+        decision = evaluate(plan, {"profile": "standard", "auto_low_risk": "true", "offline": "false"})
+        self.assertNotEqual(decision["decision"], "auto")
+        self.assertTrue(decision["requires_approval"])
+
+    def test_package_plans_do_not_require_an_engagement(self):
+        from backend.vortex_backend import plan_requires_engagement
+        identity = build_plan(self.store, "whoami", self.tmp.name)
+        self.assertFalse(plan_requires_engagement(identity))
+        apt = build_plan(self.store, "install package git", self.tmp.name)
+        if apt["status"] == "planned":
+            self.assertFalse(plan_requires_engagement(apt))
+
     def test_safe_profile_cannot_auto_run_even_if_flag_is_set(self):
         plan = build_plan(self.store, "whoami", self.tmp.name)
         decision = evaluate(plan, {"profile": "safe", "auto_low_risk": True})

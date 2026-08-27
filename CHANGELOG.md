@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.13 — 2026-08-27
+
+- Guardian treats only JSON/bool `True` as offline or auto-low-risk. A string
+  `"true"` cannot auto-execute.
+- Apt/systemd mutations no longer require a security engagement. Assessment
+  and SSH still do. Preflight approval re-checks Guardian and exclusions.
+- GET `q`/`id` query values longer than 200 characters are 422.
+
 ## 0.2.12 — 2026-08-26
 
 - Guardian treats `chmod 0777` / `2777` / `a+rwx` as world-writable, not only

@@ -114,6 +114,8 @@ def evaluate(plan: dict[str, Any], policy: dict[str, Any] | None = None, engagem
         policy["auto_low_risk"] = False
         policy["auto_medium_risk"] = False
     policy["auto_medium_risk"] = False
+    policy["auto_low_risk"] = policy.get("auto_low_risk") is True and policy.get("profile") in {"standard", "expert"}
+    policy["offline"] = policy.get("offline") is True
     commands = list(plan.get("commands") or [])
     risk = recompute_risk(commands)
     reasons: list[str] = []
@@ -123,7 +125,7 @@ def evaluate(plan: dict[str, Any], policy: dict[str, Any] | None = None, engagem
     if looks_destructive(display):
         blocked = True
         reasons.append("Guardian blocked a potentially destructive command class.")
-    if policy.get("offline") and any(spec.get("network_class") not in LOW_NETWORK for spec in commands):
+    if policy.get("offline") is True and any(spec.get("network_class") not in LOW_NETWORK for spec in commands):
         blocked = True
         reasons.append("Offline policy blocks network-effecting commands.")
     if any(spec.get("network_class") not in LOW_NETWORK for spec in commands):

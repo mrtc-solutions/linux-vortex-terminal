@@ -1108,6 +1108,19 @@ def attach_engagement_scope(store: Store, engagement: dict[str, Any] | None) -> 
     return item
 
 
+def plan_requires_engagement(plan: dict[str, Any]) -> bool:
+    """Assessment/SSH outbound work needs an engagement. apt/systemd mutations do not."""
+    if plan.get("scope", {}).get("targets"):
+        return True
+    for spec in plan.get("commands") or []:
+        adapter = spec.get("adapter_id") or ""
+        if adapter.startswith("security.") or adapter == "linux.ssh.connection":
+            return True
+        if spec.get("network_class") == "outbound-read":
+            return True
+    return False
+
+
 def target_in_engagement(target: str, engagement: dict[str, Any]) -> bool:
     normalized = normalize_target(target)
     parsed_target = urllib.parse.urlparse(normalized)
@@ -1727,6 +1740,7 @@ class ExecutionManager:
         plan = authoritative
         if plan["status"] != "planned":
             raise PolicyError("plan is not executable in its current state")
+        offline = offline is True
         if offline and any(spec.get("network_class") not in ("no-network", "loopback-only") for spec in plan.get("commands", [])):
             raise PolicyError("offline mode blocks this network-effecting plan")
         planned_network = plan.get("network_facts", {})
@@ -1738,7 +1752,7 @@ class ExecutionManager:
             raise PermissionError("this plan requires root; rerun the reviewed plan with sudo vortex --allow-root run <plan-id>")
         if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
             raise TimeoutError("plan expired")
-        needs_scope = any(spec.get("network_class") not in ("no-network", "loopback-only") for spec in plan.get("commands", []))
+        needs_scope = plan_requires_engagement(plan)
         if needs_scope:
             engagement = self.store.get_engagement(plan["engagement_id"]) if plan.get("engagement_id") else None
             workspace = getattr(self, "workspace", None)
@@ -1759,7 +1773,7 @@ class ExecutionManager:
                 if scope_mod is None or scope_mod.excluded(str(target), engagement):
                     raise PolicyError("plan target is on the engagement exclusion list")
         try:
-            guardian = _load("security.guardian").evaluate(plan, {"profile": "safe", "auto_low_risk": False, "offline": bool(offline), "allow_root": False}, engagement if needs_scope else None)
+            guardian = _load("security.guardian").evaluate(plan, {"profile": "safe", "auto_low_risk": False, "offline": offline, "allow_root": False}, engagement if needs_scope else None)
         except Exception as exc:
             raise PolicyError("Guardian could not evaluate this plan") from exc
         if guardian.get("blocked"):
@@ -1834,7 +1848,8 @@ class ExecutionManager:
             identity = spec.get("executable_identity", {})
             if current.get("state") != "installed" or current.get("sha256") != identity.get("sha256") or current.get("device") != identity.get("device") or current.get("inode") != identity.get("inode"):
                 raise PolicyError(f"executable identity changed for {spec['executable']}; fresh plan required")
-        needs_scope = any(spec.get("network_class") not in ("no-network", "loopback-only") for spec in plan.get("commands", []))
+        needs_scope = plan_requires_engagement(plan)
+        engagement = None
         if needs_scope:
             engagement = self.store.get_engagement(plan["engagement_id"]) if plan.get("engagement_id") else None
             workspace = getattr(self, "workspace", None)
@@ -1844,6 +1859,26 @@ class ExecutionManager:
                 raise PolicyError("engagement is unavailable or closed")
             if time.time() > datetime.fromisoformat(engagement["expires_at"]).timestamp():
                 raise TimeoutError("engagement expired before mutation approval")
+            engagement = attach_engagement_scope(self.store, engagement)
+            try:
+                scope_mod = _load("security.scope")
+            except Exception:
+                scope_mod = None
+            for target in plan.get("scope", {}).get("targets", []):
+                if not target_in_engagement(target, engagement):
+                    raise PolicyError("plan target is no longer inside the engagement scope")
+                if scope_mod is None or scope_mod.excluded(str(target), engagement):
+                    raise PolicyError("plan target is on the engagement exclusion list")
+        try:
+            offline_now = _load("config").load_settings().get("offline") is True
+        except Exception:
+            offline_now = True
+        try:
+            guardian = _load("security.guardian").evaluate(plan, {"profile": "safe", "auto_low_risk": False, "offline": offline_now, "allow_root": False}, engagement if needs_scope else None)
+        except Exception as exc:
+            raise PolicyError("Guardian could not evaluate this plan") from exc
+        if guardian.get("blocked"):
+            raise PolicyError("Guardian blocked this plan: " + "; ".join((guardian.get("reasons") or ["blocked"])[:4]))
         if not isinstance(approval_token, str) or not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
             raise PolicyError("exact approval token is required for mutation confirmation")
         if not isinstance(preflight_digest, str) or not preflight_digest or not secrets.compare_digest(preflight_digest, operation.get("preflight_digest", "")):
@@ -2302,6 +2337,17 @@ class VortexHandler(BaseHTTPRequestHandler):
         return fmt.lower()
 
     @staticmethod
+    def _query_text(query: dict[str, list[str]], key: str, default: str = "", limit: int = 200) -> str:
+        value = (query.get(key) or [default])[0]
+        if value is None:
+            return default
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string")
+        if len(value) > limit:
+            raise ValueError(f"{key} is too long")
+        return value
+
+    @staticmethod
     def _bounded_int(body: dict[str, Any], key: str, default: int, lo: int, hi: int) -> int:
         value = body.get(key, default)
         if value is None:
@@ -2355,7 +2401,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/dependencies/proposal":
                 deps = _load("dependencies")
                 query = urllib.parse.parse_qs(parsed.query)
-                item_id = (query.get("id") or [""])[0]
+                item_id = self._query_text(query, "id", "")
                 return self._json(200, {"install": deps.proposal_for(item_id)})
             if path == "/api/sandbox":
                 from sandbox import isolation_status
@@ -2386,7 +2432,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/tools/route":
                 from tools.router import route
                 query = urllib.parse.parse_qs(parsed.query)
-                return self._json(200, {"route": route((query.get("q") or [""])[0])})
+                return self._json(200, {"route": route(self._query_text(query, "q", ""))})
             if path == "/api/plugins":
                 from plugins.loader import list_manifests
                 return self._json(200, {"plugins": list_manifests()})
@@ -2408,7 +2454,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/conversations":
                 query = urllib.parse.parse_qs(parsed.query)
-                return self._json(200, {"conversations": self.workspace.list_conversations((query.get("q") or [None])[0])})
+                needle = self._query_text(query, "q", "")
+                return self._json(200, {"conversations": self.workspace.list_conversations(needle or None)})
             if path.startswith("/api/conversations/") and path.endswith("/export"):
                 cid = path.split("/")[-2]
                 payload = {"schema_version": SCHEMA_VERSION, "export": self.workspace.export_conversation(cid)}

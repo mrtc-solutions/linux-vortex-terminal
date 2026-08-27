@@ -13,7 +13,7 @@
 - Missing tools are listed live. INSTALL builds an apt plan or an operator proposal.
 - nuclei/ffuf/nikto/amass/gobuster adapters emit real argv or UNAVAILABLE.
 - `vortex install --user`, `vortex serve`, `vortex turn`, and `docs/USER_GUIDE.md`.
-- 110 Python tests plus the JS terminal emulator.
+- 113 Python tests plus the JS terminal emulator.
 
 ## Honest limits
 
