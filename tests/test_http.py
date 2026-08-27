@@ -147,6 +147,25 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(episode["task"]["id"], turn["task"]["id"])
         self.assertIsNotNone(episode.get("observation"))
 
+    def test_get_plan_redacts_approval_token(self):
+        planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})
+        self.assertTrue(planned["plan"]["approval_token"])
+        fetched = self._json("GET", f"/api/plans/{planned['plan']['id']}")
+        self.assertNotIn("approval_token", fetched["plan"])
+
+    def test_execute_without_token_is_rejected(self):
+        planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})
+        denied = self._json("POST", "/api/execute", {"plan_id": planned["plan"]["id"], "confirm": True, "allow_root": True}, expected=422)
+        self.assertEqual(denied["error"]["code"], "invalid_plan")
+
+    def test_http_backup_stays_inside_data_root(self):
+        denied = self._json("POST", "/api/store/backup", {"destination": "/tmp/vortex-exfil.db"}, expected=422)
+        self.assertEqual(denied["error"]["code"], "invalid_plan")
+        inside = self._json("POST", "/api/store/backup", {"destination": "snapshot.db"}, expected=201)
+        path = Path(inside["backup"]["path"])
+        self.assertTrue(str(path).startswith(self.tmp.name))
+        self.assertTrue(path.is_file())
+
     def test_http_artifact_analyze_stays_inside_data_root(self):
         outside = Path("/etc/hosts")
         if not outside.is_file():

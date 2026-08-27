@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3 — 2026-08-26
+
+- HTTP `/api/execute` never accepts `allow_root`. Offline policy cannot be
+  cleared by the renderer. GET `/api/plans/{id}` omits the approval token.
+- HTTP backups must land inside the VORTEX data directory.
+- Safe profile always confirms: settings cannot enable auto-run, medium auto,
+  root, or a non-loopback Ollama endpoint.
+
 ## 0.2.2 — 2026-08-26
 
 - Unknown, closed, or expired engagement IDs cannot plan outbound work and

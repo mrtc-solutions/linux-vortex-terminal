@@ -106,6 +106,10 @@ def policy_defaults(profile: str = "safe") -> dict[str, Any]:
 
 def evaluate(plan: dict[str, Any], policy: dict[str, Any] | None = None, engagement: dict[str, Any] | None = None) -> dict[str, Any]:
     policy = {**policy_defaults(), **(policy or {})}
+    if policy.get("profile") == "safe":
+        policy["auto_low_risk"] = False
+        policy["auto_medium_risk"] = False
+    policy["auto_medium_risk"] = False
     commands = list(plan.get("commands") or [])
     risk = recompute_risk(commands)
     reasons: list[str] = []

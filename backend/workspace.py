@@ -489,4 +489,16 @@ class Workspace:
             return None
         item = dict(item)
         item.update(self.engagement_scope(item["id"]))
+        expired = False
+        try:
+            from datetime import datetime
+            import time as _time
+            expired = _time.time() > datetime.fromisoformat(str(item.get("expires_at"))).timestamp()
+        except (TypeError, ValueError):
+            expired = True
+        item["expired"] = expired
+        if expired and item.get("status") == "active":
+            item["effective_status"] = "expired"
+        else:
+            item["effective_status"] = item.get("status")
         return item

@@ -2410,7 +2410,12 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/audit/verify": return self._json(200, {"audit": self.store.verify_audit()})
             if path == "/api/store/integrity": return self._json(200, {"integrity": self.store.integrity_check()})
             if path.startswith("/api/plans/"):
-                plan = self.store.get_plan(path.rsplit("/", 1)[-1]); return self._json(200 if plan else 404, {"plan": plan} if plan else {"error": {"code": "not_found", "message": "plan not found"}})
+                plan = self.store.get_plan(path.rsplit("/", 1)[-1])
+                if not plan:
+                    return self._json(404, {"error": {"code": "not_found", "message": "plan not found"}})
+                public = dict(plan)
+                public.pop("approval_token", None)
+                return self._json(200, {"plan": public})
             if path.startswith("/api/operations/"):
                 op = self.store.get_operation(path.rsplit("/", 1)[-1]); return self._json(200 if op else 404, {"operation": op} if op else {"error": {"code": "not_found", "message": "operation not found"}})
             if path == "/" or path == "/index.html":
@@ -2464,7 +2469,15 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/store/backup":
                 destination = body.get("destination")
                 if not isinstance(destination, str) or not destination.strip(): raise ValueError("backup destination is required")
-                backup_path = self.store.backup(destination, bool(body.get("overwrite", False)))
+                root = self.store.root.resolve()
+                raw = Path(destination.strip())
+                dest = raw if raw.is_absolute() else (root / "backups" / raw.name)
+                try:
+                    resolved = dest.expanduser().resolve()
+                    resolved.relative_to(root)
+                except ValueError as exc:
+                    raise PolicyError("backup destination must be inside the VORTEX data directory") from exc
+                backup_path = self.store.backup(str(resolved), bool(body.get("overwrite", False)))
                 return self._json(201, {"backup": {"path": str(backup_path), "mode": oct(backup_path.stat().st_mode & 0o777)}})
             if path == "/api/artifacts/analyze":
                 artifact = analyze_path(body.get("path"), body.get("kind", "auto"), allowed_roots=[self.store.root])
@@ -2478,7 +2491,10 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/execute":
                 plan = self.store.get_plan(str(body.get("plan_id", "")))
                 if not plan: return self._json(404, {"error": {"code": "not_found", "message": "plan not found"}})
-                op = self.executor.start(plan, bool(body.get("confirm")), body.get("approval_token"), bool(body.get("allow_root", False)), bool(body.get("offline", False))); return self._json(202, {"operation": op})
+                settings = _load("config").load_settings()
+                offline = bool(settings.get("offline")) or bool(body.get("offline", False))
+                # HTTP never grants UID 0 override; only an explicit CLI --allow-root may.
+                op = self.executor.start(plan, bool(body.get("confirm")), body.get("approval_token"), False, offline); return self._json(202, {"operation": op})
             if path == "/api/engagements":
                 raw_targets = body.get("targets", [])
                 if not isinstance(raw_targets, list):

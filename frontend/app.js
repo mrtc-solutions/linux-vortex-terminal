@@ -27,7 +27,7 @@ function renderTools() {
   }));
 }
 function engagementLive(item) {
-  if (!item || item.status !== 'active') return false;
+  if (!item || item.status !== 'active' || item.expired || item.effective_status === 'expired') return false;
   const expires = Date.parse(item.expires_at);
   if (!Number.isNaN(expires) && expires <= Date.now()) return false;
   return true;

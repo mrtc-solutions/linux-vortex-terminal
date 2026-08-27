@@ -85,3 +85,31 @@ class VortexSecurityTests(unittest.TestCase):
         denied = discover_wordlist("gobuster wordlist /etc/passwd")
         self.assertEqual(denied["state"], "absent")
         self.assertIsNone(denied["path"])
+
+    def test_safe_profile_cannot_auto_run_even_if_flag_is_set(self):
+        plan = build_plan(self.store, "whoami", self.tmp.name)
+        decision = evaluate(plan, {"profile": "safe", "auto_low_risk": True})
+        self.assertEqual(decision["decision"], "approve")
+        self.assertTrue(decision["requires_approval"])
+        self.assertNotEqual(decision["decision"], "auto")
+
+    def test_settings_bind_auto_low_risk_to_profile(self):
+        from backend.config import save_settings
+        config_home = Path(self.tmp.name) / "config"
+        config_home.mkdir()
+        previous = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = str(config_home)
+        try:
+            safe = save_settings({"profile": "safe", "auto_low_risk": True, "auto_medium_risk": True, "allow_root": True, "ollama_endpoint": "http://evil.example.test:11434"})
+            self.assertEqual(safe["profile"], "safe")
+            self.assertFalse(safe["auto_low_risk"])
+            self.assertFalse(safe["auto_medium_risk"])
+            self.assertFalse(safe["allow_root"])
+            self.assertTrue(safe["ollama_endpoint"].startswith("http://127.0.0.1"))
+            standard = save_settings({"profile": "standard"})
+            self.assertTrue(standard["auto_low_risk"])
+        finally:
+            if previous is None:
+                os.environ.pop("XDG_CONFIG_HOME", None)
+            else:
+                os.environ["XDG_CONFIG_HOME"] = previous

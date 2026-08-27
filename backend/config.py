@@ -45,6 +45,14 @@ def load_settings() -> dict[str, Any]:
     env_offline = os.environ.get("VORTEX_OFFLINE")
     if env_offline in {"1", "true", "yes"}:
         data["offline"] = True
+    if data.get("profile") not in {"safe", "standard", "expert"}:
+        data["profile"] = "safe"
+    data["auto_low_risk"] = data["profile"] in {"standard", "expert"}
+    data["auto_medium_risk"] = False
+    data["allow_root"] = False
+    endpoint = str(data.get("ollama_endpoint") or "")
+    if not (endpoint.startswith("http://127.0.0.1") or endpoint.startswith("http://localhost")):
+        data["ollama_endpoint"] = "http://127.0.0.1:11434"
     return data
 
 
@@ -65,6 +73,13 @@ def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
         current["privacy_mode"] = "local"
     if current["profile"] not in {"safe", "standard", "expert"}:
         current["profile"] = "safe"
+    # Safe always confirms. HTTP/settings cannot unlock medium auto-run or root.
+    current["auto_low_risk"] = current["profile"] in {"standard", "expert"}
+    current["auto_medium_risk"] = False
+    current["allow_root"] = False
+    endpoint = str(current.get("ollama_endpoint") or "")
+    if not (endpoint.startswith("http://127.0.0.1") or endpoint.startswith("http://localhost")):
+        current["ollama_endpoint"] = "http://127.0.0.1:11434"
     path = settings_path()
     path.write_text(canonical(current), encoding="utf-8")
     try:
