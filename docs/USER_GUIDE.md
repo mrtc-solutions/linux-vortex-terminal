@@ -244,6 +244,9 @@ systemd inspect, os-release, lscpu, …) work because those binaries exist.
 STOP ALL in the UI (or cancel from the CLI) interrupts VORTEX-owned process
 groups. It does not kill unrelated user processes.
 
+The path to “installed tools ⇒ real execution, nothing fabricated” is
+`docs/READY_WHEN_TOOLS_EXIST.md`.
+
 ## 12. What is not claimed
 
 - Third-party agent consult APIs (CAI, Strix, Nebula, …) — discovery only

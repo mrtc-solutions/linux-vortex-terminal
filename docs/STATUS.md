@@ -38,6 +38,8 @@ tools and observed output only. Test doubles exist only inside tests.
 | sqlmap / msf execution | Honest UNAVAILABLE; no command fabricated |
 | Signed 1.0 `.deb` | Not a 1.0 gate pass |
 
+**Plan to make “only host tools remain”:** `docs/READY_WHEN_TOOLS_EXIST.md`
+
 ## Remaining host / release gates (cannot be faked)
 
 These stay UNAVAILABLE until the host has the software or a release VM:
