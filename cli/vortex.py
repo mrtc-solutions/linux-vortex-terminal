@@ -343,6 +343,7 @@ def main(argv=None):
                 settings['offline'] = True
             settings['profile'] = args.profile
             settings['auto_low_risk'] = args.profile in ('standard', 'expert')
+            settings['cli_yes'] = bool(args.yes)
             result = run_turn(store, Workspace(store), ExecutionManager(store), args.request, cwd=args.cwd, engagement_id=args.engagement_id, conversation_id=None, settings=settings, confirm=bool(args.yes), approval_token=None)
             emit(result, args.as_json)
             return 0

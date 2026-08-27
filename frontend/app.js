@@ -26,7 +26,7 @@ function renderTools() {
     if (typeof window.openDependency === 'function') window.openDependency(btn.dataset.toolInstall);
   }));
 }
-async function loadEngagements() { try { const data = await api('/api/engagements'); state.engagements = data.engagements; if (!state.activeEngagementId && state.engagements[0]) state.activeEngagementId = state.engagements[0].id; renderEngagements(); } catch(e) { toast(e.message, true); } }
+async function loadEngagements() { try { const data = await api('/api/engagements'); state.engagements = data.engagements; if (!state.activeEngagementId) state.activeEngagementId = (state.engagements.find(e => e.status === 'active') || {}).id || null; renderEngagements(); } catch(e) { toast(e.message, true); } }
 function renderEngagements() { const el = $('engagement-list'); if (!state.engagements.length) { el.innerHTML = `<div class="empty-state panel"><div class="empty-icon">◎</div><h3>No active engagements</h3><p>Active tools such as nmap stay unavailable until a scope and expiry are declared.</p></div>`; return; } el.innerHTML = state.engagements.map(e => `<article class="engagement-card"><header><div><h3>${esc(e.name)}</h3><p>${esc(e.authorization)}</p></div><span class="badge ${e.status === 'active' ? 'badge-green':'badge-muted'}">${esc(e.status.toUpperCase())}</span></header><div>${e.targets.map(t => `<span class="target-pill">${esc(t)}</span>`).join('')}</div><div class="engagement-details"><span>ID ${esc(e.id.slice(0,12))}…</span><span>EXPIRES ${esc(fmtDate(e.expires_at))}</span><span>${e.classes.map(esc).join(' · ')}</span>${(e.excluded_targets||[]).length ? `<span>EXCL ${(e.excluded_targets||[]).map(esc).join(', ')}</span>` : ''}<a class="report-dl" href="/api/reports/assessment/${encodeURIComponent(e.id)}">ASSESSMENT</a>${e.status === 'active' ? ` <button class="text-button" data-close-engagement="${esc(e.id)}">CLOSE</button>` : ''}</div></article>`).join('');
   document.querySelectorAll('[data-close-engagement]').forEach(btn => btn.addEventListener('click', async () => {
     try { await api(`/api/engagements/${encodeURIComponent(btn.dataset.closeEngagement)}/close`, {method:'POST', body:{}}); toast('Engagement closed.'); loadEngagements(); }
@@ -44,7 +44,7 @@ function renderPlan(plan) { state.plan = plan; const badge = $('plan-badge'); ba
  $('approve-plan')?.addEventListener('click', approvePlan);
 }
 async function makePlan(request) { if (!request.trim()) return; setView('overview'); $('plan-button').disabled = true; $('plan-button').textContent = 'INSPECTING…'; try { const payload = {request, cwd: state.doctor?.cwd || undefined}; if (state.activeEngagementId) payload.engagement_id = state.activeEngagementId; const data = await api('/api/plan', {method:'POST', body:payload}); renderPlan(data.plan); toast(data.plan.status === 'planned' ? 'Typed plan ready — review before execution.' : statusLabel(data.plan.status), data.plan.status === 'rejected'); } catch(e) { toast(e.message, true); } finally { $('plan-button').disabled = false; $('plan-button').innerHTML = '<span class="spark">✦</span> PLAN REQUEST'; } }
-window.makePlan = makePlan;
+if (typeof window.makePlan !== 'function') window.makePlan = makePlan;
 async function approvePlan() { if (!state.plan) return; const button = $('approve-plan'); button.disabled = true; button.textContent = 'STARTING…'; try { const data = await api('/api/execute', {method:'POST', body:{plan_id:state.plan.id, approval_token:state.plan.approval_token, confirm:true}}); const op = data.operation; renderPlan({...state.plan, status:'started'}); toast('Operation started. Streaming real output from the local sidecar.'); await watchOperation(op.id); } catch(e) { button.disabled = false; button.textContent = 'APPROVE & EXECUTE'; toast(e.message, true); } }
 async function watchOperation(id) {
   const finish = async (op) => { renderAnalysis(op); await loadHistory(); };
@@ -203,7 +203,7 @@ function streamSession(sessionId) {
         if (!data.session || !['starting', 'running'].includes(status)) { es.close(); delete state.sessionStreams[sessionId]; }
       } catch (_) { /* keep listening */ }
     };
-    es.onerror = () => { es.close(); delete state.sessionStreams[sessionId]; pollSessions(); };
+    es.onerror = () => { es.close(); delete state.sessionStreams[sessionId]; };
     return true;
   } catch (_) { return false; }
 }

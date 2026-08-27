@@ -213,6 +213,32 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(unimplemented["ok"])
         self.assertIn("NOT IMPLEMENTED", unimplemented["reason"])
 
+    def test_closed_engagement_cannot_plan_outbound_work(self):
+        from backend.vortex_backend import now_iso
+        engagement = {
+            "id": "closed-eng", "created_at": now_iso(), "expires_at": "2099-08-25T00:00:00+00:00",
+            "name": "lab", "authorization": "t", "targets": ["https://lab.example.test"],
+            "classes": ["reconnaissance"], "status": "active",
+        }
+        self.store.create_engagement(engagement)
+        self.assertTrue(self.store.close_engagement("closed-eng"))
+        plan = build_plan(self.store, "curl https://lab.example.test", self.tmp.name, "closed-eng")
+        self.assertEqual(plan["status"], "rejected")
+        self.assertEqual(plan["commands"], [])
+        self.assertTrue(any("closed" in note.lower() for note in plan["notes"]))
+
+    def test_http_confirm_without_token_does_not_execute(self):
+        from backend.orchestrate import run_turn
+        result = run_turn(
+            self.store, self.workspace, ExecutionManager(self.store), "whoami",
+            cwd=self.tmp.name, engagement_id=None, conversation_id=None,
+            settings={"profile": "safe", "auto_low_risk": False, "offline": False},
+            confirm=True, approval_token=None,
+        )
+        self.assertFalse(result["auto_executed"])
+        self.assertIsNone(result["operation"])
+        self.assertEqual(result["task"]["state"], "WAITING_FOR_APPROVAL")
+
     def test_scan_plan_requires_engagement_and_never_fakes_missing_tool(self):
         from backend.vortex_backend import now_iso
         bare = build_plan(self.store, "nuclei https://lab.example.test", self.tmp.name)
