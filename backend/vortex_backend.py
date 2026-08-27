@@ -762,10 +762,14 @@ class SessionManager:
 
     @staticmethod
     def _size(value: Any, default: int) -> int:
+        if value is None:
+            value = default
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise PolicyError("terminal size must be an integer")
         try:
             value = int(value)
-        except (TypeError, ValueError):
-            value = default
+        except (TypeError, ValueError) as exc:
+            raise PolicyError("terminal size must be an integer") from exc
         return max(2, min(value, 500))
 
     def _shell_path(self, requested: str | None) -> str:
@@ -2500,15 +2504,18 @@ class VortexHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
             if path == "/api/sessions":
-                session = self.sessions.create(self._optional_str(body, "name"), self._optional_str(body, "cwd"), self._optional_str(body, "shell"), body.get("cols", 100), body.get("rows", 30))
+                session = self.sessions.create(self._optional_str(body, "name"), self._optional_str(body, "cwd"), self._optional_str(body, "shell"), self._bounded_int(body, "cols", 100, 2, 500), self._bounded_int(body, "rows", 30, 2, 500))
                 return self._json(201, {"session": session})
             if path.startswith("/api/sessions/"):
                 parts = path.split("/")
                 if len(parts) == 5 and parts[-1] == "input":
-                    session = self.sessions.write(parts[-2], body.get("data"))
+                    data = self._text(body, "data")
+                    if data is None:
+                        raise ValueError("session input data is required")
+                    session = self.sessions.write(parts[-2], data)
                     return self._json(200, {"session": session})
                 if len(parts) == 5 and parts[-1] == "resize":
-                    session = self.sessions.resize(parts[-2], body.get("cols"), body.get("rows"))
+                    session = self.sessions.resize(parts[-2], self._bounded_int(body, "cols", 100, 2, 500), self._bounded_int(body, "rows", 30, 2, 500))
                     return self._json(200, {"session": session})
                 if len(parts) == 5 and parts[-1] == "kill":
                     if not self.sessions.kill(parts[-2]):
@@ -2554,12 +2561,14 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not isinstance(raw_classes, list) or not all(isinstance(x, str) and x for x in raw_classes):
                     raise ValueError("classes must be a list of non-empty strings")
                 expires = parse_expiry(body.get("expires_at"), default_seconds=24 * 3600)
-                item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": redact(str(body.get("name") or "Authorized assessment"))[:160], "authorization": redact(str(body.get("authorization") or "operator-declared authorization"))[:500], "targets": targets, "classes": [redact(x)[:80] for x in raw_classes[:20]], "status": "active"}
+                item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": redact(self._optional_str(body, "name") or "Authorized assessment")[:160], "authorization": redact(self._optional_str(body, "authorization") or "operator-declared authorization")[:500], "targets": targets, "classes": [redact(x)[:80] for x in raw_classes[:20]], "status": "active"}
                 self.store.create_engagement(item)
-                excluded = body.get("excluded_targets") or []
-                if not isinstance(excluded, list):
-                    raise ValueError("excluded_targets must be a list")
-                self.workspace.save_engagement_scope(item["id"], [str(x) for x in excluded[:100]], str(body.get("environment") or ""), str(body.get("owner") or ""))
+                excluded = body.get("excluded_targets")
+                if excluded is None:
+                    excluded = []
+                if not isinstance(excluded, list) or not all(isinstance(x, str) and x for x in excluded):
+                    raise ValueError("excluded_targets must be a list of non-empty strings")
+                self.workspace.save_engagement_scope(item["id"], excluded[:100], self._optional_str(body, "environment") or "", self._optional_str(body, "owner") or "")
                 item = self.workspace.enrich_engagement(item)
                 return self._json(201, {"engagement": item})
             if path.startswith("/api/operations/") and path.endswith("/approve"):
@@ -2572,7 +2581,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return self._json(404, {"error": {"code": "not_running", "message": "operation is not running"}})
                 return self._json(202, {"cancel_requested": True, "operation_id": operation_id})
             if path == "/api/feedback":
-                rating = self._bounded_int(body, "rating", 1, 1, 5); correction = redact(str(body.get("correction", "")))[:2000]
+                rating = self._bounded_int(body, "rating", 1, 1, 5); correction = redact(self._optional_str(body, "correction") or "")[:2000]
                 self.store.append_audit("feedback_recorded", {"operation_id": self._optional_str(body, "operation_id"), "rating": rating, "correction": correction}); return self._json(201, {"saved": True})
             if path == "/api/workspace/turn":
                 load_settings = _load("config").load_settings
@@ -2586,10 +2595,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 result = run_turn(self.store, self.workspace, self.executor, request.strip(), cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), conversation_id=self._optional_str(body, "conversation_id"), settings=settings, confirm=self._flag(body, "confirm"), approval_token=self._text(body, "approval_token"))
                 return self._json(200, result)
             if path == "/api/conversations":
-                title = str(body.get("title") or "New conversation")
+                title = self._optional_str(body, "title") or "New conversation"
                 return self._json(201, {"conversation": self.workspace.create_conversation(title)})
             if path.startswith("/api/conversations/") and path.endswith("/rename"):
-                item = self.workspace.rename_conversation(path.split("/")[-2], str(body.get("title") or ""))
+                item = self.workspace.rename_conversation(path.split("/")[-2], self._text(body, "title") or "")
                 if not item:
                     return self._json(404, {"error": {"code": "not_found", "message": "conversation not found"}})
                 return self._json(200, {"conversation": item})
@@ -2601,7 +2610,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 parts = path.split("/")
                 if len(parts) != 6 or parts[1] != "api" or parts[2] != "conversations" or parts[4] != "messages":
                     return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
-                branch = self.workspace.edit_and_branch(parts[3], parts[5], str(body.get("content") or ""))
+                branch = self.workspace.edit_and_branch(parts[3], parts[5], self._text(body, "content") or "")
                 return self._json(201, {"conversation": branch, "messages": self.workspace.list_messages(branch["id"])})
             if path.startswith("/api/engagements/") and path.endswith("/close"):
                 eng_id = path.split("/")[-2]
@@ -2610,7 +2619,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"engagement": self.workspace.enrich_engagement(self.store.get_engagement(eng_id))})
             if path.startswith("/api/plans/") and path.endswith("/reject"):
                 plan_id = path.split("/")[-2]
-                result = self.workspace.reject_task_plan(plan_id, body.get("task_id"), self.executor)
+                result = self.workspace.reject_task_plan(plan_id, self._optional_str(body, "task_id"), self.executor)
                 if not result.get("rejected") and not result.get("task"):
                     return self._json(404, {"error": {"code": "not_found", "message": "plan not found or not rejectable"}})
                 return self._json(200, {"rejected": True, "plan_id": plan_id, "task": result.get("task")})
@@ -2621,9 +2630,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"task": task})
             if path == "/api/secrets":
                 put = _load("secretstore").put
-                slot = str(body.get("slot") or "")
-                value = str(body.get("value") or "")
-                return self._json(200, {"secrets": put(slot, value)})
+                slot = self._text(body, "slot")
+                value = self._text(body, "value")
+                if not slot:
+                    raise ValueError("slot is required")
+                return self._json(200, {"secrets": put(slot, value or "")})
             if path == "/api/control/stop-all":
                 stop_all = _load("orchestrate").stop_all
                 result = stop_all(self.executor, self.sessions, self.workspace)
@@ -2637,7 +2648,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"settings": save_settings({"first_run_complete": True})})
             if path == "/api/dependencies/plan":
                 deps = _load("dependencies")
-                item_id = str(body.get("id") or "")
+                item_id = self._optional_str(body, "id") or ""
                 proposal = deps.proposal_for(item_id)
                 if proposal.get("installed") or proposal.get("method") != "apt" or not proposal.get("plan_request"):
                     return self._json(200, {"install": proposal, "planned": False, "auto_install": False})
@@ -2653,7 +2664,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 task = self.workspace.get_task(path.split("/")[-2])
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
-                result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=body.get("cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
+                result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=self._optional_str(body, "cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
                 return self._json(200, result)
             if path.startswith("/api/tasks/") and path.endswith("/restart"):
                 load_settings = _load("config").load_settings
@@ -2662,7 +2673,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
                 self.workspace.update_task(task["id"], state="CANCELLED")
-                result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=body.get("cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
+                result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=self._optional_str(body, "cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
                 return self._json(200, result)
             if path.startswith("/api/tasks/") and path.endswith("/delete"):
                 task = self.workspace.delete_task(path.split("/")[-2])
@@ -2672,15 +2683,25 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/operations/") and path.endswith("/complete-task"):
                 finish_task = _load("orchestrate").finish_task
                 operation_id = path.split("/")[-2]
+                task_id = self._optional_str(body, "task_id")
+                if not task_id:
+                    raise ValueError("task_id is required")
                 operation = self.store.get_operation(operation_id)
                 if not operation:
                     return self._json(404, {"error": {"code": "not_found", "message": "operation not found"}})
+                task = self.workspace.get_task(task_id)
+                if not task:
+                    return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                if task.get("operation_id") and task["operation_id"] != operation_id:
+                    raise PolicyError("task is not bound to this operation")
+                if task.get("plan_id") and operation.get("plan_id") and task["plan_id"] != operation["plan_id"]:
+                    raise PolicyError("task is not bound to this plan")
                 plan = self.store.get_plan(operation.get("plan_id") or "") or {}
-                report = finish_task(self.workspace, str(body.get("task_id") or ""), operation, plan)
-                return self._json(200, {"operation": operation, "report": report, "task": self.workspace.get_task(str(body.get("task_id") or ""))})
+                report = finish_task(self.workspace, task_id, operation, plan)
+                return self._json(200, {"operation": operation, "report": report, "task": self.workspace.get_task(task_id)})
             if path == "/api/benchmark":
                 from benchmark import run_suite
-                return self._json(200, {"benchmark": run_suite(self.store, self.workspace, self.executor, body.get("cwd"))})
+                return self._json(200, {"benchmark": run_suite(self.store, self.workspace, self.executor, self._optional_str(body, "cwd"))})
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
         except PermissionError as exc:
             return self._json(403, {"error": {"code": "confirmation_or_privilege", "message": str(exc), "exit_code": EXIT_CODES["confirmation_required"]}})

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.7 — 2026-08-26
+
+- HTTP PTY input must be a string; cols/rows must be integers (booleans rejected).
+- Settings booleans are JSON `true`/`false` only (`"false"` does not enable a flag).
+- Engagement names, secret slots, conversation titles, and task resume cwd stay strings.
+- `complete-task` requires a task bound to that operation. Follow-up failures are audited.
+- CLI `--approval-token` empty string no longer falls back to the stored plan token.
+
 ## 0.2.6 — 2026-08-26
 
 - HTTP cwd/engagement/conversation/shell must be strings. Prune days and

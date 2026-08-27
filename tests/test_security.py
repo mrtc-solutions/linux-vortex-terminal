@@ -122,6 +122,10 @@ class VortexSecurityTests(unittest.TestCase):
             self.assertTrue(safe["ollama_endpoint"].startswith("http://127.0.0.1"))
             standard = save_settings({"profile": "standard"})
             self.assertTrue(standard["auto_low_risk"])
+            with self.assertRaises(ValueError):
+                save_settings({"offline": "false"})
+            with self.assertRaises(ValueError):
+                save_settings({"profile": True})
         finally:
             if previous is None:
                 os.environ.pop("XDG_CONFIG_HOME", None)

@@ -212,6 +212,39 @@ class HttpApiTests(unittest.TestCase):
         serialized = json.dumps(listed)
         self.assertNotIn("sk-never-echo", serialized)
 
+    def test_http_rejects_non_string_session_input_and_bool_size(self):
+        bad_input = self._json("POST", "/api/sessions/deadbeef/input", {"data": ["whoami"]}, expected=422)
+        self.assertEqual(bad_input["error"]["code"], "invalid_plan")
+        missing = self._json("POST", "/api/sessions/deadbeef/input", {}, expected=422)
+        self.assertEqual(missing["error"]["code"], "invalid_plan")
+        bad_cols = self._json("POST", "/api/sessions", {"name": "x", "cwd": self.tmp.name, "cols": True, "rows": 30}, expected=422)
+        self.assertEqual(bad_cols["error"]["code"], "invalid_plan")
+        bad_slot = self._json("POST", "/api/secrets", {"slot": 1, "value": "x"}, expected=422)
+        self.assertEqual(bad_slot["error"]["code"], "invalid_plan")
+
+    def test_http_settings_reject_string_booleans(self):
+        config_home = Path(self.tmp.name) / "config"
+        config_home.mkdir()
+        previous = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = str(config_home)
+        try:
+            denied = self._json("POST", "/api/settings", {"offline": "false"}, expected=422)
+            self.assertEqual(denied["error"]["code"], "invalid_plan")
+            saved = self._json("POST", "/api/settings", {"offline": True, "profile": "safe"})
+            self.assertTrue(saved["settings"]["offline"])
+            self.assertFalse(saved["settings"]["auto_low_risk"])
+        finally:
+            if previous is None:
+                os.environ.pop("XDG_CONFIG_HOME", None)
+            else:
+                os.environ["XDG_CONFIG_HOME"] = previous
+
+    def test_complete_task_requires_bound_task(self):
+        denied = self._json("POST", "/api/operations/missing/complete-task", {"task_id": "VTX-none"}, expected=404)
+        self.assertEqual(denied["error"]["code"], "not_found")
+        missing_id = self._json("POST", "/api/operations/missing/complete-task", {}, expected=422)
+        self.assertEqual(missing_id["error"]["code"], "invalid_plan")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -514,8 +514,10 @@ def main(argv=None):
             if answer != 'APPROVE':
                 if is_natural_request and args.as_json: emit({'plan': plan, 'error': {'code': 'confirmation_declined'}}, True)
                 return EXIT_CODES['confirmation_required']
-        if non_interactive and (not getattr(args, 'digest', None) or not getattr(args, 'approval_token', None) or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
-        manager=ExecutionManager(store); op=manager.start(plan,True,getattr(args, 'approval_token', None) or plan['approval_token'],getattr(args, 'allow_root', False), getattr(args, 'offline', False)); op=wait_operation(store,manager,op['id'])
+        supplied_token = getattr(args, 'approval_token', None)
+        token = plan['approval_token'] if supplied_token is None else supplied_token
+        if non_interactive and (not getattr(args, 'digest', None) or supplied_token is None or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
+        manager=ExecutionManager(store); op=manager.start(plan,True,token,getattr(args, 'allow_root', False), getattr(args, 'offline', False)); op=wait_operation(store,manager,op['id'])
         if op.get('status') == 'awaiting_confirmation':
             if not yes:
                 print('\nFresh preflight completed. Review the observed facts before approving the mutation:', file=sys.stderr)
@@ -525,7 +527,7 @@ def main(argv=None):
                     manager.cancel(op['id'])
                     return EXIT_CODES['confirmation_required']
             preflight_digest = getattr(args, 'preflight_digest', None) or op.get('preflight_digest')
-            op = manager.approve_preflight(op['id'], True, getattr(args, 'approval_token', None) or plan['approval_token'], preflight_digest)
+            op = manager.approve_preflight(op['id'], True, token, preflight_digest)
             op = wait_operation(store, manager, op['id'])
         if args.as_json:
             emit({'plan': plan, 'operation': op} if is_natural_request else {'operation': op}, True)

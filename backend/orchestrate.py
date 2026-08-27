@@ -194,8 +194,11 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                     workspace.add_message(task["conversation_id"], "vortex", f"Objective not fully met. Starting a reviewed follow-up: {objective['next_request']}")
                 workspace.update_task(task_id, plan_id=nxt["id"], state="EXECUTING")
                 executor.start(nxt, True, nxt["approval_token"], False, bool(settings.get("offline")))
-        except Exception:
-            pass
+        except Exception as exc:
+            try:
+                workspace.store.append_audit("followup_failed", {"task_id": task_id, "error": str(exc)[:240]})
+            except Exception:
+                pass
     return report
 
 

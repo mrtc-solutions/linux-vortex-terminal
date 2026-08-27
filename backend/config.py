@@ -64,9 +64,13 @@ def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"unknown setting: {key}")
         expected = type(DEFAULTS[key])
         if expected is bool:
-            current[key] = bool(value)
+            if not isinstance(value, bool):
+                raise ValueError(f"{key} must be a boolean")
+            current[key] = value
         elif expected is str:
-            current[key] = str(value)[:200]
+            if not isinstance(value, str):
+                raise ValueError(f"{key} must be a string")
+            current[key] = value[:200]
         else:
             current[key] = value
     if current["privacy_mode"] not in {"local", "hybrid", "cloud"}:
