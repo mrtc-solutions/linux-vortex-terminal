@@ -1696,7 +1696,7 @@ class ExecutionManager:
             for target in plan.get("scope", {}).get("targets", []):
                 if not target_in_engagement(target, engagement):
                     raise PolicyError("plan target is no longer inside the engagement scope")
-        if not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
+        if not isinstance(approval_token, str) or not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
             raise PolicyError("exact approval token is required for this plan")
         if os.getuid() == 0 and not allow_root:
             raise PermissionError("refusing UID 0 execution without an explicit root override")
@@ -1776,9 +1776,9 @@ class ExecutionManager:
                 raise PolicyError("engagement is unavailable or closed")
             if time.time() > datetime.fromisoformat(engagement["expires_at"]).timestamp():
                 raise TimeoutError("engagement expired before mutation approval")
-        if not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
+        if not isinstance(approval_token, str) or not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
             raise PolicyError("exact approval token is required for mutation confirmation")
-        if not preflight_digest or not secrets.compare_digest(preflight_digest, operation.get("preflight_digest", "")):
+        if not isinstance(preflight_digest, str) or not preflight_digest or not secrets.compare_digest(preflight_digest, operation.get("preflight_digest", "")):
             raise PolicyError("fresh preflight digest does not match this operation")
         with self.lock:
             if operation_id in self.threads:
@@ -2186,9 +2186,32 @@ class VortexHandler(BaseHTTPRequestHandler):
         self.send_response(code); self._headers(); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
 
     def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0"))
-        if length > 256 * 1024: raise ValueError("request too large")
-        return json.loads(self.rfile.read(length) or b"{}")
+        raw_len = self.headers.get("Content-Length", "0")
+        try:
+            length = int(raw_len)
+        except (TypeError, ValueError):
+            raise ValueError("invalid content length")
+        if length < 0 or length > 256 * 1024:
+            raise ValueError("request too large")
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        if payload is None:
+            return {}
+        if not isinstance(payload, dict):
+            raise ValueError("JSON object required")
+        return payload
+
+    @staticmethod
+    def _flag(body: dict[str, Any], key: str) -> bool:
+        return body.get(key) is True
+
+    @staticmethod
+    def _text(body: dict[str, Any], key: str) -> str | None:
+        value = body.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string")
+        return value
 
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT); self._headers(); self.end_headers()
@@ -2479,7 +2502,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not name.endswith(".db"):
                     name += ".db"
                 dest = self.store.root / "backups" / name
-                backup_path = self.store.backup(str(dest), bool(body.get("overwrite", False)))
+                backup_path = self.store.backup(str(dest), self._flag(body, "overwrite"))
                 return self._json(201, {"backup": {"path": str(backup_path), "mode": oct(backup_path.stat().st_mode & 0o777)}})
             if path == "/api/artifacts/analyze":
                 artifact = analyze_path(body.get("path"), body.get("kind", "auto"), allowed_roots=[self.store.root])
@@ -2489,14 +2512,14 @@ class VortexHandler(BaseHTTPRequestHandler):
                 request = body.get("request")
                 if not isinstance(request, str):
                     raise ValueError("request must be a string")
-                plan = build_plan(self.store, request, body.get("cwd"), body.get("engagement_id"), bool(body.get("offline", False))); return self._json(200, {"plan": plan})
+                plan = build_plan(self.store, request, body.get("cwd"), body.get("engagement_id"), self._flag(body, "offline")); return self._json(200, {"plan": plan})
             if path == "/api/execute":
                 plan = self.store.get_plan(str(body.get("plan_id", "")))
                 if not plan: return self._json(404, {"error": {"code": "not_found", "message": "plan not found"}})
                 settings = _load("config").load_settings()
-                offline = bool(settings.get("offline")) or bool(body.get("offline", False))
+                offline = bool(settings.get("offline")) or self._flag(body, "offline")
                 # HTTP never grants UID 0 override; only an explicit CLI --allow-root may.
-                op = self.executor.start(plan, bool(body.get("confirm")), body.get("approval_token"), False, offline); return self._json(202, {"operation": op})
+                op = self.executor.start(plan, self._flag(body, "confirm"), self._text(body, "approval_token"), False, offline); return self._json(202, {"operation": op})
             if path == "/api/engagements":
                 raw_targets = body.get("targets", [])
                 if not isinstance(raw_targets, list):
@@ -2517,7 +2540,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(201, {"engagement": item})
             if path.startswith("/api/operations/") and path.endswith("/approve"):
                 operation_id = path.split("/")[-2]
-                operation = self.executor.approve_preflight(operation_id, bool(body.get("confirm")), body.get("approval_token"), body.get("preflight_digest"))
+                operation = self.executor.approve_preflight(operation_id, self._flag(body, "confirm"), self._text(body, "approval_token"), self._text(body, "preflight_digest"))
                 return self._json(202, {"operation": operation})
             if path.startswith("/api/operations/") and path.endswith("/cancel"):
                 operation_id = path.split("/")[-2]
@@ -2534,9 +2557,9 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not isinstance(request, str) or not request.strip():
                     raise ValueError("request must be a string")
                 settings = load_settings()
-                if body.get("offline") is True:
+                if self._flag(body, "offline"):
                     settings["offline"] = True
-                result = run_turn(self.store, self.workspace, self.executor, request.strip(), cwd=body.get("cwd"), engagement_id=body.get("engagement_id"), conversation_id=body.get("conversation_id"), settings=settings, confirm=bool(body.get("confirm")), approval_token=body.get("approval_token"))
+                result = run_turn(self.store, self.workspace, self.executor, request.strip(), cwd=body.get("cwd"), engagement_id=body.get("engagement_id"), conversation_id=body.get("conversation_id"), settings=settings, confirm=self._flag(body, "confirm"), approval_token=self._text(body, "approval_token"))
                 return self._json(200, result)
             if path == "/api/conversations":
                 title = str(body.get("title") or "New conversation")
@@ -2637,6 +2660,8 @@ class VortexHandler(BaseHTTPRequestHandler):
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
         except PermissionError as exc:
             return self._json(403, {"error": {"code": "confirmation_or_privilege", "message": str(exc), "exit_code": EXIT_CODES["confirmation_required"]}})
+        except FileExistsError as exc:
+            return self._json(409, {"error": {"code": "already_exists", "message": redact(str(exc)), "exit_code": EXIT_CODES["incompatible_state"]}})
         except TimeoutError as exc:
             return self._json(409, {"error": {"code": "expired", "message": str(exc), "exit_code": EXIT_CODES["timeout"]}})
         except (ValueError, PolicyError, json.JSONDecodeError) as exc:

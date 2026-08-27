@@ -85,7 +85,7 @@ These are either unimplemented, or implemented only as honest unavailable states
 - sqlmap / Metasploit **execution** adapters (catalog probes only)
 - Scanner tools when the binary or wordlist is not on the host (honest UNAVAILABLE)
 - FastAPI + PostgreSQL + pgvector (local SQLite modular monolith by design)
-- Durable WebSocket PTY attach (operation SSE exists; session UI still polls)
+- Durable WebSocket PTY attach (operation and session EventSource exist; poll remains a fallback)
 - Starting unreviewed Docker images as a sandbox
 - Provisioning Juice Shop / DVWA / WebGoat
 - Cloud model providers

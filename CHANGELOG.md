@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5 — 2026-08-26
+
+- HTTP JSON must be an object. `confirm`/`offline`/`overwrite` are JSON
+  `true` only (`"true"` does not execute). Approval tokens must be strings.
+- Negative Content-Length is rejected. Duplicate backups return 409.
+- Auto follow-up after a failed task is limited to low-risk local diagnostics.
+
 ## 0.2.4 — 2026-08-26
 
 - HTTP backups always write under `data/backups/<filename>.db`; absolute paths

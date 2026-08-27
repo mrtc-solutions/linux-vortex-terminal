@@ -167,6 +167,26 @@ class HttpApiTests(unittest.TestCase):
         self.assertNotEqual(path.resolve(), Path("/tmp/vortex-exfil.db").resolve())
         self.assertTrue(path.is_file())
 
+    def test_http_rejects_non_object_json_and_string_confirm(self):
+        data = json.dumps(["whoami"]).encode()
+        request = urllib.request.Request(self.base + "/api/workspace/turn", data=data, method="POST", headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                status = response.status
+                payload = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            payload = json.loads(exc.read())
+        self.assertEqual(status, 422)
+        self.assertEqual(payload["error"]["code"], "invalid_plan")
+        planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})
+        denied = self._json("POST", "/api/execute", {
+            "plan_id": planned["plan"]["id"],
+            "confirm": "true",
+            "approval_token": planned["plan"]["approval_token"],
+        }, expected=403)
+        self.assertEqual(denied["error"]["code"], "confirmation_or_privilege")
+
     def test_http_artifact_analyze_stays_inside_data_root(self):
         outside = Path("/etc/hosts")
         if not outside.is_file():

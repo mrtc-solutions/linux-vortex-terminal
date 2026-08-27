@@ -188,7 +188,7 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
             nxt = build_plan(store, objective["next_request"], plan.get("cwd"), plan.get("engagement_id"), offline=bool(settings.get("offline")))
             engagement = workspace.enrich_engagement(store.get_engagement(plan.get("engagement_id"))) if plan.get("engagement_id") else None
             guardian = evaluate(nxt, settings, engagement)
-            if guardian.get("decision") == "auto" and nxt.get("status") == "planned":
+            if guardian.get("decision") == "auto" and nxt.get("status") == "planned" and nxt.get("kind") in {"identity", "clock", "os_release", "cpu", "filesystem_list", "processes", "network_interfaces"}:
                 workspace.add_task_event(task_id, "replan", {"request": objective["next_request"], "plan_id": nxt["id"]})
                 if task.get("conversation_id"):
                     workspace.add_message(task["conversation_id"], "vortex", f"Objective not fully met. Starting a reviewed follow-up: {objective['next_request']}")
