@@ -401,7 +401,8 @@ def main(argv=None):
             if args.action == 'list':
                 if metadata:
                     try: emit({'sessions': remote_request(metadata, '/api/sessions').get('sessions', [])}, args.as_json); return 0
-                    except Exception: pass
+                    except (urllib.error.URLError, RuntimeError, OSError, ValueError, json.JSONDecodeError):
+                        pass
                 emit({'sessions': store.list_sessions()}, args.as_json); return 0
             if metadata:
                 try:

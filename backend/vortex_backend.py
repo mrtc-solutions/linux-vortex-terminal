@@ -746,11 +746,21 @@ class Store:
 class SessionManager:
     """Own Linux PTYs, process groups, live event buffers, and idle cleanup."""
 
+    @staticmethod
+    def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+        raw = os.environ.get(name, str(default))
+        try:
+            if isinstance(raw, bool) or not str(raw).lstrip("-").isdigit():
+                return default
+            return max(lo, min(int(raw), hi))
+        except (TypeError, ValueError):
+            return default
+
     def __init__(self, store: Store, idle_seconds: int | None = None, max_sessions: int | None = None):
         self.store = store
         self.store.mark_stale_sessions()
-        self.idle_seconds = idle_seconds if idle_seconds is not None else int(os.environ.get("VORTEX_SESSION_IDLE_SECONDS", "1800"))
-        self.max_sessions = max_sessions if max_sessions is not None else int(os.environ.get("VORTEX_MAX_SESSIONS", "8"))
+        self.idle_seconds = idle_seconds if idle_seconds is not None else self._env_int("VORTEX_SESSION_IDLE_SECONDS", 1800, 30, 86400)
+        self.max_sessions = max_sessions if max_sessions is not None else self._env_int("VORTEX_MAX_SESSIONS", 8, 1, 32)
         self.sessions: dict[str, dict[str, Any]] = {}
         self.events: dict[str, deque[dict[str, Any]]] = {}
         self.conditions: dict[str, threading.Condition] = {}
@@ -945,8 +955,16 @@ class SessionManager:
         return sorted(persisted.values(), key=lambda x: x.get("started_at") or "", reverse=True)[:100]
 
     def events_since(self, session_id: str, since: Any = 0) -> dict[str, Any]:
-        try: since_i = max(0, int(since))
-        except (TypeError, ValueError): since_i = 0
+        if since is None:
+            since = 0
+        if isinstance(since, bool) or not isinstance(since, (int, str)):
+            raise PolicyError("since must be an integer")
+        try:
+            since_i = int(since)
+        except (TypeError, ValueError) as exc:
+            raise PolicyError("since must be an integer") from exc
+        if since_i < 0:
+            raise PolicyError("since must be >= 0")
         with self.lock:
             if session_id not in self.sessions:
                 record = self.store.get_session_record(session_id)
@@ -1072,6 +1090,22 @@ def normalize_target(raw: str) -> str:
     if not HOST_RE.fullmatch(value) or ".." in value or any(len(label) > 63 or label.startswith("-") or label.endswith("-") for label in value.split(".")):
         raise PolicyError("target is not a hostname, IP, or URL")
     return value.lower()
+
+
+def attach_engagement_scope(store: Store, engagement: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Merge persisted excluded targets onto an engagement row. Never fabricates scope."""
+    if not engagement:
+        return None
+    item = dict(engagement)
+    try:
+        with store.connect() as db:
+            row = db.execute("SELECT excluded_json FROM engagement_scope WHERE engagement_id=?", (item.get("id"),)).fetchone()
+        if row:
+            item["excluded_targets"] = json.loads(row["excluded_json"] if "excluded_json" in row.keys() else row[0])
+    except (OSError, sqlite3.Error, TypeError, ValueError, KeyError):
+        item.setdefault("excluded_targets", item.get("excluded_targets") or [])
+    item.setdefault("excluded_targets", [])
+    return item
 
 
 def target_in_engagement(target: str, engagement: dict[str, Any]) -> bool:
@@ -1264,6 +1298,8 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         if engagement.get("status") != "active" or expired:
             closed_engagement = True
             engagement = None
+        else:
+            engagement = attach_engagement_scope(store, engagement)
     bound_engagement_id = engagement["id"] if engagement else None
 
     if lower.startswith("explain ") or lower.startswith("what does ") or lower.startswith("why does "):
@@ -1306,6 +1342,8 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                     status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex never bypasses host verification."]
             elif not target_in_engagement(target, engagement):
                 status = "rejected"; notes.append("SSH target is outside the active engagement scope: " + target)
+            elif _load("security.scope").excluded(target, engagement):
+                status = "rejected"; notes.append("SSH target is on the engagement exclusion list: " + target)
             else:
                 network_facts = resolve_targets([target])
                 if network_facts["state"] != "observed":
@@ -1456,9 +1494,17 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             except PolicyError as exc:
                 raise PolicyError(str(exc)) from exc
             out_scope = [target for target in normalized if not target_in_engagement(target, engagement)]
+            try:
+                scope_mod = _load("security.scope")
+            except Exception:
+                scope_mod = None
+            excluded_hits = [] if out_scope else (list(normalized) if scope_mod is None else [target for target in normalized if scope_mod.excluded(target, engagement)])
             if out_scope:
                 status = "rejected"
                 notes.append("Target is outside the active engagement scope: " + ", ".join(out_scope))
+            elif excluded_hits:
+                status = "rejected"
+                notes.append("Target is on the engagement exclusion list: " + ", ".join(excluded_hits))
             elif probe_executable(tool)["state"] != "installed":
                 status = "unavailable"
                 missing.append(tool)
@@ -1702,9 +1748,22 @@ class ExecutionManager:
                 raise PolicyError("engagement is unavailable or closed")
             if time.time() > datetime.fromisoformat(engagement["expires_at"]).timestamp():
                 raise TimeoutError("engagement expired")
+            engagement = attach_engagement_scope(self.store, engagement)
+            try:
+                scope_mod = _load("security.scope")
+            except Exception:
+                scope_mod = None
             for target in plan.get("scope", {}).get("targets", []):
                 if not target_in_engagement(target, engagement):
                     raise PolicyError("plan target is no longer inside the engagement scope")
+                if scope_mod is None or scope_mod.excluded(str(target), engagement):
+                    raise PolicyError("plan target is on the engagement exclusion list")
+        try:
+            guardian = _load("security.guardian").evaluate(plan, {"profile": "safe", "auto_low_risk": False, "offline": bool(offline), "allow_root": False}, engagement if needs_scope else None)
+        except Exception as exc:
+            raise PolicyError("Guardian could not evaluate this plan") from exc
+        if guardian.get("blocked"):
+            raise PolicyError("Guardian blocked this plan: " + "; ".join((guardian.get("reasons") or ["blocked"])[:4]))
         if not isinstance(approval_token, str) or not approval_token or not secrets.compare_digest(approval_token, plan["approval_token"]):
             raise PolicyError("exact approval token is required for this plan")
         if os.getuid() == 0 and not allow_root:

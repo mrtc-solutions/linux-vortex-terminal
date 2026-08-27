@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.12 — 2026-08-26
+
+- Guardian treats `chmod 0777` / `2777` / `a+rwx` as world-writable, not only
+  the substring `chmod 777`.
+- Execution re-evaluates Guardian and excluded targets; `/api/plan` cannot
+  bypass exclusions. Invalid session `since` is 422, not silently replayed.
+- Corrupt `VORTEX_MAX_SESSIONS` falls back to 8 instead of crashing the sidecar.
+
 ## 0.2.11 — 2026-08-26
 
 - Operation and session finish threads no longer die on SQLite/disk I/O after

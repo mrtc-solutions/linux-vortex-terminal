@@ -45,14 +45,18 @@ DESTRUCTIVE_WORDS = {
     "rm", "mkfs", "dd", "wipefs", "shred", "chown",
     "iptables", "nft", "reboot", "poweroff", "halt", "kexec",
 }
-DESTRUCTIVE_PHRASES = ("chmod 777",)
+# World-writable chmod: 777, 0777, 2777/4777/6777, and a+rwx / a=rwx.
+CHMOD_WORLD_RE = re.compile(
+    r"(?:^|[\s;|&])chmod(?:\s+-[A-Za-z]+)*\s+(?:0*[0-7]?777\b|a\+rwx|a=rwx|ugo\+rwx|ugo=rwx)",
+    re.I,
+)
 TOKEN_RE = re.compile(r"[A-Za-z0-9._+/-]+")
 
 
 def looks_destructive(display: str) -> bool:
     """Match destructive command words, not accidental substrings like adduser/remove."""
     text = (display or "").lower()
-    if any(phrase in text for phrase in DESTRUCTIVE_PHRASES):
+    if CHMOD_WORLD_RE.search(text):
         return True
     for part in TOKEN_RE.findall(text):
         base = part.rsplit("/", 1)[-1]

@@ -68,8 +68,11 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
     try:
         from observe import log_event
         log_event(store, "turn", {"task_id": task["id"], "kind": plan.get("kind"), "guardian": guardian.get("decision"), "risk": guardian.get("risk")})
-    except Exception:
-        pass
+    except (OSError, ImportError):
+        try:
+            store.append_audit("observe_log_failed", {"task_id": task["id"]})
+        except (OSError, Exception):
+            pass
     workspace.update_task(task["id"], plan_id=plan["id"], risk=guardian["risk"], result={"kind": plan.get("kind"), "plan_status": plan.get("status"), "guardian": guardian, "council": council, "procedure": procedure["name"] if procedure else None, "observation": observation})
     operation = None
     auto = False

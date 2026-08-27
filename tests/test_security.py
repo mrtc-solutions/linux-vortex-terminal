@@ -38,6 +38,11 @@ class VortexSecurityTests(unittest.TestCase):
         self.assertTrue(looks_destructive("/bin/dd if=/dev/zero of=/dev/sda"))
         self.assertTrue(looks_destructive("rm -rf /"))
         self.assertTrue(looks_destructive("/sbin/mkfs.ext4 /dev/sda1"))
+        self.assertTrue(looks_destructive("chmod 0777 /var/www"))
+        self.assertTrue(looks_destructive("chmod 2777 /tmp/x"))
+        self.assertTrue(looks_destructive("chmod a+rwx /tmp/x"))
+        self.assertFalse(looks_destructive("chmod 755 /tmp/x"))
+        self.assertFalse(looks_destructive("chmod 644 file"))
         self.assertFalse(looks_destructive("whoami"))
         allowed = evaluate(
             {"commands": [{"adapter_id": "linux.packages.apt", "risk": "high", "privilege": "root-required", "network_class": "no-network", "display": "apt-get --assume-yes --no-remove install adduser"}]},
@@ -85,6 +90,40 @@ class VortexSecurityTests(unittest.TestCase):
         denied = discover_wordlist("gobuster wordlist /etc/passwd")
         self.assertEqual(denied["state"], "absent")
         self.assertIsNone(denied["path"])
+
+    def test_executor_rechecks_guardian_and_exclusions(self):
+        from backend.vortex_backend import ExecutionManager, plan_digest
+        cwd = Path(self.tmp.name)
+        spec = command_spec("whoami", ["whoami"], cwd, risk="low")
+        spec["display"] = "chmod 0777 /tmp/x"
+        plan = {
+            "schema_version": 1, "id": "plan-guard", "created_at": "2026-08-25T00:00:00+00:00",
+            "expires_at": "2099-08-25T00:00:00+00:00", "request": "whoami", "cwd": str(cwd),
+            "status": "planned", "kind": "identity", "risk": "low", "authorization": "local",
+            "commands": [spec], "notes": [], "missing_tools": [], "scope": {"cwd": str(cwd)},
+            "workers": [], "approval_required": True, "approval_phrase": "APPROVE",
+            "source": "deterministic", "policy_version": "safe-v1", "knowledge_version": "builtin-v1",
+            "approval_token": "guard-token",
+        }
+        plan["digest"] = plan_digest(plan)
+        self.store.save_plan(plan)
+        with self.assertRaises(PolicyError) as ctx:
+            ExecutionManager(self.store).start(plan, True, "guard-token")
+        self.assertIn("Guardian", str(ctx.exception))
+
+    def test_planner_rejects_excluded_engagement_target(self):
+        engagement = {
+            "id": "excl-eng", "created_at": "2026-08-25T00:00:00+00:00",
+            "expires_at": "2099-08-25T00:00:00+00:00", "name": "lab",
+            "authorization": "ticket-1", "targets": ["https://lab.example.test"],
+            "classes": ["reconnaissance"], "status": "active",
+        }
+        self.store.create_engagement(engagement)
+        self.workspace.save_engagement_scope("excl-eng", ["lab.example.test"], "lab", "operator")
+        plan = build_plan(self.store, "curl https://lab.example.test/", self.tmp.name, "excl-eng")
+        self.assertEqual(plan["status"], "rejected")
+        self.assertEqual(plan["commands"], [])
+        self.assertTrue(any("exclusion" in note.lower() for note in plan["notes"]))
 
     def test_expired_engagement_blocks_guardian_network_work(self):
         plan = {

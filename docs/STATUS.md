@@ -3,7 +3,7 @@
 VORTEX 0.2.0 is a real Linux application. Production paths use installed host
 tools and observed output only. Test doubles exist only inside tests.
 
-**107 Python tests + JS terminal emulator: passing.**
+**110 Python tests + JS terminal emulator: passing.**
 
 ## Directive coverage
 
