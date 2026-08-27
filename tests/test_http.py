@@ -187,6 +187,14 @@ class HttpApiTests(unittest.TestCase):
         }, expected=403)
         self.assertEqual(denied["error"]["code"], "confirmation_or_privilege")
 
+    def test_http_rejects_non_string_cwd_and_non_integer_prune(self):
+        bad_cwd = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": 1}, expected=422)
+        self.assertEqual(bad_cwd["error"]["code"], "invalid_plan")
+        bad_prune = self._json("POST", "/api/store/prune", {"history_days": ["forever"]}, expected=422)
+        self.assertEqual(bad_prune["error"]["code"], "invalid_plan")
+        ok_prune = self._json("POST", "/api/store/prune", {"history_days": 30, "output_days": 7})
+        self.assertEqual(ok_prune["prune"]["history_days"], 30)
+
     def test_http_artifact_analyze_stays_inside_data_root(self):
         outside = Path("/etc/hosts")
         if not outside.is_file():

@@ -436,6 +436,8 @@ def _pid1_name() -> str:
 
 
 def validate_cwd(raw: str | None) -> Path:
+    if raw is not None and not isinstance(raw, str):
+        raise ValueError("working directory must be a string")
     candidate = Path(raw or os.getcwd()).expanduser()
     resolved = candidate.resolve(strict=True)
     if not resolved.is_dir():
@@ -2213,6 +2215,28 @@ class VortexHandler(BaseHTTPRequestHandler):
             raise ValueError(f"{key} must be a string")
         return value
 
+    @staticmethod
+    def _optional_str(body: dict[str, Any], key: str) -> str | None:
+        value = body.get(key)
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string")
+        return value
+
+    @staticmethod
+    def _bounded_int(body: dict[str, Any], key: str, default: int, lo: int, hi: int) -> int:
+        value = body.get(key, default)
+        if value is None:
+            value = default
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ValueError(f"{key} must be an integer")
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be an integer") from exc
+        return max(lo, min(number, hi))
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT); self._headers(); self.end_headers()
 
@@ -2476,7 +2500,7 @@ class VortexHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
             if path == "/api/sessions":
-                session = self.sessions.create(body.get("name"), body.get("cwd"), body.get("shell"), body.get("cols", 100), body.get("rows", 30))
+                session = self.sessions.create(self._optional_str(body, "name"), self._optional_str(body, "cwd"), self._optional_str(body, "shell"), body.get("cols", 100), body.get("rows", 30))
                 return self._json(201, {"session": session})
             if path.startswith("/api/sessions/"):
                 parts = path.split("/")
@@ -2491,7 +2515,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                         return self._json(404, {"error": {"code": "not_running", "message": "session is not running"}})
                     return self._json(202, {"kill_requested": True, "session_id": parts[-2]})
             if path == "/api/store/prune":
-                result = self.store.prune(body.get("history_days", 90), body.get("output_days", 30))
+                result = self.store.prune(self._bounded_int(body, "history_days", 90, 1, 3650), self._bounded_int(body, "output_days", 30, 1, 3650))
                 return self._json(200, {"prune": result})
             if path == "/api/store/backup":
                 destination = body.get("destination")
@@ -2512,7 +2536,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 request = body.get("request")
                 if not isinstance(request, str):
                     raise ValueError("request must be a string")
-                plan = build_plan(self.store, request, body.get("cwd"), body.get("engagement_id"), self._flag(body, "offline")); return self._json(200, {"plan": plan})
+                plan = build_plan(self.store, request, self._optional_str(body, "cwd"), self._optional_str(body, "engagement_id"), self._flag(body, "offline")); return self._json(200, {"plan": plan})
             if path == "/api/execute":
                 plan = self.store.get_plan(str(body.get("plan_id", "")))
                 if not plan: return self._json(404, {"error": {"code": "not_found", "message": "plan not found"}})
@@ -2548,8 +2572,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return self._json(404, {"error": {"code": "not_running", "message": "operation is not running"}})
                 return self._json(202, {"cancel_requested": True, "operation_id": operation_id})
             if path == "/api/feedback":
-                rating = int(body.get("rating", 0)); correction = redact(str(body.get("correction", "")))[:2000]
-                self.store.append_audit("feedback_recorded", {"operation_id": body.get("operation_id"), "rating": max(1, min(5, rating)), "correction": correction}); return self._json(201, {"saved": True})
+                rating = self._bounded_int(body, "rating", 1, 1, 5); correction = redact(str(body.get("correction", "")))[:2000]
+                self.store.append_audit("feedback_recorded", {"operation_id": self._optional_str(body, "operation_id"), "rating": rating, "correction": correction}); return self._json(201, {"saved": True})
             if path == "/api/workspace/turn":
                 load_settings = _load("config").load_settings
                 run_turn = _load("orchestrate").run_turn
@@ -2559,7 +2583,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 settings = load_settings()
                 if self._flag(body, "offline"):
                     settings["offline"] = True
-                result = run_turn(self.store, self.workspace, self.executor, request.strip(), cwd=body.get("cwd"), engagement_id=body.get("engagement_id"), conversation_id=body.get("conversation_id"), settings=settings, confirm=self._flag(body, "confirm"), approval_token=self._text(body, "approval_token"))
+                result = run_turn(self.store, self.workspace, self.executor, request.strip(), cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), conversation_id=self._optional_str(body, "conversation_id"), settings=settings, confirm=self._flag(body, "confirm"), approval_token=self._text(body, "approval_token"))
                 return self._json(200, result)
             if path == "/api/conversations":
                 title = str(body.get("title") or "New conversation")
@@ -2619,7 +2643,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return self._json(200, {"install": proposal, "planned": False, "auto_install": False})
                 result = _load("orchestrate").run_turn(
                     self.store, self.workspace, self.executor, proposal["plan_request"],
-                    cwd=body.get("cwd"), engagement_id=None, conversation_id=body.get("conversation_id"),
+                    cwd=self._optional_str(body, "cwd"), engagement_id=None, conversation_id=self._optional_str(body, "conversation_id"),
                     settings=_load("config").load_settings(),
                 )
                 return self._json(200, {"install": proposal, "planned": True, "auto_install": False, **result})

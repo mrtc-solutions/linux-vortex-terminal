@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.6 — 2026-08-26
+
+- HTTP cwd/engagement/conversation/shell must be strings. Prune days and
+  feedback ratings must be integers (booleans rejected). Non-string cwd is 422.
+
 ## 0.2.5 — 2026-08-26
 
 - HTTP JSON must be an object. `confirm`/`offline`/`overwrite` are JSON
