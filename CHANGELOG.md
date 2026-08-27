@@ -6,6 +6,8 @@
   binaries or wordlists stay UNAVAILABLE; no command is fabricated.
 - `vortex install --user`, `vortex serve`, and `vortex turn` for real
   operator install and use. Session UI prefers EventSource.
+- `vortex turn --yes` honors `--profile` and actually executes; task finish
+  writes the report and episode reward before marking COMPLETED.
 - Step-by-step operator guide: `docs/USER_GUIDE.md`.
 
 ## 0.2.0 — 2026-08-25

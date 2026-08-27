@@ -84,12 +84,17 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         auto = True
         workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
         explanation = "Guardian authorized a low-risk local diagnostic under the current policy. Real execution started."
-    elif confirm and approval_token:
-        workspace.update_task(task["id"], state="EXECUTING")
-        workspace.record_approval("approve", plan["id"], task["id"], guardian.get("risk"), {})
-        operation = executor.start(plan, True, approval_token, False, offline)
-        workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
-        explanation = "Approved plan execution started."
+    elif confirm:
+        token = approval_token or plan.get("approval_token")
+        if not token:
+            workspace.update_task(task["id"], state="WAITING_FOR_APPROVAL")
+            explanation = "A typed plan is ready. Guardian requires recorded approval before execution."
+        else:
+            workspace.update_task(task["id"], state="EXECUTING")
+            workspace.record_approval("approve", plan["id"], task["id"], guardian.get("risk"), {"cli_yes": True})
+            operation = executor.start(plan, True, token, False, offline)
+            workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
+            explanation = "Approved plan execution started."
     else:
         workspace.update_task(task["id"], state="WAITING_FOR_APPROVAL")
         explanation = "A typed plan is ready. Guardian requires recorded approval before execution."
@@ -126,13 +131,19 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
     state = mapping.get(status, "FAILED")
     explanation = interpret_operation(plan, operation)
     result = dict(task.get("result") or {})
-    result.update({"operation_status": status, "commands": [item.get("display") for item in operation.get("commands") or []], "kind": plan.get("kind"), "explanation": explanation})
-    workspace.update_task(task_id, state=state, operation_id=operation.get("id"), result=result)
+    episode = episode_step(plan, operation)
+    result.update({
+        "operation_status": status,
+        "commands": [item.get("display") for item in operation.get("commands") or []],
+        "kind": plan.get("kind"),
+        "explanation": explanation,
+        "episode": episode,
+        "observation": episode.get("observation") or result.get("observation"),
+    })
     workspace.add_task_event(task_id, "operation_finished", {"status": status, "operation_id": operation.get("id")})
+    workspace.add_task_event(task_id, "episode_step", {"reward": (episode.get("evaluation") or {}).get("reward"), "done": (episode.get("evaluation") or {}).get("done")})
     objective = evaluate_objective(plan, operation)
     result["objective"] = objective
-    if objective.get("replan") and not objective.get("achieved"):
-        workspace.update_task(task_id, state="REPLANNING", result=result)
     for artifact in operation.get("artifacts") or []:
         for observation in (artifact.get("observations") or [])[:20]:
             if observation.get("type") == "open_port":
@@ -153,16 +164,16 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                 "body": {"markdown": markdown(operation, plan, workspace.get_task(task_id)), "status": status, "request": plan.get("request")},
             })
             workspace.add_memory("task", task_id, explanation, {"operation_id": operation.get("id")})
-        if task.get("conversation_id") and status not in {"started", "running"}:
-            extra = ""
-            if report:
-                extra = " Report generated."
-            workspace.add_message(task["conversation_id"], "vortex", explanation + extra, {
-                "task_id": task_id,
-                "operation_id": operation.get("id"),
-                "report_id": report.get("id") if report else None,
-                "status": status,
-            })
+    final_state = "REPLANNING" if objective.get("replan") and not objective.get("achieved") else state
+    workspace.update_task(task_id, state=final_state, operation_id=operation.get("id"), result=result)
+    if task.get("conversation_id") and status not in {"started", "running"}:
+        extra = " Report generated." if report else ""
+        workspace.add_message(task["conversation_id"], "vortex", explanation + extra, {
+            "task_id": task_id,
+            "operation_id": operation.get("id"),
+            "report_id": report.get("id") if report else None,
+            "status": status,
+        })
     if depth < 2 and executor is not None and store is not None and objective.get("next_request") and not objective.get("achieved"):
         try:
             try:

@@ -68,10 +68,11 @@ class WorkspaceTests(unittest.TestCase):
         result = run_turn(self.store, self.workspace, manager, "whoami", cwd=self.tmp.name, engagement_id=None, conversation_id=None, settings={"profile": "standard", "auto_low_risk": True, "offline": False})
         op_id = result["operation"]["id"]
         task = result["task"]
-        for _ in range(200):
+        for _ in range(250):
             operation = self.store.get_operation(op_id)
             task = self.workspace.get_task(result["task"]["id"])
-            if operation and operation["status"] not in ("started", "running") and task and task["state"] not in ("EXECUTING", "OBSERVING", "PLANNING"):
+            report = self.workspace.get_report_by_operation(op_id)
+            if operation and operation["status"] not in ("started", "running") and task and task["state"] not in ("EXECUTING", "OBSERVING", "PLANNING") and report:
                 break
             time.sleep(0.02)
         self.assertEqual(task["state"], "COMPLETED")
@@ -143,6 +144,35 @@ class WorkspaceTests(unittest.TestCase):
     def test_cli_deps_lists_inventory(self):
         from cli import vortex as vortex_cli
         self.assertEqual(vortex_cli.main(["--json", "deps"]), 0)
+
+    def test_cli_turn_yes_executes_with_profile(self):
+        from cli import vortex as vortex_cli
+        code = vortex_cli.main(["--json", "--profile", "standard", "--yes", "--cwd", self.tmp.name, "turn", "whoami"])
+        self.assertEqual(code, 0)
+        tasks = self.workspace.list_tasks()
+        self.assertTrue(tasks)
+        task = tasks[0]
+        self.assertTrue(task.get("operation_id"))
+        for _ in range(150):
+            operation = self.store.get_operation(task["operation_id"])
+            if operation and operation["status"] not in ("started", "running"):
+                break
+            time.sleep(0.02)
+        self.assertEqual(operation["status"], "succeeded")
+        self.assertTrue((operation["commands"][0].get("stdout") or "").strip())
+
+    def test_cli_turn_yes_safe_profile_still_executes(self):
+        from cli import vortex as vortex_cli
+        code = vortex_cli.main(["--json", "--profile", "safe", "--yes", "--cwd", self.tmp.name, "turn", "whoami"])
+        self.assertEqual(code, 0)
+        task = self.workspace.list_tasks()[0]
+        self.assertTrue(task.get("operation_id"))
+        for _ in range(150):
+            operation = self.store.get_operation(task["operation_id"])
+            if operation and operation["status"] not in ("started", "running"):
+                break
+            time.sleep(0.02)
+        self.assertEqual(operation["status"], "succeeded")
 
     def test_cli_user_install_writes_launcher(self):
         from cli.vortex import install_user
