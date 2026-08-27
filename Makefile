@@ -1,13 +1,16 @@
-.PHONY: test lint preview
+.PHONY: test lint preview install-user
 
 test:
 	python3 -m unittest discover -s tests -v
 
 lint:
-	python3 -m py_compile backend/vortex_backend.py cli/vortex.py
+	python3 -m compileall -q backend cli
 
 audit:
 	@echo "Run cargo-audit/cargo-deny only if a future Rust auxiliary is introduced."
 
 preview:
 	python3 backend/vortex_backend.py --host 0.0.0.0 --port 4173
+
+install-user:
+	bash scripts/install-user.sh

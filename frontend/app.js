@@ -12,7 +12,7 @@ const api = async (path, options = {}) => {
   return payload;
 };
 function toast(message, bad = false) { const el = $('toast'); el.textContent = message; el.style.borderColor = bad ? 'var(--red)' : 'var(--cyan)'; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 4200); }
-function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions(); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); }
+function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); }
 function statusClass(status) { return ['succeeded','success'].includes(status) ? 'badge-green' : ['failed','timed_out','interrupted'].includes(status) ? 'badge-red' : status === 'planned' || status === 'awaiting_confirmation' ? 'badge-amber' : 'badge-muted'; }
 function statusLabel(status) { return ({succeeded:'VERIFIED OK',failed:'FAILED',timed_out:'TIMED OUT',interrupted:'INTERRUPTED',unavailable:'TOOL MISSING',running:'RUNNING',started:'STARTED',planned:'CONFIRM REQUIRED',awaiting_confirmation:'PREFLIGHT COMPLETE',clarified:'PLAN ONLY',rejected:'BLOCKED',unknown_after_crash:'UNKNOWN AFTER CRASH'}[status] || String(status || 'STANDBY').toUpperCase()); }
 async function loadDoctor() { try { const data = await api('/api/doctor'); state.doctor = data.doctor; renderDoctor(); } catch (e) { $('side-context').textContent = 'backend offline'; toast(e.message, true); } }
@@ -20,9 +20,25 @@ function renderDoctor() { const d = state.doctor; if (!d) return; $('side-contex
   ['DISTRIBUTION', d.distribution.pretty_name || d.distribution.id], ['SUPPORT TIER', d.support_tier], ['KERNEL', d.kernel], ['PID 1 / SYSTEMD', `${d.pid1 || 'unknown'} / ${d.systemd ? 'available' : 'unavailable'}`], ['CONTEXT', [d.container ? 'container' : 'host', d.ssh ? 'SSH' : 'local', d.tmux ? 'tmux' : 'direct'].join(' · ')], ['PRIVILEGE', d.root ? 'UID 0 — guarded' : `UID ${d.uid}`], ['MODEL', 'disabled by default']
 ].map(([a,b]) => `<div class="context-row"><label>${esc(a)}</label><span class="${String(b).includes('available') || String(b).includes('local') ? 'ok':''}">${esc(b)}</span></div>`).join(''); }
 async function loadTools() { try { const data = await api('/api/tools'); state.tools = data.tools; renderTools(); } catch(e) { toast(e.message, true); } }
-function renderTools() { $('tool-grid').innerHTML = state.tools.map(t => `<article class="tool-card ${esc(t.state)}"><span class="badge ${t.state === 'installed' ? 'badge-green' : t.state === 'blocked' ? 'badge-red' : 'badge-muted'}">${esc(t.state.replace('-', ' ').toUpperCase())}</span><h3>${esc(t.name)}</h3><div class="tool-family">${esc(t.family)}</div><p>${esc(t.role)}<br><span class="tool-path">${esc(t.path || 'No executable found')}</span><br>${t.version ? esc(t.version) : 'Version unavailable'}</p></article>`).join(''); }
-async function loadEngagements() { try { const data = await api('/api/engagements'); state.engagements = data.engagements; if (!state.activeEngagementId && state.engagements[0]) state.activeEngagementId = state.engagements[0].id; renderEngagements(); } catch(e) { toast(e.message, true); } }
-function renderEngagements() { const el = $('engagement-list'); if (!state.engagements.length) { el.innerHTML = `<div class="empty-state panel"><div class="empty-icon">◎</div><h3>No active engagements</h3><p>Active tools such as nmap stay unavailable until a scope and expiry are declared.</p></div>`; return; } el.innerHTML = state.engagements.map(e => `<article class="engagement-card"><header><div><h3>${esc(e.name)}</h3><p>${esc(e.authorization)}</p></div><span class="badge ${e.status === 'active' ? 'badge-green':'badge-muted'}">${esc(e.status.toUpperCase())}</span></header><div>${e.targets.map(t => `<span class="target-pill">${esc(t)}</span>`).join('')}</div><div class="engagement-details"><span>ID ${esc(e.id.slice(0,12))}…</span><span>EXPIRES ${esc(fmtDate(e.expires_at))}</span><span>${e.classes.map(esc).join(' · ')}</span></div></article>`).join(''); }
+function renderTools() {
+  $('tool-grid').innerHTML = state.tools.map(t => `<article class="tool-card ${esc(t.state)}"><span class="badge ${t.state === 'installed' ? 'badge-green' : t.state === 'blocked' ? 'badge-red' : 'badge-muted'}">${esc(t.state.replace('-', ' ').toUpperCase())}</span><h3>${esc(t.name)}</h3><div class="tool-family">${esc(t.family)}</div><p>${esc(t.role)}<br><span class="tool-path">${esc(t.path || 'No executable found')}</span><br>${t.version ? esc(t.version) : 'Version unavailable'}</p>${t.state === 'installed' ? '' : `<p><button class="text-button" data-tool-install="tool:${esc(t.name)}">INSTALL</button></p>`}</article>`).join('');
+  document.querySelectorAll('[data-tool-install]').forEach(btn => btn.addEventListener('click', () => {
+    if (typeof window.openDependency === 'function') window.openDependency(btn.dataset.toolInstall);
+  }));
+}
+function engagementLive(item) {
+  if (!item || item.status !== 'active' || item.expired || item.effective_status === 'expired') return false;
+  const expires = Date.parse(item.expires_at);
+  if (!Number.isNaN(expires) && expires <= Date.now()) return false;
+  return true;
+}
+async function loadEngagements() { try { const data = await api('/api/engagements'); state.engagements = data.engagements; const current = state.engagements.find(e => e.id === state.activeEngagementId); if (!engagementLive(current)) state.activeEngagementId = (state.engagements.find(engagementLive) || {}).id || null; renderEngagements(); } catch(e) { toast(e.message, true); } }
+function renderEngagements() { const el = $('engagement-list'); if (!state.engagements.length) { el.innerHTML = `<div class="empty-state panel"><div class="empty-icon">◎</div><h3>No active engagements</h3><p>Active tools such as nmap stay unavailable until a scope and expiry are declared.</p></div>`; return; } el.innerHTML = state.engagements.map(e => `<article class="engagement-card"><header><div><h3>${esc(e.name)}</h3><p>${esc(e.authorization)}</p></div><span class="badge ${e.status === 'active' ? 'badge-green':'badge-muted'}">${esc(e.status.toUpperCase())}</span></header><div>${e.targets.map(t => `<span class="target-pill">${esc(t)}</span>`).join('')}</div><div class="engagement-details"><span>ID ${esc(e.id.slice(0,12))}…</span><span>EXPIRES ${esc(fmtDate(e.expires_at))}</span><span>${e.classes.map(esc).join(' · ')}</span>${(e.excluded_targets||[]).length ? `<span>EXCL ${(e.excluded_targets||[]).map(esc).join(', ')}</span>` : ''}<a class="report-dl" href="/api/reports/assessment/${encodeURIComponent(e.id)}">ASSESSMENT</a>${e.status === 'active' ? ` <button class="text-button" data-close-engagement="${esc(e.id)}">CLOSE</button>` : ''}</div></article>`).join('');
+  document.querySelectorAll('[data-close-engagement]').forEach(btn => btn.addEventListener('click', async () => {
+    try { await api(`/api/engagements/${encodeURIComponent(btn.dataset.closeEngagement)}/close`, {method:'POST', body:{}}); toast('Engagement closed.'); loadEngagements(); }
+    catch (e) { toast(e.message, true); }
+  }));
+}
 async function loadHistory() { try { const data = await api('/api/history'); state.history = data.history; renderActivity(); return state.history; } catch(e) { toast(e.message, true); return []; } }
 function operationTitle(op) { const command = op.commands?.[0]?.display || 'No command executed'; return command.length > 67 ? command.slice(0,67) + '…' : command; }
 function activityMarkup(op) { const s = op.status || 'unknown'; return `<article class="activity-item"><span class="activity-icon ${s === 'succeeded' ? '' : s === 'running' ? 'running':'failed'}"></span><div><div class="activity-title">${esc(statusLabel(s))} <span style="color:var(--dim)">· ${esc(fmtDate(op.ended_at || op.started_at))}</span></div><div class="activity-command">${esc(operationTitle(op))}</div></div><div class="activity-meta"><div class="activity-status ${s !== 'succeeded' ? s === 'running' ? 'running':'failed':''}">${esc(statusLabel(s))}</div><div>${op.commands?.length || 0} command${(op.commands?.length || 0) === 1 ? '':'s'}</div></div></article>`; }
@@ -33,9 +49,61 @@ function renderPlan(plan) { state.plan = plan; const badge = $('plan-badge'); ba
  $('plan-content').className = 'plan-card'; $('plan-content').innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>OBJECTIVE / ${esc(plan.kind.replace('_',' '))}</span>${esc(plan.request)}</div><span class="badge ${statusClass(plan.status)}">${esc(statusLabel(plan.status))}</span></div><ul class="plan-notes">${notes}</ul>${commands}<div class="worker-row">WORKERS · ${worker}</div>${plan.approval_required && plan.status === 'planned' ? `<div class="approval"><small>⌁ ${esc(plan.approval_phrase)}</small><button class="approve-button" id="approve-plan">APPROVE &amp; EXECUTE</button></div>` : ''}`;
  $('approve-plan')?.addEventListener('click', approvePlan);
 }
-async function makePlan(request) { if (!request.trim()) return; setView('overview'); $('plan-button').disabled = true; $('plan-button').textContent = 'INSPECTING…'; try { const payload = {request, cwd: state.doctor?.cwd || undefined}; if (state.activeEngagementId) payload.engagement_id = state.activeEngagementId; const data = await api('/api/plan', {method:'POST', body:payload}); renderPlan(data.plan); toast(data.plan.status === 'planned' ? 'Typed plan ready — review before execution.' : statusLabel(data.plan.status), data.plan.status === 'rejected'); } catch(e) { toast(e.message, true); } finally { $('plan-button').disabled = false; $('plan-button').innerHTML = '<span class="spark">✦</span> PLAN REQUEST'; } }
+async function makePlan(request) {
+  if (!request || !String(request).trim()) return;
+  setView('overview');
+  $('plan-button').disabled = true;
+  $('plan-button').textContent = 'INSPECTING…';
+  try {
+    const payload = {request, cwd: state.doctor?.cwd || undefined, conversation_id: state.conversationId, offline: !!state.settings?.offline};
+    if (state.activeEngagementId) payload.engagement_id = state.activeEngagementId;
+    const data = await api('/api/workspace/turn', {method:'POST', body:payload});
+    state.conversationId = data.conversation?.id || state.conversationId;
+    state.task = data.task;
+    if (data.plan) renderPlan(data.plan);
+    toast(data.explanation || (data.plan?.status === 'planned' ? 'Typed plan ready — review before execution.' : statusLabel(data.plan?.status)), data.plan?.status === 'rejected');
+    if (data.auto_executed && data.operation?.id) await watchOperation(data.operation.id);
+  } catch(e) { toast(e.message, true); }
+  finally { $('plan-button').disabled = false; $('plan-button').innerHTML = '<span class="spark">✦</span> SEND'; }
+}
 async function approvePlan() { if (!state.plan) return; const button = $('approve-plan'); button.disabled = true; button.textContent = 'STARTING…'; try { const data = await api('/api/execute', {method:'POST', body:{plan_id:state.plan.id, approval_token:state.plan.approval_token, confirm:true}}); const op = data.operation; renderPlan({...state.plan, status:'started'}); toast('Operation started. Streaming real output from the local sidecar.'); await watchOperation(op.id); } catch(e) { button.disabled = false; button.textContent = 'APPROVE & EXECUTE'; toast(e.message, true); } }
-async function watchOperation(id) { for (let i=0; i<120; i++) { await new Promise(r => setTimeout(r, 350)); try { const data = await api(`/api/operations/${encodeURIComponent(id)}`); const op = data.operation; if (!op) continue; if (!['started','running'].includes(op.status)) { renderAnalysis(op); await loadHistory(); return; } } catch(e) { toast(e.message, true); return; } } toast('Operation is still running; activity can be refreshed.', true); }
+async function watchOperation(id) {
+  const finish = async (op) => { renderAnalysis(op); await loadHistory(); };
+  if (window.EventSource) {
+    try {
+      await new Promise((resolve) => {
+        const es = new EventSource(`/api/operations/${encodeURIComponent(id)}/stream`);
+        const timer = setTimeout(() => { es.close(); resolve('timeout'); }, 45000);
+        es.onmessage = (ev) => {
+          try {
+            const op = JSON.parse(ev.data).operation;
+            if (op && !['started', 'running'].includes(op.status)) {
+              clearTimeout(timer); es.close(); finish(op).then(() => resolve('done'));
+            } else if (op) { renderLiveIfPresent(op); }
+          } catch (_) { /* keep listening */ }
+        };
+        es.onerror = () => { clearTimeout(timer); es.close(); resolve('error'); };
+      });
+      const latest = await api(`/api/operations/${encodeURIComponent(id)}`);
+      if (latest.operation && !['started', 'running'].includes(latest.operation.status)) {
+        await finish(latest.operation); return;
+      }
+    } catch (_) { /* fall through to poll */ }
+  }
+  for (let i = 0; i < 120; i++) {
+    await new Promise(r => setTimeout(r, 350));
+    try {
+      const data = await api(`/api/operations/${encodeURIComponent(id)}`);
+      const op = data.operation;
+      if (!op) continue;
+      if (!['started', 'running'].includes(op.status)) { await finish(op); return; }
+    } catch (e) { toast(e.message, true); return; }
+  }
+  toast('Operation is still running; activity can be refreshed.', true);
+}
+function renderLiveIfPresent(op) {
+  if (typeof renderLiveOutput === 'function') renderLiveOutput(op);
+}
 async function approveMutation(op) {
   const button = $('approve-mutation');
   if (button) { button.disabled = true; button.textContent = 'APPROVING…'; }
@@ -60,9 +128,57 @@ function renderAnalysis(op) {
   $('approve-mutation')?.addEventListener('click', () => approveMutation(op));
 }
 
-async function createEngagement() { const name = $('eng-name').value.trim(), authorization = $('eng-auth').value.trim(), target = $('eng-target').value.trim(); if (!name || !authorization || !target) return toast('Name, authorization reference, and target are required.', true); try { const data = await api('/api/engagements',{method:'POST',body:{name,authorization,targets:[target],classes:['reconnaissance','defensive-analysis']}}); state.engagements.unshift(data.engagement); state.activeEngagementId = data.engagement.id; renderEngagements(); $('engagement-form').hidden=true; toast('Engagement scope created. Targets are rechecked at execution.'); } catch(e) { toast(e.message,true); } }
+async function createEngagement() {
+  const name = $('eng-name').value.trim(), authorization = $('eng-auth').value.trim(), target = $('eng-target').value.trim();
+  if (!name || !authorization || !target) return toast('Name, authorization reference, and target are required.', true);
+  const excluded = ($('eng-excluded')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+  const body = {name, authorization, targets:[target], classes:['reconnaissance','defensive-analysis'], excluded_targets: excluded, owner: $('eng-owner')?.value || '', environment: $('eng-env')?.value || ''};
+  try { const data = await api('/api/engagements',{method:'POST',body}); state.engagements.unshift(data.engagement); state.activeEngagementId = data.engagement.id; renderEngagements(); $('engagement-form').hidden=true; toast('Engagement scope created. Targets are rechecked at execution.'); } catch(e) { toast(e.message,true); }
+}
 async function verifyAudit() { try { const data = await api('/api/audit/verify'); const el = $('audit-result'); el.className = `audit-strip ${data.audit.valid ? 'valid':'invalid'}`; el.innerHTML = `<span class="status-dot"></span> ${data.audit.valid ? `AUDIT CHAIN VERIFIED · ${data.audit.checked} event(s)` : `AUDIT CHAIN INVALID · ${esc(data.audit.error)}`}`; } catch(e) { toast(e.message,true); } }
 function setupMatrix() { const canvas = $('matrix'), ctx = canvas.getContext('2d'); let columns = [], frame = 0; function resize(){canvas.width=innerWidth;canvas.height=innerHeight;columns=Array(Math.ceil(canvas.width/17)).fill(0).map(()=>Math.random()*-40)} function tick(){ if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; } if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 4 : 2)) !== 0) return; ctx.fillStyle='rgba(10,10,12,.09)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.font='12px monospace';ctx.fillStyle='rgba(0,212,170,.54)';columns.forEach((y,i)=>{ctx.fillText(Math.random()>.5?'1':'0',i*17,y*17);if(y*17>canvas.height && Math.random()>.975)columns[i]=0;columns[i]++});} resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
+function terminalMetrics() {
+  const host = $('terminal-panes');
+  const width = (host && host.clientWidth) || Math.max(640, innerWidth - 280);
+  const height = (host && Math.max(host.clientHeight, 370)) || 420;
+  const cols = Math.max(40, Math.min(220, Math.floor((width - 36) / 8.2)));
+  const rows = Math.max(12, Math.min(60, Math.floor((height - 16) / 21)));
+  return { cols, rows };
+}
+function focusPtySurface() {
+  const pane = sessionOutput(state.activeSessionId) || document.querySelector('#terminal-panes [data-session-output]:not([hidden])') || $('terminal-output');
+  if (pane) pane.focus({ preventScroll: true });
+}
+function ptyKey(e) {
+  if (e.metaKey) return;
+  if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c' || e.key === 'V' || e.key === 'v')) return;
+  if (e.ctrlKey && !e.altKey && e.key.length === 1) {
+    e.preventDefault();
+    writeSession(String.fromCharCode(e.key.toLowerCase().charCodeAt(0) - 96), true);
+    return;
+  }
+  const keys = { Enter: '\n', Backspace: '\x7f', Tab: '\t', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D', Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~', Escape: '\x1b', PageUp: '\x1b[5~', PageDown: '\x1b[6~' };
+  if (keys[e.key]) { e.preventDefault(); writeSession(keys[e.key], true); }
+  else if (e.key.length === 1 && !e.altKey) { e.preventDefault(); writeSession(e.key, true); }
+}
+function bindPtySurface(element) {
+  if (!element || element._ptyBound) return;
+  element._ptyBound = true;
+  element.tabIndex = 0;
+  element.setAttribute('role', 'application');
+  element.setAttribute('aria-label', 'VORTEX Linux PTY');
+  element.addEventListener('click', () => {
+    const session = activeSession();
+    if (!session || session.status !== 'running') openSession();
+    else element.focus({ preventScroll: true });
+  });
+  element.addEventListener('keydown', ptyKey);
+  element.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = ((e.clipboardData || window.clipboardData).getData('text') || '').replace(/\x00/g, '').slice(0, 65536);
+    if (text) writeSession(text, true);
+  });
+}
 function activeSession() { return state.sessions.find(session => session.id === state.activeSessionId) || null; }
 function sessionOutput(sessionId) { return Array.from(document.querySelectorAll('[data-session-output]')).find(element => element.dataset.sessionOutput === sessionId) || null; }
 function appendAnsi(element, data) {
@@ -78,8 +194,9 @@ function ensureSessionPane(sessionId) {
   if (old && !old.dataset.sessionOutput && old.parentElement === host) host.innerHTML = '';
   output = document.createElement('pre');
   output.className = 'terminal-body'; output.dataset.sessionOutput = sessionId;
-  output.setAttribute('role', 'log'); output.setAttribute('aria-live', 'polite');
-  output.textContent = `[PTY ${sessionId.slice(0, 8)}] attaching…\n`;
+  output.setAttribute('role', 'application'); output.setAttribute('aria-live', 'polite');
+  output.textContent = `[PTY ${sessionId.slice(0, 8)}] attaching to this host…\n`;
+  bindPtySurface(output);
   host.appendChild(output);
   return output;
 }
@@ -106,8 +223,8 @@ function renderSessionState() {
   $('open-session').hidden = running;
   $('kill-session').hidden = !running;
   $('terminal-input').disabled = !running;
-  $('terminal-input').placeholder = running ? 'Type into the active local PTY…' : 'Open a shell to type into the real PTY…';
-  $('terminal-hint').textContent = running ? 'ENTER TO SEND · CTRL-C INTERRUPTS' : 'OPEN SESSION FIRST';
+  $('terminal-input').placeholder = running ? 'Or type here — keys also go to the PTY surface' : 'Click the black pane or OPEN LOCAL SHELL';
+  $('terminal-hint').textContent = running ? 'CLICK PANE · TYPE · PASTE · CTRL-C' : 'OPEN A REAL LINUX PTY';
   $('terminal-cwd').textContent = session?.cwd || state.doctor?.cwd || '—';
 }
 function selectSession(sessionId) {
@@ -116,6 +233,7 @@ function selectSession(sessionId) {
   if (!state.paneIds.includes(sessionId)) { if (state.paneIds.length >= 2) state.paneIds.shift(); state.paneIds.push(sessionId); }
   renderSessionTabs(); renderSessionPanes(); renderSessionState();
   if (activeSession()?.status === 'running') pollSessions();
+  focusPtySurface();
 }
 async function loadSessions() {
   try {
@@ -128,18 +246,44 @@ async function loadSessions() {
     if (state.sessions.some(session => session.status === 'running')) pollSessions();
   } catch (e) { toast(e.message, true); }
 }
+function applySessionPayload(sessionId, data) {
+  const output = ensureSessionPane(sessionId);
+  (data.events || []).forEach(event => { appendAnsi(output, event.data); state.sessionSeqs[sessionId] = Math.max(state.sessionSeqs[sessionId] || 0, event.seq); });
+  const index = state.sessions.findIndex(item => item.id === sessionId);
+  if (index >= 0 && data.session) state.sessions[index] = data.session;
+}
+
+function streamSession(sessionId) {
+  if (!window.EventSource || state.sessionStreams?.[sessionId]) return false;
+  state.sessionStreams = state.sessionStreams || {};
+  try {
+    const es = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/stream`);
+    state.sessionStreams[sessionId] = es;
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        applySessionPayload(sessionId, data);
+        state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();
+        const status = data.session?.status;
+        if (!data.session || !['starting', 'running'].includes(status)) { es.close(); delete state.sessionStreams[sessionId]; }
+      } catch (_) { /* keep listening */ }
+    };
+    es.onerror = () => { es.close(); delete state.sessionStreams[sessionId]; };
+    return true;
+  } catch (_) { return false; }
+}
+
 async function pollSessions() {
+  const running = state.sessions.filter(session => session.status === 'running');
+  running.forEach(session => streamSession(session.id));
   if (state.sessionTimer) return;
   const tick = async () => {
     state.sessionTimer = null;
-    const running = state.sessions.filter(session => session.status === 'running');
-    for (const session of running) {
+    const live = state.sessions.filter(session => session.status === 'running' && !state.sessionStreams?.[session.id]);
+    for (const session of live) {
       try {
         const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/events?since=${state.sessionSeqs[session.id] || 0}`);
-        const output = ensureSessionPane(session.id);
-        (data.events || []).forEach(event => { appendAnsi(output, event.data); state.sessionSeqs[session.id] = Math.max(state.sessionSeqs[session.id] || 0, event.seq); });
-        const index = state.sessions.findIndex(item => item.id === session.id);
-        if (index >= 0 && data.session) state.sessions[index] = data.session;
+        applySessionPayload(session.id, data);
       } catch (e) { toast(e.message, true); }
     }
     state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();
@@ -150,11 +294,12 @@ async function pollSessions() {
 async function openSession() {
   $('open-session').disabled = true;
   try {
-    const data = await api('/api/sessions', {method:'POST', body:{name:`local shell ${state.sessions.length + 1}`, cwd:state.doctor?.cwd || undefined, cols:100, rows:30}});
+    const size = terminalMetrics();
+    const data = await api('/api/sessions', {method:'POST', body:{name:`linux pty ${state.sessions.length + 1}`, cwd:state.doctor?.cwd || undefined, cols:size.cols, rows:size.rows}});
     state.sessions.push(data.session); state.activeSessionId = data.session.id; state.session = data.session; state.sessionSeqs[data.session.id] = 0;
     if (state.paneIds.length >= 2) state.paneIds.shift(); state.paneIds.push(data.session.id);
-    renderSessionTabs(); renderSessionPanes(); renderSessionState(); pollSessions(); $('terminal-input').focus();
-    toast('Real local PTY opened. Input stays inside the Python sidecar.');
+    renderSessionTabs(); renderSessionPanes(); renderSessionState(); pollSessions(); focusPtySurface();
+    toast('Real Linux PTY opened on this host. Type in the black pane.');
   } catch (e) { toast(e.message, true); }
   finally { $('open-session').disabled = false; renderSessionState(); }
 }
@@ -167,9 +312,12 @@ async function splitSession() {
   }
   toast('Split view already has two panes.');
 }
-async function writeSession(data) {
+async function writeSession(data, quiet = false) {
   const session = activeSession();
-  if (!session || session.status !== 'running') return toast('Open a local PTY session first.', true);
+  if (!session || session.status !== 'running') {
+    if (!quiet) toast('Open a local PTY session first.', true);
+    return;
+  }
   try { await api(`/api/sessions/${encodeURIComponent(session.id)}/input`, {method:'POST', body:{data}}); }
   catch (e) { toast(e.message, true); }
 }
@@ -186,5 +334,5 @@ async function resizeSession() {
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
-function init() { setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown',e=>{if(e.ctrlKey && !e.altKey && e.key.length===1){e.preventDefault();writeSession(String.fromCharCode(e.key.toLowerCase().charCodeAt(0)-96));return;} const keys={Enter:'\n',Backspace:'\x7f',Tab:'\t',ArrowUp:'\x1b[A',ArrowDown:'\x1b[B',ArrowRight:'\x1b[C',ArrowLeft:'\x1b[D',Home:'\x1b[H',End:'\x1b[F',Delete:'\x1b[3~'}; if(keys[e.key]){e.preventDefault();writeSession(keys[e.key]);} else if(e.key.length===1 && !e.metaKey && !e.altKey){e.preventDefault();writeSession(e.key);} }); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);

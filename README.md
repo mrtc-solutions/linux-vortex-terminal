@@ -1,105 +1,114 @@
-# Linux Vortex Terminal
+# VORTEX
 
-**Linux-native, AI-powered authorized cybersecurity and Linux operations workbench.**
+**Verified Orchestration, Reasoning, Testing, Execution & eXperience**
 
-Vortex turns a natural-language objective into an inspectable plan, checks the
-real tools installed on the host, asks for explicit approval, runs only typed
-argv through one local Python authority, and records truthful evidence. It works
-without a model or network. The desktop renderer is an optional local Electron
-shell; `./vortex` is the dependency-free CLI path. The operator’s PTY shell and
-explicit `vortex run -- ...` path retain native Linux access; adapters constrain
-AI-proposed operations, not the capabilities of the user’s own shell.
+Linux-native, AI-assisted authorized cybersecurity and Linux operations workbench.
 
-> **Authorized use only.** Vortex is for systems, networks, and artifacts you
-> own or are explicitly authorized to assess. High-risk attack classes are
-> blocked. Missing tools and offline backends produce no fabricated findings.
+VORTEX turns a natural-language objective into an inspectable plan, checks tools
+actually installed on the host, evaluates the plan with an independent Guardian,
+runs only typed argv through one local Python authority, and records observed
+evidence. Missing tools, agents, Docker, and models are reported as unavailable.
+Nothing is fabricated to make the UI look complete.
+
+> **Authorized use only.** VORTEX is for systems, networks, and artifacts you
+> own or are explicitly authorized to assess.
 
 ## Quick start
 
-Requires Linux and Python 3.11+. No Python package download is needed for the
-current vertical slice.
+Requires Linux and Python 3.11+. Core use has no pip dependency.
 
 ```bash
+# Verify
+python3 -m unittest discover -s tests -q
+
+# User-local launcher (no sudo, no apt)
+./vortex install --user
+export PATH="$HOME/.local/bin:$PATH"
+
 ./vortex --help
 ./vortex doctor --json
+./vortex health --json
 ./vortex tools
-./vortex adapters --json
-./vortex artifact inspect ./scan.xml --type nmap-xml
-./vortex shell preview bash
+./vortex agents --json
+./vortex deps --json
+./vortex sandbox --json
 ./vortex plan "system health"
+./vortex plan "whoami"
+./vortex --profile standard --yes turn "whoami"
 ./vortex db integrity
-./vortex backup ~/.local/share/vortex-backup.db
-./vortex plan "install package ripgrep" # real preflight + root-required plan; no auto-sudo
-./vortex "git status"
 
-# Optional desktop preview (same local sidecar; binds 0.0.0.0 for a dev preview)
+# Local workbench (127.0.0.1) or Arena preview (0.0.0.0)
+./vortex serve --bind-host 127.0.0.1 --bind-port 8765
 npm run preview
-
-# Optional Electron desktop after npm install on Linux
-npm install
-npm start
 ```
 
-The default data directory is `$XDG_DATA_HOME/vortex` (or
-`~/.local/share/vortex`) with owner-only permissions. For an isolated test:
+Step-by-step install and use: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
-```bash
-VORTEX_DATA_DIR="$(mktemp -d)" ./vortex plan "show listening ports"
-```
+Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 
-## Capability matrix
+## What is implemented and tested
 
 | Capability | Status |
 |---|---|
-| Natural-language deterministic planner | Implemented + tested |
-| Explicit typed plans and approval tokens | Implemented + tested |
-| Real `shell=False` argv execution and process groups | Implemented + tested |
-| Redaction, output bounds, exit/signal evidence | Implemented + tested |
-| XDG local SQLite + tamper-evident audit chain | Implemented + tested |
-| Linux context and factual tool probes | Implemented + tested |
-| Engagement creation, canonical targets, scope gate | Implemented + tested |
-| Desktop planning/activity/reports/settings UI | Implemented + smoke-tested |
-| Python-owned local PTY sessions, reconnect, and cancellation | Implemented + tested |
-| Terminal tabs/split view, SGR/cursor/erase rendering, key forwarding | Implemented + tested |
-| Scrollback and alternate-screen terminal buffer | Implemented + tested |
-| Explicit shell integration install/uninstall | Implemented + tested |
-| Complete xterm compatibility and reconnectable daemon attach | Planned |
-| Matrix binary rain and project-owned artwork | Implemented + accessible fallback |
-| Scoped nmap/curl planning and evidence parsers | Implemented + tested; tool availability varies |
-| Real apt preflight, impact parsing, and guarded package plans | Implemented + tested; Linux VM mutation gate remains |
-| Systemd state parsing, user-bus detection, and guarded plans | Implemented + tested; host context varies |
-| Docker/Podman read-only container inspection | Implemented + tested; runtime availability varies |
-| Bounded Docker/Podman container log inspection | Implemented + tested; runtime availability varies |
-| SSH effective-config diagnostics | Implemented + tested; no connection or key read |
-| Scoped SSH connectivity diagnostics | Implemented + tested; engagement required |
-| DNS resolution revalidation for active plans | Implemented + tested |
-| Redirect observation without automatic follow | Implemented + tested |
-| Nuclei/content-discovery active adapters | Planned; reviewed templates/wordlists required |
-| Local model / specialist worker bus | Disabled/no providers included; optional future work |
-| Unsigned Linux CLI `.deb` build + checksum | Implemented + tested; signing/release acceptance remains |
-| Cloud API, remote control, attack automation, telemetry | Explicitly unsupported |
+| Real `shell=False` argv execution, PTY, cancellation | Implemented + tested |
+| Natural-language plans for reviewed Linux adapters | Implemented + tested |
+| Independent Guardian (cannot be self-approved by a model/agent) | Implemented + tested |
+| Risk policy: safe / standard (auto low-risk) / expert | Implemented + tested |
+| Engagements and scope gate for active network work | Implemented + tested |
+| VTX task engine, persistence, resume/restart/delete | Implemented + tested |
+| Conversations, edit-branching, export, search | Implemented + tested |
+| Objective evaluation / replan proposal after observed results | Implemented + tested |
+| Kali/Linux tool registry with live probes | Implemented + tested |
+| Agent Council (9 third-party + builtin `vortex-local`) | Implemented + tested; third-party missing stay UNAVAILABLE |
+| Observe → act → host-state reward | Implemented + tested |
+| nuclei / ffuf / nikto / amass / gobuster adapters | Implemented + tested; UNAVAILABLE without the binary, engagement, and (for ffuf/gobuster) a host wordlist |
+| User-local install / `vortex serve` / `vortex turn` | Implemented + tested |
+| Session EventSource with poll fallback | Implemented |
+| Missing-dependency window / `vortex deps` | Implemented + tested; no silent install |
+| Reports Markdown / HTML / JSON / PDF from observed operations | Implemented + tested |
+| System inventory report from doctor + tool probes | Implemented |
+| Memory, experiences, validated procedures | Implemented + tested |
+| First-run live requirement checks | Implemented |
+| Offline mode, privacy mode, lab-mode flag | Implemented |
+| STOP ALL kill switch | Implemented + tested |
+| Local Ollama loopback probe | Implemented; unavailable unless a server is running |
+| Docker/Podman isolation probe | Implemented; UNAVAILABLE when no runtime is installed |
+| Plugin JSON manifests (no plugin code execution) | Implemented |
+| Security tests: injection, prompt-injection text, Guardian | Implemented + tested |
+| Audit hash chain, redaction, output caps | Implemented + tested |
+
+## Explicitly not claimed on this host
+
+These are either unimplemented, or implemented only as honest unavailable states:
+
+- Calling CAI / Strix / Nebula / PentestGPT / HexStrike / PentAGI / HackerAI / HALO / DarkMoon consult APIs (no reviewed non-interactive consult; binaries not installed here)
+- sqlmap / Metasploit **execution** adapters (catalog probes only)
+- Scanner tools when the binary or wordlist is not on the host (honest UNAVAILABLE)
+- FastAPI + PostgreSQL + pgvector (local SQLite modular monolith by design)
+- Durable WebSocket PTY attach (operation and session EventSource exist; poll remains a fallback)
+- Starting unreviewed Docker images as a sandbox
+- Provisioning Juice Shop / DVWA / WebGoat
+- Cloud model providers
+- Silent package or agent installation
+- Complete xterm compatibility and reconnectable daemon attach
+- Privileged apt/systemd mutation acceptance on a disposable VM
+- Signed `.deb` / 1.0 production release
 
 ## Trust model
 
-The renderer cannot execute a process. In desktop mode, Electron starts one
-loopback-only Python sidecar with a per-launch capability token and exposes only a
-typed preload bridge. The sidecar resolves and fingerprints executables, validates
-argv/cwd/scope, uses a minimal environment and new process group, streams bounded
-redacted output, and persists a hash-chained audit event. A plan expires after 15
-minutes and a second execution attempt is rejected. The optional local model is
-not installed, not contacted, and not trusted by default.
+The renderer cannot spawn a process. The Python sidecar is the only execution
+authority. Guardian recomputes risk from command specs and policy; agent text
+cannot authorize execution. Tool output is stored as data, not instructions.
 
 ## Documentation
 
-- [`LINUX_VORTEX_TERMINAL_BUILD_PLAN.md`](LINUX_VORTEX_TERMINAL_BUILD_PLAN.md) —
-  supplied comprehensive plan and all binding review amendments.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow.
-- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — threat boundary and mitigations.
-- [`docs/EXIT_CODES.md`](docs/EXIT_CODES.md) — machine contract.
-- [`docs/IMPLEMENTATION_REPORT.md`](docs/IMPLEMENTATION_REPORT.md) — this slice,
-  commands run, and limitations.
-- [`docs/STATUS.md`](docs/STATUS.md) — tested capabilities and remaining release gates.
-- [`SECURITY.md`](SECURITY.md) — disclosure and safe-use policy.
+- [`LINUX_VORTEX_TERMINAL_BUILD_PLAN.md`](LINUX_VORTEX_TERMINAL_BUILD_PLAN.md) — original binding plan
+- [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — install, test, and operate as a real app
+- [`docs/STATUS.md`](docs/STATUS.md) — tested vs remaining gates
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow
+- [`docs/IMPLEMENTATION_REPORT.md`](docs/IMPLEMENTATION_REPORT.md) — current slice
+- [`NOTICE`](NOTICE) — third-party agent attribution
+- [`SECURITY.md`](SECURITY.md)
 
 ## Development
 
@@ -107,11 +116,3 @@ not installed, not contacted, and not trusted by default.
 npm run lint
 npm test
 ```
-
-The project intentionally has no browser/backend cloud dependency for core use.
-The default low-resource mode does not load a local LLM, so the deterministic CLI,
-PTY, adapters, and evidence parsers are usable on modest hardware such as 8 GB
-RAM and a 2 GHz CPU. Local models remain optional and disabled by default.
-Build output, local databases, credentials, reports, and Node dependencies are
-ignored by Git. Contributions must preserve the single execution authority and
-truthful unavailable/failed states.

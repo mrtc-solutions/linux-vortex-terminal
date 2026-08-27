@@ -1,24 +1,51 @@
 # Current implementation status
 
-This project is a real Linux application. Production code uses real installed
-Linux tools and observed output only. Test doubles and fixture files exist only
-inside tests; they cannot become production findings or tool health.
+VORTEX 0.2.0 is a real Linux application. Production paths use installed host
+tools and observed output only. Test doubles exist only inside tests.
 
-## Priority status
+**115 Python tests + JS terminal emulator: passing.**
 
-| Priority | State | Remaining release gate |
-|---|---|---|
-| 1. Terminal workspace | Functional slice implemented | Full xterm compatibility, durable daemon attachment across sidecar restarts, tmux/SSH/non-TTY acceptance |
-| 2. Adapter hardening | Functional slice implemented | Deeper runtime-specific schemas, Nmap/HTTP acceptance, fuzzing and host coverage |
-| 3. Privileged Linux acceptance | Code and preflight implemented | Must run real package/service mutations only on a dedicated disposable Linux/Kali host |
-| 4. Persistence and release | Local backups, integrity, retention, reports, and `.deb` CLI build implemented | Schema upgrade migrations, scheduled retention, signed artifacts and install/upgrade/uninstall VM evidence |
-| 5. Optional intelligence | Deliberately disabled | Local model and worker implementations are optional; no LLM is required |
+## Directive coverage
 
-## Honest limitations
+| Area | State |
+|---|---|
+| Real execution / PTY / NL Linux (reviewed adapters) | Done + tested |
+| os-release / lscpu adapters | Done + tested |
+| Guardian, risk policy, kill switch | Done + tested |
+| Engagements / scope / excluded targets / close | Done + tested |
+| Tasks (VTX-*), resume, pause, reject, events, replan | Done + tested |
+| Conversations, branch, export, message search | Done + tested |
+| Tool registry live probes | Done + tested |
+| Agent adapters + discovery (9 third-party + builtin `vortex-local`) | Done + tested; third-party consult = REQUIRES CONFIGURATION |
+| Reports MD/HTML/JSON/PDF + assessment (engagement-scoped) | Done + tested |
+| Memory / procedures / experiences | Done + tested |
+| Workspace SEND (`/api/workspace/turn`) | Done + tested |
+| SSE operations + sessions | Done |
+| Secret slots (values never returned) | Done + tested |
+| Static path-traversal rejection | Done + tested |
+| Capabilities document (`GET /api/capabilities`) | Done + tested |
+| Missing-dependency window + INSTALL buttons | Done + tested (apt plans / operator proposals; no silent install) |
+| CLI `tasks pause` / `tasks reject` / `deps` | Done + tested |
+| Observe → typed action → host-state reward (WAA-inspired, Linux argv) | Done + tested |
+| Built-in `vortex-local` advisor (always present, never executes) | Done + tested |
+| nuclei / ffuf / nikto / amass / gobuster execution adapters | Done + tested; host binary + engagement required |
+| User-local install, `vortex serve`, `vortex turn`, USER_GUIDE | Done + tested |
+| Session EventSource | Done (poll fallback remains) |
+| Ollama loopback probe | Done; unavailable here |
+| Docker isolation **execution** | Probe only; runtime missing here |
+| Plugin code loading | Deliberately not implemented |
+| FastAPI / PostgreSQL / pgvector | Intentionally not added |
+| sqlmap / msf execution | Honest UNAVAILABLE; no command fabricated |
+| Signed 1.0 `.deb` | Not a 1.0 gate pass |
 
-The repository does not contain a VM, a second Linux host, an installed Docker/
-Podman runtime, an installed Nmap binary, or configured local model workers. It
-therefore does not claim those environment-specific acceptance gates passed.
-`tests/linux_acceptance.sh` is a guarded real-host checklist; it refuses to run
-privileged mutations unless the operator explicitly supplies the required
-environment variables on a disposable host.
+**Plan to make “only host tools remain”:** `docs/READY_WHEN_TOOLS_EXIST.md`
+
+## Remaining host / release gates (cannot be faked)
+
+These stay UNAVAILABLE until the host has the software or a release VM:
+
+1. Reviewed non-interactive consult APIs for third-party agents that are actually installed
+2. Disposable-VM apt/systemd mutation acceptance
+3. Full xterm + durable PTY attach across sidecar restarts
+4. Signed `.deb` install/upgrade/uninstall evidence
+5. Scanner execution on a host that actually has nuclei/ffuf/nmap and reviewed wordlists (adapters exist; this host does not)

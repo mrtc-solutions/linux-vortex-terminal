@@ -1,0 +1,21 @@
+VORTEX third-party agent attribution
+====================================
+
+VORTEX does not vendor these projects. Adapters only probe for a local
+executable and never fabricate a successful consult.
+
+- CAI — https://github.com/aliasrobotics/cai — MIT
+- Nebula — https://github.com/BerylliumSec/nebula — BSD-2-Clause
+- PentestGPT — https://github.com/GreyDGL/PentestGPT — MIT
+- HexStrike — https://github.com/0x4m4/hexstrike-ai — MIT (verify upstream before install)
+- Strix — https://github.com/usestrix/strix — Apache-2.0
+- PentAGI — https://github.com/vxcontrol/pentagi — MIT
+- HackerAI, HALO, DarkMoon — no uniquely verified public local CLI is configured
+
+Do not copy proprietary code into VORTEX. Install agents only with operator
+approval and respect each project's license and trademark terms.
+
+The observe → typed action → host-state reward loop in `backend/episode.py`
+is conceptually informed by Windows Agent Arena's POMDP task framing
+(https://github.com/microsoft/WindowsAgentArena, MIT). No WAA source is
+vendored; VORTEX executes reviewed Linux argv only.

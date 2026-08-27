@@ -13,7 +13,7 @@ npm-debug.log*
 *.db
 *.db-*
 .vortex/
-reports/
+/reports/
 evidence/
 *.pcap
 *.xml
