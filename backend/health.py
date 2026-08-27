@@ -36,15 +36,15 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     integrity = store.integrity_check()
     tools = []
     for name, meta in TOOL_CATALOG.items():
-        item = probe_executable(name)
+        item = probe_executable(name, include_version=False)
         item.update({"family": meta["family"], "role": meta["role"]})
         tools.append(item)
     installed = sum(1 for item in tools if item.get("state") == "installed")
     agents = discover()
     agent_healthy = sum(1 for item in agents if item.get("health", {}).get("healthy"))
-    docker = probe_executable("docker")
+    docker = probe_executable("docker", include_version=False)
     if docker.get("state") != "installed":
-        docker = probe_executable("podman")
+        docker = probe_executable("podman", include_version=False)
         docker_name = "podman"
     else:
         docker_name = "docker"

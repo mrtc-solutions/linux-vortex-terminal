@@ -9,8 +9,8 @@ def isolation_status() -> dict[str, Any]:
         from vortex_backend import probe_executable
     except ImportError:
         from backend.vortex_backend import probe_executable
-    docker = probe_executable("docker")
-    podman = probe_executable("podman")
+    docker = probe_executable("docker", include_version=False)
+    podman = probe_executable("podman", include_version=False)
     runtime = docker if docker.get("state") == "installed" else podman if podman.get("state") == "installed" else None
     if not runtime:
         return {

@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, session } = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
+const { attachWindowState, registerWindowControls } = require('./window-controls');
 
 if (process.platform !== 'linux') {
   throw new Error('Linux Vortex Terminal is Linux-only.');
@@ -48,16 +49,27 @@ async function sidecarRequest(route, options = {}) {
 
 function createWindow() {
   const win = new BrowserWindow({
+    title: 'VORTEX // Linux Orchestration',
     width: 1440, height: 940, minWidth: 960, minHeight: 680,
     backgroundColor: '#0a0a0c', show: false,
+    // Linux desktop decorations vary by window manager. VORTEX owns a visible,
+    // tested title bar so minimize/maximize/close remain available everywhere.
+    frame: false,
+    autoHideMenuBar: true,
+    minimizable: true,
+    maximizable: true,
+    closable: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true }
   });
+  attachWindowState(win);
+  win.setMenuBarVisibility(false);
   win.once('ready-to-show', () => win.show());
   win.loadURL(`${sidecarUrl}/`);
 }
 
 app.whenReady().then(async () => {
   await startSidecar();
+  registerWindowControls(ipcMain, BrowserWindow);
   ipcMain.handle('vortex-request', (_event, route, options) => {
     if (typeof route !== 'string' || !route.startsWith('/api/') || route.includes('..')) throw new Error('invalid sidecar route');
     return sidecarRequest(route, options || {});

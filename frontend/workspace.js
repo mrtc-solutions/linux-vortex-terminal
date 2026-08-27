@@ -103,7 +103,8 @@
       const host = $('first-run');
       const steps = $('setup-steps');
       if (!host || !steps) return;
-      host.hidden = false;
+      if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
+      else host.hidden = false;
       steps.innerHTML = (setup.steps || []).map(step => {
         const badge = step.ok ? 'badge-green' : step.required ? 'badge-red' : 'badge-muted';
         const label = step.ok ? 'OK' : step.required ? 'FAILED' : 'OPTIONAL';
@@ -375,7 +376,8 @@
       const list = $('dep-list');
       const summary = $('dep-summary');
       if (!host || !list) return;
-      host.hidden = false;
+      if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
+      else host.hidden = false;
       list.textContent = 'Probing this host…';
       try {
         const data = await api('/api/dependencies');
@@ -396,7 +398,8 @@
     window.openDependency = async function (itemId) {
       const host = $('dep-window');
       const detail = $('dep-detail');
-      if (host) host.hidden = false;
+      if (host && window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
+      else if (host) host.hidden = false;
       if (!detail) return;
       detail.hidden = false;
       detail.textContent = 'Loading proposal…';

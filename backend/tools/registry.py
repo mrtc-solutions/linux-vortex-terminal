@@ -33,7 +33,7 @@ def inventory() -> list[dict[str, Any]]:
             if tool and tool != "multiple":
                 adapter_risk[tool] = {"risk": manifest.get("risk"), "network": manifest.get("network_class"), "adapter": manifest.get("operation")}
     for name, meta in TOOL_CATALOG.items():
-        probe = probe_executable(name)
+        probe = probe_executable(name, include_version=False)
         extra = adapter_risk.get(name, {})
         items.append({
             "name": name,
@@ -51,8 +51,9 @@ def inventory() -> list[dict[str, Any]]:
     return items
 
 
-def by_category() -> dict[str, list[dict[str, Any]]]:
+def by_category(items: list[dict[str, Any]] | None = None) -> dict[str, list[dict[str, Any]]]:
+    """Group a supplied inventory, avoiding a second full host probe when available."""
     grouped: dict[str, list[dict[str, Any]]] = {}
-    for item in inventory():
+    for item in items if items is not None else inventory():
         grouped.setdefault(str(item["category"]), []).append(item)
     return grouped

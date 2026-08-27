@@ -10,7 +10,9 @@ def _probe(name: str) -> dict[str, Any]:
         from vortex_backend import probe_executable
     except ImportError:
         from backend.vortex_backend import probe_executable
-    item = probe_executable(name)
+    # Agent discovery is an aggregate health surface. Starting every installed
+    # third-party CLI merely to obtain a version makes that surface unpredictable.
+    item = probe_executable(name, include_version=False)
     return {
         "state": item.get("state") or "absent",
         "path": item.get("path"),

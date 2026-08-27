@@ -10,26 +10,54 @@
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
-  <div id="first-run" class="first-run" hidden>
-    <div class="first-run-card">
-      <div class="eyebrow"><span class="eyebrow-line"></span>FIRST RUN</div>
-      <h1>Welcome to VORTEX</h1>
-      <p>These checks use the live host. Missing optional components stay unavailable; nothing is silently installed.</p>
-      <div id="setup-steps" class="setup-steps"></div>
-      <div class="form-foot"><button class="secondary-button" id="open-deps-from-setup">MISSING DEPENDENCIES</button><button class="primary-button" id="complete-setup">CONTINUE</button></div>
+  <header id="app-titlebar" class="app-titlebar" aria-label="Application window controls">
+    <div class="app-titlebar-drag">
+      <span class="titlebar-mark" aria-hidden="true">V</span>
+      <span class="titlebar-name">VORTEX</span>
+      <span class="titlebar-context">LINUX ORCHESTRATION</span>
     </div>
-  </div>
-  <div id="dep-window" class="dep-window" hidden>
-    <div class="dep-card">
-      <div class="panel-head">
-        <div><span class="panel-kicker">LIVE HOST PROBES</span><h2>Missing dependencies</h2></div>
-        <button class="close-button" id="close-deps" aria-label="Close">×</button>
+    <div class="window-controls native-window-controls">
+      <button type="button" class="window-control window-control-minimize" data-native-window-action="minimize" aria-label="Minimize application window" title="Minimize"><span aria-hidden="true">—</span></button>
+      <button type="button" class="window-control window-control-maximize" data-native-window-action="toggleMaximize" aria-label="Maximize application window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
+      <button type="button" class="window-control window-control-close" data-native-window-action="close" aria-label="Close application window" title="Close"><span aria-hidden="true">×</span></button>
+    </div>
+  </header>
+  <div id="first-run" class="first-run surface-window" data-surface-window data-window-state="normal" hidden>
+    <section class="first-run-card surface-card" role="dialog" aria-modal="true" aria-labelledby="first-run-title">
+      <div class="surface-titlebar">
+        <div><span class="panel-kicker">VORTEX SETUP</span><strong id="first-run-title">First-run checks</strong></div>
+        <div class="window-controls">
+          <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
+          <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
+          <button type="button" class="window-control window-control-close" data-surface-action="close" aria-label="Close window" title="Close"><span aria-hidden="true">×</span></button>
+        </div>
       </div>
-      <p class="dep-intro">Installed means probed on this host. INSTALL builds a reviewed apt plan or shows an operator-controlled proposal. VORTEX never silently installs software and never captures a sudo password.</p>
-      <div id="dep-summary" class="audit-strip">Probing host…</div>
-      <div id="dep-list" class="dep-list"></div>
-      <div id="dep-detail" class="dep-detail" hidden></div>
-    </div>
+      <div class="surface-body first-run-body">
+        <div class="eyebrow"><span class="eyebrow-line"></span>FIRST RUN</div>
+        <h1>Welcome to VORTEX</h1>
+        <p>These checks use the live host. Missing optional components stay unavailable; nothing is silently installed.</p>
+        <div id="setup-steps" class="setup-steps"></div>
+        <div class="form-foot"><button class="secondary-button" id="open-deps-from-setup">MISSING DEPENDENCIES</button><button class="primary-button" id="complete-setup">CONTINUE</button></div>
+      </div>
+    </section>
+  </div>
+  <div id="dep-window" class="dep-window surface-window" data-surface-window data-window-state="normal" hidden>
+    <section class="dep-card surface-card" role="dialog" aria-modal="true" aria-labelledby="dependencies-title">
+      <div class="panel-head surface-titlebar">
+        <div><span class="panel-kicker">LIVE HOST PROBES</span><h2 id="dependencies-title">Missing dependencies</h2></div>
+        <div class="window-controls">
+          <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
+          <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
+          <button type="button" class="window-control window-control-close" id="close-deps" data-surface-action="close" aria-label="Close window" title="Close"><span aria-hidden="true">×</span></button>
+        </div>
+      </div>
+      <div class="surface-body">
+        <p class="dep-intro">Installed means probed on this host. INSTALL builds a reviewed apt plan or shows an operator-controlled proposal. VORTEX never silently installs software and never captures a sudo password.</p>
+        <div id="dep-summary" class="audit-strip">Probing host…</div>
+        <div id="dep-list" class="dep-list"></div>
+        <div id="dep-detail" class="dep-detail" hidden></div>
+      </div>
+    </section>
   </div>
   <canvas id="matrix" aria-hidden="true"></canvas>
   <div class="noise" aria-hidden="true"></div>
@@ -92,7 +120,7 @@
           <section class="panel activity-panel"><div class="panel-head"><div><span class="panel-kicker">VERIFIED OPERATIONS</span><h2>Recent activity</h2></div><button class="text-button" data-view-target="activity">VIEW ALL →</button></div><div id="recent-activity" class="activity-list"><div class="empty-inline">No operations recorded. Plans remain private until you approve them.</div></div></section>
         </section>
 
-        <section class="view" id="view-terminal"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>REAL LINUX PTY / THIS HOST</div><h1>VORTEX terminal</h1><p>This is a real Linux PTY owned by the Python sidecar. Keys and paste go to the host shell. AI plans stay Guardian-gated and separate.</p></div><span class="badge badge-green">HOST PTY</span></div><div class="terminal-window"><div class="terminal-toolbar"><span class="traffic red"></span><span class="traffic yellow"></span><span class="traffic green"></span><span class="terminal-tab active">vortex / local</span><div class="session-controls"><span id="session-status" class="session-status">NO PTY SESSION</span><button class="terminal-button" id="open-session">OPEN LOCAL SHELL</button><button class="terminal-button danger" id="kill-session" hidden>STOP</button></div><span class="toolbar-right">PTY · UTF-8 · <span id="terminal-cwd">loading</span></span></div><div class="terminal-tabs" id="terminal-tabs"><span class="tab-empty">NO PTY SESSIONS</span><button class="terminal-button" id="new-session">＋ NEW</button><button class="terminal-button" id="split-session">SPLIT VIEW</button></div><div class="terminal-panes" id="terminal-panes"><pre class="terminal-body" id="terminal-output"><span class="terminal-line dim">VORTEX Terminal 0.2.0 · no PTY is started until you explicitly open a local shell</span>
+        <section class="view" id="view-terminal"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>REAL LINUX PTY / THIS HOST</div><h1>VORTEX terminal</h1><p>This is a real Linux PTY owned by the Python sidecar. Keys and paste go to the host shell. AI plans stay Guardian-gated and separate.</p></div><span class="badge badge-green">HOST PTY</span></div><div class="terminal-window" data-terminal-window data-window-state="normal"><div class="terminal-toolbar"><div class="terminal-window-controls"><button type="button" class="traffic traffic-button red" data-terminal-window-action="close" aria-label="Close terminal window" title="Close terminal"></button><button type="button" class="traffic traffic-button yellow" data-terminal-window-action="minimize" aria-label="Minimize terminal window" title="Minimize terminal"></button><button type="button" class="traffic traffic-button green" data-terminal-window-action="maximize" aria-label="Maximize terminal window" aria-pressed="false" title="Maximize terminal"></button></div><span class="terminal-tab active">vortex / local</span><div class="session-controls"><span id="session-status" class="session-status">NO PTY SESSION</span><button class="terminal-button" id="open-session">OPEN LOCAL SHELL</button><button class="terminal-button danger" id="kill-session" hidden>STOP</button></div><span class="toolbar-right">PTY · UTF-8 · <span id="terminal-cwd">loading</span></span></div><div class="terminal-tabs" id="terminal-tabs"><span class="tab-empty">NO PTY SESSIONS</span><button class="terminal-button" id="new-session">＋ NEW</button><button class="terminal-button" id="split-session">SPLIT VIEW</button></div><div class="terminal-panes" id="terminal-panes"><pre class="terminal-body" id="terminal-output"><span class="terminal-line dim">VORTEX Terminal 0.2.0 · no PTY is started until you explicitly open a local shell</span>
 <span class="terminal-line"><span class="green-text">operator@vortex</span><span class="dim">:</span><span class="cyan-text">~</span><span class="dim">$</span> <span class="cursor-block"></span></span></pre></div><div class="terminal-input-row"><span class="terminal-prompt">❯</span><input id="terminal-input" disabled placeholder="Open a shell to type into the real PTY…"><span class="terminal-hint" id="terminal-hint">OPEN SESSION FIRST</span></div></div><div class="notice"><span>i</span><div><b>Real host shell.</b> Open a session, click the black pane, and type. That is Linux. Typed plans in New Task still require Guardian approval and are never mixed into this PTY.</div></div></section>
 
         <section class="view" id="view-engagements"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>AUTHORIZED SECURITY OPERATIONS</div><h1>Engagements</h1><p>Declare scope before active reconnaissance. Expiry and targets are revalidated at execution.</p></div><button class="primary-button" id="new-engagement">＋ NEW ENGAGEMENT</button></div><div class="engagement-layout"><section class="panel engagement-form" id="engagement-form" hidden><div class="panel-head"><div><span class="panel-kicker">SCOPE GATE</span><h2>Create engagement</h2></div><button class="close-button" id="close-engagement">×</button></div><label>Engagement name<input id="eng-name" placeholder="Linux lab assessment"></label><label>Authorization reference<input id="eng-auth" placeholder="Ticket, client approval, or lab reference"></label><label>Allowed target<input id="eng-target" placeholder="lab.example.test or https://lab.example.test"></label><label>Excluded targets (comma-separated)<input id="eng-excluded" placeholder="prod.example.test, 10.0.0.1"></label><label>Owner<input id="eng-owner" placeholder="operator or ticket owner"></label><label>Environment<input id="eng-env" placeholder="authorized-lab"></label><div class="form-foot"><span class="form-note">Operator-declared; keep your authorization evidence separately.</span><button class="primary-button" id="save-engagement">CREATE SCOPE</button></div></section><div id="engagement-list" class="engagement-list"><div class="empty-state panel"><div class="empty-icon">◎</div><h3>No active engagements</h3><p>Active tools such as nmap stay unavailable until a scope and expiry are declared.</p></div></div></div></section>
@@ -130,6 +158,7 @@
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/assets/terminal.js"></script>
+  <script src="/assets/windows.js"></script>
   <script src="/assets/app.js"></script>
   <script src="/assets/workspace.js"></script>
 </body>

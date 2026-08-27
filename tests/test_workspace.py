@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from backend.agents.council import critic, discover, consult
 from backend.reports.engine import render, to_pdf
 from backend.security.guardian import evaluate, recompute_risk
@@ -202,7 +203,14 @@ class WorkspaceTests(unittest.TestCase):
         amass = build_scan("amass", ["lab.example.test"])
         self.assertEqual(amass["adapter_id"], "security.amass.passive")
         self.assertIn("-passive", amass["argv"])
-        missing_list = build_scan("gobuster", ["https://lab.example.test/"])
+        # The negative path must not depend on whether the test host happens to
+        # have a Kali/dirb/seclists package installed under /usr/share.
+        with patch("backend.security.scanners.discover_wordlist", return_value={
+            "state": "absent",
+            "path": None,
+            "message": "No reviewed wordlist was found.",
+        }):
+            missing_list = build_scan("gobuster", ["https://lab.example.test/"])
         self.assertFalse(missing_list["ok"])
         wordlist = Path(self.tmp.name) / "common.txt"
         wordlist.write_text("admin\nlogin\n", encoding="utf-8")
@@ -216,6 +224,23 @@ class WorkspaceTests(unittest.TestCase):
         unimplemented = build_scan("msfconsole", ["https://lab.example.test/"])
         self.assertFalse(unimplemented["ok"])
         self.assertIn("NOT IMPLEMENTED", unimplemented["reason"])
+
+    def test_aggregate_inventories_do_not_launch_version_commands(self):
+        from backend.dependencies import inventory as dependency_inventory
+        from backend.tools.registry import inventory as tool_inventory
+
+        model = {"local": {"state": "unavailable", "models": [], "endpoint": "http://127.0.0.1:11434"}}
+        with patch("backend.models.router.model_status", return_value=model), patch(
+            "backend.vortex_backend.subprocess.run",
+            side_effect=AssertionError("aggregate inventory launched a version process"),
+        ) as run:
+            tools = tool_inventory()
+            dependencies = dependency_inventory()
+
+        self.assertTrue(tools)
+        self.assertTrue(dependencies["items"])
+        run.assert_not_called()
+        self.assertTrue(all(item.get("version") is None for item in tools))
 
     def test_expired_engagement_cannot_plan_outbound_work(self):
         from backend.vortex_backend import now_iso

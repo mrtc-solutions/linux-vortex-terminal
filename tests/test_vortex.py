@@ -31,6 +31,28 @@ class VortexCoreTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_executable_probe_can_skip_version_process_explicitly(self):
+        executable = Path(self.tmp.name) / "version-tool"
+        executable.write_bytes(b"deterministic executable identity")
+        executable.chmod(0o755)
+        completed = type("Completed", (), {"stdout": "Tool test-version\n", "stderr": "", "returncode": 0})()
+        catalog_entry = {str(executable): {"probe": ["--version"]}}
+        with patch.dict("backend.vortex_backend.TOOL_CATALOG", catalog_entry), patch(
+            "backend.vortex_backend.subprocess.run", return_value=completed
+        ) as run:
+            observed = probe_executable(str(executable))
+        self.assertEqual(observed["version"], "Tool test-version")
+        run.assert_called_once()
+
+        with patch.dict("backend.vortex_backend.TOOL_CATALOG", catalog_entry), patch(
+            "backend.vortex_backend.subprocess.run",
+            side_effect=AssertionError("include_version=False launched a process"),
+        ) as run:
+            inventory_probe = probe_executable(str(executable), include_version=False)
+        self.assertIsNone(inventory_probe["version"])
+        run.assert_not_called()
+        self.assertEqual(inventory_probe["sha256"], observed["sha256"])
+
     def test_container_detection_never_fabricates_runtime_state(self):
         plan = build_plan(self.store, 'inspect docker containers', self.tmp.name)
         if not any(probe_executable(name)['state'] == 'installed' for name in ('docker', 'podman')):

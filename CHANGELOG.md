@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.17 — 2026-08-27
+
+- Electron now uses a VORTEX-owned Linux title bar with working minimize,
+  maximize/restore, close, drag, and double-click-to-maximize behavior. First-run,
+  dependency, and terminal windows expose the same visible controls; closing the
+  terminal panel preserves live PTY sessions.
+- Aggregate tool, dependency, health, capability, sandbox, agent, and system-report
+  inventories retain real paths, ownership/mode checks, and SHA-256 identity but
+  no longer launch every installed third-party tool's version command. Individual
+  command plans still probe versions by default.
+- Scanner-builder tests now control the missing-wordlist fixture instead of
+  assuming a Kali host has no reviewed `/usr/share` wordlist.
+
 ## 0.2.16 — 2026-08-27
 
 - The Terminal view is a real Linux PTY surface: click the pane, type, paste.

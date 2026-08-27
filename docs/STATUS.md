@@ -3,7 +3,7 @@
 VORTEX 0.2.0 is a real Linux application. Production paths use installed host
 tools and observed output only. Test doubles exist only inside tests.
 
-**115 Python tests + JS terminal emulator: passing.**
+**118 Python tests + JS terminal and window-control suites: passing.**
 
 ## Directive coverage
 
@@ -25,6 +25,8 @@ tools and observed output only. Test doubles exist only inside tests.
 | Static path-traversal rejection | Done + tested |
 | Capabilities document (`GET /api/capabilities`) | Done + tested |
 | Missing-dependency window + INSTALL buttons | Done + tested (apt plans / operator proposals; no silent install) |
+| Linux desktop + first-run/dependency/terminal window controls | Done + JS tested; display-server smoke remains a release-host check |
+| Aggregate inventory latency (no third-party version fan-out) | Done + tested |
 | CLI `tasks pause` / `tasks reject` / `deps` | Done + tested |
 | Observe → typed action → host-state reward (WAA-inspired, Linux argv) | Done + tested |
 | Built-in `vortex-local` advisor (always present, never executes) | Done + tested |
