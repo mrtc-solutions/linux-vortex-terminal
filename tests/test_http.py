@@ -262,6 +262,8 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(denied["error"]["code"], "invalid_plan")
         negative = self._json("GET", "/api/sessions/deadbeef/events?since=-1", expected=422)
         self.assertEqual(negative["error"]["code"], "invalid_plan")
+        huge = self._json("GET", "/api/sessions/deadbeef/events?since=" + ("9" * 17), expected=422)
+        self.assertEqual(huge["error"]["code"], "invalid_plan")
 
     def test_http_rejects_unknown_report_format(self):
         denied = self._json("GET", "/api/reports/system?format=exe", expected=422)

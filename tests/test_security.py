@@ -82,8 +82,19 @@ class VortexSecurityTests(unittest.TestCase):
             analyze_path("/no/such/file.xml", "nmap-xml")
         outside = Path("/etc/hosts")
         if outside.is_file():
-            with self.assertRaises(ArtifactError):
+            with self.assertRaises(ArtifactError) as ctx:
                 analyze_path(str(outside), "text", allowed_roots=[Path(self.tmp.name)])
+            self.assertIn("allowed", str(ctx.exception).lower())
+        missing_outside = Path("/etc/vortex-missing-artifact-test")
+        with self.assertRaises(ArtifactError) as missing:
+            analyze_path(str(missing_outside), "text", allowed_roots=[Path(self.tmp.name)])
+        self.assertIn("allowed", str(missing.exception).lower())
+
+    def test_plugin_manifests_stay_inside_tree(self):
+        from backend.plugins.loader import list_manifests
+        items = list_manifests()
+        self.assertTrue(all(item.get("executable") is False for item in items))
+        self.assertTrue(all(".." not in str(item.get("source") or "") for item in items))
 
     def test_sensitive_wordlist_is_rejected(self):
         from backend.security.scanners import discover_wordlist

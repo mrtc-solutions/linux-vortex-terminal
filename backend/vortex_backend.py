@@ -2548,7 +2548,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return
                 if len(parts) == 5 and parts[-1] == "events":
                     query = urllib.parse.parse_qs(parsed.query)
-                    return self._json(200, self.sessions.events_since(parts[-2], query.get("since", [0])[0]))
+                    return self._json(200, self.sessions.events_since(parts[-2], self._query_text(query, "since", "0", limit=16)))
                 if len(parts) == 4:
                     session = self.sessions.info(parts[-1])
                     return self._json(200 if session else 404, {"session": session} if session else {"error": {"code": "not_found", "message": "session not found"}})

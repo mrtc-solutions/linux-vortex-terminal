@@ -59,7 +59,7 @@ function createWindow() {
 app.whenReady().then(async () => {
   await startSidecar();
   ipcMain.handle('vortex-request', (_event, route, options) => {
-    if (typeof route !== 'string' || !route.startsWith('/api/')) throw new Error('invalid sidecar route');
+    if (typeof route !== 'string' || !route.startsWith('/api/') || route.includes('..')) throw new Error('invalid sidecar route');
     return sidecarRequest(route, options || {});
   });
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {

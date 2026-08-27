@@ -227,21 +227,37 @@ def analyze_bytes(data: bytes, *, kind: str = "auto", source: dict[str, Any] | N
     return parse_text(data, source)
 
 
+def _permitted_artifact(path: Path, allowed_roots: list[Path] | None) -> bool:
+    if not allowed_roots:
+        return True
+    for root in allowed_roots:
+        try:
+            path.relative_to(Path(root).expanduser().resolve())
+            return True
+        except (ValueError, OSError):
+            continue
+    return False
+
+
 def analyze_path(raw_path: str, kind: str = "auto", allowed_roots: list[Path] | None = None) -> dict[str, Any]:
     if not isinstance(kind, str):
         raise ArtifactError("artifact kind must be a string")
-    path, data = _read_path(raw_path)
-    if allowed_roots:
-        permitted = False
-        for root in allowed_roots:
-            try:
-                path.relative_to(Path(root).expanduser().resolve())
-                permitted = True
-                break
-            except (ValueError, OSError):
-                continue
-        if not permitted:
-            raise ArtifactError("artifact path is outside the allowed evidence directory")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ArtifactError("artifact path is required")
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    try:
+        if candidate.is_symlink():
+            raise ArtifactError("symlink artifacts are not accepted")
+        resolved = candidate.resolve(strict=False)
+    except ArtifactError:
+        raise
+    except OSError as exc:
+        raise ArtifactError(f"artifact could not be read: {exc}") from exc
+    if not _permitted_artifact(resolved, allowed_roots):
+        raise ArtifactError("artifact path is outside the allowed evidence directory")
+    path, data = _read_path(str(resolved))
     source = {"kind": "file", "path": str(path), "identity": str(path)}
     if kind == "auto":
         if path.suffix.lower() in (".xml", ".nmap"):

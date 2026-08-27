@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.14 — 2026-08-27
+
+- HTTP artifact analyze checks allowed roots before reading bytes, so `/etc`
+  paths are rejected without being loaded. Missing out-of-scope paths do not
+  leak existence.
+- Plugin manifests that resolve outside `plugins/` are ignored. Electron IPC
+  routes cannot contain `..`. Session `since` query values are length-capped.
+
 ## 0.2.13 — 2026-08-27
 
 - Guardian treats only JSON/bool `True` as offline or auto-low-risk. A string
