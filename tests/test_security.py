@@ -126,6 +126,11 @@ class VortexSecurityTests(unittest.TestCase):
                 save_settings({"offline": "false"})
             with self.assertRaises(ValueError):
                 save_settings({"profile": True})
+            from backend.config import load_settings, settings_path
+            settings_path().write_text('{"offline":"false","developer_mode":"true","profile":"safe"}', encoding="utf-8")
+            loaded = load_settings()
+            self.assertIs(loaded["offline"], False)
+            self.assertIs(loaded["developer_mode"], False)
         finally:
             if previous is None:
                 os.environ.pop("XDG_CONFIG_HOME", None)

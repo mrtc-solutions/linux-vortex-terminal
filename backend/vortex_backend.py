@@ -2536,7 +2536,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 backup_path = self.store.backup(str(dest), self._flag(body, "overwrite"))
                 return self._json(201, {"backup": {"path": str(backup_path), "mode": oct(backup_path.stat().st_mode & 0o777)}})
             if path == "/api/artifacts/analyze":
-                artifact = analyze_path(body.get("path"), body.get("kind", "auto"), allowed_roots=[self.store.root])
+                path_value = self._text(body, "path")
+                if not path_value:
+                    raise ValueError("artifact path is required")
+                artifact = analyze_path(path_value, self._optional_str(body, "kind") or "auto", allowed_roots=[self.store.root])
                 self.store.save_artifact(artifact)
                 return self._json(201, {"artifact": artifact})
             if path == "/api/plan":
@@ -2545,19 +2548,26 @@ class VortexHandler(BaseHTTPRequestHandler):
                     raise ValueError("request must be a string")
                 plan = build_plan(self.store, request, self._optional_str(body, "cwd"), self._optional_str(body, "engagement_id"), self._flag(body, "offline")); return self._json(200, {"plan": plan})
             if path == "/api/execute":
-                plan = self.store.get_plan(str(body.get("plan_id", "")))
+                plan_id = self._optional_str(body, "plan_id")
+                if not plan_id:
+                    raise ValueError("plan_id is required")
+                plan = self.store.get_plan(plan_id)
                 if not plan: return self._json(404, {"error": {"code": "not_found", "message": "plan not found"}})
                 settings = _load("config").load_settings()
-                offline = bool(settings.get("offline")) or self._flag(body, "offline")
+                offline = settings.get("offline") is True or self._flag(body, "offline")
                 # HTTP never grants UID 0 override; only an explicit CLI --allow-root may.
                 op = self.executor.start(plan, self._flag(body, "confirm"), self._text(body, "approval_token"), False, offline); return self._json(202, {"operation": op})
             if path == "/api/engagements":
                 raw_targets = body.get("targets", [])
-                if not isinstance(raw_targets, list):
-                    raise ValueError("targets must be a list")
-                targets = [normalize_target(str(x)) for x in raw_targets]
+                if raw_targets is None:
+                    raw_targets = []
+                if not isinstance(raw_targets, list) or not all(isinstance(x, str) and x.strip() for x in raw_targets):
+                    raise ValueError("targets must be a list of non-empty strings")
+                targets = [normalize_target(x) for x in raw_targets]
                 if not targets or len(targets) > 100: raise PolicyError("provide between 1 and 100 canonical targets")
-                raw_classes = body.get("classes") or ["reconnaissance"]
+                raw_classes = body.get("classes")
+                if raw_classes is None:
+                    raw_classes = ["reconnaissance"]
                 if not isinstance(raw_classes, list) or not all(isinstance(x, str) and x for x in raw_classes):
                     raise ValueError("classes must be a list of non-empty strings")
                 expires = parse_expiry(body.get("expires_at"), default_seconds=24 * 3600)

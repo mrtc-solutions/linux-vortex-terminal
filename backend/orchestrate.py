@@ -39,7 +39,7 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         from backend.vortex_backend import build_plan
 
     settings = settings or {}
-    offline = bool(settings.get("offline"))
+    offline = settings.get("offline") is True
     conversation = workspace.get_conversation(conversation_id) if conversation_id else None
     if conversation_id and not conversation:
         raise ValueError("conversation not found")
@@ -185,7 +185,7 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                 from backend.security.guardian import evaluate
                 from backend.vortex_backend import build_plan
             settings = load_settings()
-            nxt = build_plan(store, objective["next_request"], plan.get("cwd"), plan.get("engagement_id"), offline=bool(settings.get("offline")))
+            nxt = build_plan(store, objective["next_request"], plan.get("cwd"), plan.get("engagement_id"), offline=settings.get("offline") is True)
             engagement = workspace.enrich_engagement(store.get_engagement(plan.get("engagement_id"))) if plan.get("engagement_id") else None
             guardian = evaluate(nxt, settings, engagement)
             if guardian.get("decision") == "auto" and nxt.get("status") == "planned" and nxt.get("kind") in {"identity", "clock", "os_release", "cpu", "filesystem_list", "processes", "network_interfaces"}:
@@ -193,7 +193,7 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                 if task.get("conversation_id"):
                     workspace.add_message(task["conversation_id"], "vortex", f"Objective not fully met. Starting a reviewed follow-up: {objective['next_request']}")
                 workspace.update_task(task_id, plan_id=nxt["id"], state="EXECUTING")
-                executor.start(nxt, True, nxt["approval_token"], False, bool(settings.get("offline")))
+                executor.start(nxt, True, nxt["approval_token"], False, settings.get("offline") is True)
         except Exception as exc:
             try:
                 workspace.store.append_audit("followup_failed", {"task_id": task_id, "error": str(exc)[:240]})

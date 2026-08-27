@@ -30,6 +30,19 @@ def settings_path() -> Path:
     return config_root() / "settings.json"
 
 
+def _typed_value(key: str, value: Any) -> Any:
+    expected = type(DEFAULTS[key])
+    if expected is bool:
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} must be a boolean")
+        return value
+    if expected is str:
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string")
+        return value[:200]
+    return value
+
+
 def load_settings() -> dict[str, Any]:
     path = settings_path()
     data = dict(DEFAULTS)
@@ -38,8 +51,13 @@ def load_settings() -> dict[str, Any]:
             loaded = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 for key, value in loaded.items():
-                    if key in DEFAULTS:
-                        data[key] = value
+                    if key not in DEFAULTS:
+                        continue
+                    try:
+                        data[key] = _typed_value(key, value)
+                    except ValueError:
+                        # Corrupt or pre-typed files keep the compiled default.
+                        continue
         except (OSError, ValueError):
             pass
     env_offline = os.environ.get("VORTEX_OFFLINE")
@@ -62,17 +80,7 @@ def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
     for key, value in updates.items():
         if key not in DEFAULTS:
             raise ValueError(f"unknown setting: {key}")
-        expected = type(DEFAULTS[key])
-        if expected is bool:
-            if not isinstance(value, bool):
-                raise ValueError(f"{key} must be a boolean")
-            current[key] = value
-        elif expected is str:
-            if not isinstance(value, str):
-                raise ValueError(f"{key} must be a string")
-            current[key] = value[:200]
-        else:
-            current[key] = value
+        current[key] = _typed_value(key, value)
     if current["privacy_mode"] not in {"local", "hybrid", "cloud"}:
         current["privacy_mode"] = "local"
     if current["profile"] not in {"safe", "standard", "expert"}:

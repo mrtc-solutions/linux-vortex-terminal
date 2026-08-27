@@ -239,6 +239,15 @@ class HttpApiTests(unittest.TestCase):
             else:
                 os.environ["XDG_CONFIG_HOME"] = previous
 
+    def test_http_rejects_coerced_plan_id_targets_and_artifact_path(self):
+        planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})
+        bad_plan = self._json("POST", "/api/execute", {"plan_id": 1, "confirm": True, "approval_token": planned["plan"]["approval_token"]}, expected=422)
+        self.assertEqual(bad_plan["error"]["code"], "invalid_plan")
+        bad_targets = self._json("POST", "/api/engagements", {"name": "lab", "authorization": "t", "targets": [1]}, expected=422)
+        self.assertEqual(bad_targets["error"]["code"], "invalid_plan")
+        bad_path = self._json("POST", "/api/artifacts/analyze", {"path": 1, "kind": "text"}, expected=422)
+        self.assertEqual(bad_path["error"]["code"], "invalid_plan")
+
     def test_complete_task_requires_bound_task(self):
         denied = self._json("POST", "/api/operations/missing/complete-task", {"task_id": "VTX-none"}, expected=404)
         self.assertEqual(denied["error"]["code"], "not_found")

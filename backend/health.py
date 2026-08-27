@@ -79,7 +79,7 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     }
     return {
         "product": "VORTEX",
-        "offline": bool(settings.get("offline")),
+        "offline": settings.get("offline") is True,
         "privacy_mode": settings.get("privacy_mode") or "local",
         "host": doctor,
         "components": components,
@@ -129,7 +129,7 @@ def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str
     blocking = [step for step in steps if step["required"] and not step["ok"]]
     return {
         "product": "VORTEX",
-        "first_run_complete": bool(settings.get("first_run_complete")),
+        "first_run_complete": settings.get("first_run_complete") is True,
         "ready": not blocking,
         "blocking": [step["id"] for step in blocking],
         "steps": steps,

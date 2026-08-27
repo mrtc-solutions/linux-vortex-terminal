@@ -40,7 +40,7 @@ def ollama_status(endpoint: str | None = None, offline: bool = False) -> dict[st
 
 def model_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = settings or {}
-    offline = bool(settings.get("offline"))
+    offline = settings.get("offline") is True
     privacy = settings.get("privacy_mode") or "local"
     local = ollama_status(settings.get("ollama_endpoint"), offline=offline)
     return {

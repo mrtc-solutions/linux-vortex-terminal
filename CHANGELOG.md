@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.8 — 2026-08-26
+
+- Settings files with string booleans (`"false"`) keep compiled defaults; they
+  cannot enable offline or first-run-complete.
+- HTTP `plan_id`, engagement `targets`, and artifact `path`/`kind` must be
+  strings. Numeric IDs are 422, not silently coerced.
+
 ## 0.2.7 — 2026-08-26
 
 - HTTP PTY input must be a string; cols/rows must be integers (booleans rejected).
