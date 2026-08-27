@@ -184,6 +184,10 @@ class VortexSecurityTests(unittest.TestCase):
             self.assertFalse(safe["auto_medium_risk"])
             self.assertFalse(safe["allow_root"])
             self.assertTrue(safe["ollama_endpoint"].startswith("http://127.0.0.1"))
+            prefixed = save_settings({"ollama_endpoint": "http://127.0.0.1.evil.example.test:11434"})
+            self.assertEqual(prefixed["ollama_endpoint"], "http://127.0.0.1:11434")
+            userinfo = save_settings({"ollama_endpoint": "http://127.0.0.1:11434@evil.example.test"})
+            self.assertEqual(userinfo["ollama_endpoint"], "http://127.0.0.1:11434")
             standard = save_settings({"profile": "standard"})
             self.assertTrue(standard["auto_low_risk"])
             with self.assertRaises(ValueError):

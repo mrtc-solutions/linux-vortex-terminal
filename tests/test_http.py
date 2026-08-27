@@ -250,6 +250,10 @@ class HttpApiTests(unittest.TestCase):
         bad_path = self._json("POST", "/api/artifacts/analyze", {"path": 1, "kind": "text"}, expected=422)
         self.assertEqual(bad_path["error"]["code"], "invalid_plan")
 
+    def test_http_rejects_oversized_request_text(self):
+        denied = self._json("POST", "/api/workspace/turn", {"request": "whoami " + ("x" * 8000), "cwd": self.tmp.name}, expected=422)
+        self.assertEqual(denied["error"]["code"], "invalid_plan")
+
     def test_http_rejects_oversized_query_strings(self):
         huge = "a" * 201
         denied = self._json("GET", f"/api/tools/route?q={huge}", expected=422)

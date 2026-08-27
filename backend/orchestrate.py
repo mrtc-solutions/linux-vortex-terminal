@@ -88,7 +88,7 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
         explanation = "Guardian authorized a low-risk local diagnostic under the current policy. Real execution started."
     elif confirm:
-        token = approval_token or (plan.get("approval_token") if settings.get("cli_yes") else None)
+        token = approval_token or (plan.get("approval_token") if settings.get("cli_yes") is True else None)
         if not token:
             workspace.update_task(task["id"], state="WAITING_FOR_APPROVAL")
             explanation = "A typed plan is ready. Guardian requires recorded approval before execution."

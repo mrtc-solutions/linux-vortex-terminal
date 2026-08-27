@@ -68,9 +68,12 @@ def load_settings() -> dict[str, Any]:
     data["auto_low_risk"] = data["profile"] in {"standard", "expert"}
     data["auto_medium_risk"] = False
     data["allow_root"] = False
-    endpoint = str(data.get("ollama_endpoint") or "")
-    if not (endpoint.startswith("http://127.0.0.1") or endpoint.startswith("http://localhost")):
-        data["ollama_endpoint"] = "http://127.0.0.1:11434"
+    try:
+        from models.router import DEFAULT_OLLAMA, loopback_http_endpoint
+    except ImportError:
+        from backend.models.router import DEFAULT_OLLAMA, loopback_http_endpoint
+    canonical_endpoint = loopback_http_endpoint(str(data.get("ollama_endpoint") or ""), default="")
+    data["ollama_endpoint"] = canonical_endpoint or DEFAULT_OLLAMA
     return data
 
 
@@ -89,9 +92,12 @@ def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
     current["auto_low_risk"] = current["profile"] in {"standard", "expert"}
     current["auto_medium_risk"] = False
     current["allow_root"] = False
-    endpoint = str(current.get("ollama_endpoint") or "")
-    if not (endpoint.startswith("http://127.0.0.1") or endpoint.startswith("http://localhost")):
-        current["ollama_endpoint"] = "http://127.0.0.1:11434"
+    try:
+        from models.router import DEFAULT_OLLAMA, loopback_http_endpoint
+    except ImportError:
+        from backend.models.router import DEFAULT_OLLAMA, loopback_http_endpoint
+    canonical_endpoint = loopback_http_endpoint(str(current.get("ollama_endpoint") or ""), default="")
+    current["ollama_endpoint"] = canonical_endpoint or DEFAULT_OLLAMA
     path = settings_path()
     path.write_text(canonical(current), encoding="utf-8")
     try:

@@ -1289,6 +1289,8 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     request = (request or "").strip()
     if not request:
         raise ValueError("request is required")
+    if len(request) > 8000:
+        raise ValueError("request is too long")
     cwd = validate_cwd(cwd_raw)
     lower = request.lower()
     specs: list[dict[str, Any]] = []
@@ -2721,6 +2723,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                 request = body.get("request")
                 if not isinstance(request, str) or not request.strip():
                     raise ValueError("request must be a string")
+                if len(request) > 8000:
+                    raise ValueError("request is too long")
                 settings = load_settings()
                 if self._flag(body, "offline"):
                     settings["offline"] = True

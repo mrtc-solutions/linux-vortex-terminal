@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.15 — 2026-08-27
+
+- Ollama endpoints must be an exact loopback host (`127.0.0.1`, `localhost`,
+  `::1`). Prefix matches such as `http://127.0.0.1.evil.test` and userinfo
+  `http://127.0.0.1@host` are rejected.
+- HTTP/planner requests longer than 8000 characters are 422. CLI `--yes` only
+  supplies a plan token when `cli_yes` is JSON/bool true.
+
 ## 0.2.14 — 2026-08-27
 
 - HTTP artifact analyze checks allowed roots before reading bytes, so `/etc`

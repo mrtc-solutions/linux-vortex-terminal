@@ -4,21 +4,49 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def loopback_http_endpoint(raw: str | None, default: str = DEFAULT_OLLAMA) -> str:
+    """Accept only http://{127.0.0.1|localhost|::1}[:port] with no userinfo or extra path."""
+    value = (raw or "").strip()
+    if not value:
+        return default
+    try:
+        parsed = urllib.parse.urlparse(value)
+        host = (parsed.hostname or "").lower()
+        port = parsed.port or 11434
+    except ValueError:
+        return default
+    if (
+        parsed.scheme != "http"
+        or host not in LOOPBACK_HOSTS
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or port < 1
+        or port > 65535
+    ):
+        return default
+    netloc = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    return f"http://{netloc}"
 
 
 def _endpoint(raw: str | None) -> str:
-    value = (raw or os.environ.get("VORTEX_OLLAMA_ENDPOINT") or DEFAULT_OLLAMA).strip().rstrip("/")
-    if not value.startswith("http://127.0.0.1") and not value.startswith("http://localhost"):
-        return ""
-    return value
+    value = raw or os.environ.get("VORTEX_OLLAMA_ENDPOINT") or DEFAULT_OLLAMA
+    allowed = loopback_http_endpoint(value, default="")
+    return allowed
 
 
 def ollama_status(endpoint: str | None = None, offline: bool = False) -> dict[str, Any]:
-    if offline:
+    if offline is True:
         return {"provider": "ollama", "state": "disabled", "reason": "offline mode", "models": [], "endpoint": None}
     url = _endpoint(endpoint)
     if not url:
