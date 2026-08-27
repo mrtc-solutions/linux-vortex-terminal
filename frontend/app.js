@@ -12,7 +12,7 @@ const api = async (path, options = {}) => {
   return payload;
 };
 function toast(message, bad = false) { const el = $('toast'); el.textContent = message; el.style.borderColor = bad ? 'var(--red)' : 'var(--cyan)'; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 4200); }
-function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions(); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); }
+function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); }
 function statusClass(status) { return ['succeeded','success'].includes(status) ? 'badge-green' : ['failed','timed_out','interrupted'].includes(status) ? 'badge-red' : status === 'planned' || status === 'awaiting_confirmation' ? 'badge-amber' : 'badge-muted'; }
 function statusLabel(status) { return ({succeeded:'VERIFIED OK',failed:'FAILED',timed_out:'TIMED OUT',interrupted:'INTERRUPTED',unavailable:'TOOL MISSING',running:'RUNNING',started:'STARTED',planned:'CONFIRM REQUIRED',awaiting_confirmation:'PREFLIGHT COMPLETE',clarified:'PLAN ONLY',rejected:'BLOCKED',unknown_after_crash:'UNKNOWN AFTER CRASH'}[status] || String(status || 'STANDBY').toUpperCase()); }
 async function loadDoctor() { try { const data = await api('/api/doctor'); state.doctor = data.doctor; renderDoctor(); } catch (e) { $('side-context').textContent = 'backend offline'; toast(e.message, true); } }
@@ -137,6 +137,48 @@ async function createEngagement() {
 }
 async function verifyAudit() { try { const data = await api('/api/audit/verify'); const el = $('audit-result'); el.className = `audit-strip ${data.audit.valid ? 'valid':'invalid'}`; el.innerHTML = `<span class="status-dot"></span> ${data.audit.valid ? `AUDIT CHAIN VERIFIED · ${data.audit.checked} event(s)` : `AUDIT CHAIN INVALID · ${esc(data.audit.error)}`}`; } catch(e) { toast(e.message,true); } }
 function setupMatrix() { const canvas = $('matrix'), ctx = canvas.getContext('2d'); let columns = [], frame = 0; function resize(){canvas.width=innerWidth;canvas.height=innerHeight;columns=Array(Math.ceil(canvas.width/17)).fill(0).map(()=>Math.random()*-40)} function tick(){ if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; } if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 4 : 2)) !== 0) return; ctx.fillStyle='rgba(10,10,12,.09)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.font='12px monospace';ctx.fillStyle='rgba(0,212,170,.54)';columns.forEach((y,i)=>{ctx.fillText(Math.random()>.5?'1':'0',i*17,y*17);if(y*17>canvas.height && Math.random()>.975)columns[i]=0;columns[i]++});} resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
+function terminalMetrics() {
+  const host = $('terminal-panes');
+  const width = (host && host.clientWidth) || Math.max(640, innerWidth - 280);
+  const height = (host && Math.max(host.clientHeight, 370)) || 420;
+  const cols = Math.max(40, Math.min(220, Math.floor((width - 36) / 8.2)));
+  const rows = Math.max(12, Math.min(60, Math.floor((height - 16) / 21)));
+  return { cols, rows };
+}
+function focusPtySurface() {
+  const pane = sessionOutput(state.activeSessionId) || document.querySelector('#terminal-panes [data-session-output]:not([hidden])') || $('terminal-output');
+  if (pane) pane.focus({ preventScroll: true });
+}
+function ptyKey(e) {
+  if (e.metaKey) return;
+  if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c' || e.key === 'V' || e.key === 'v')) return;
+  if (e.ctrlKey && !e.altKey && e.key.length === 1) {
+    e.preventDefault();
+    writeSession(String.fromCharCode(e.key.toLowerCase().charCodeAt(0) - 96), true);
+    return;
+  }
+  const keys = { Enter: '\n', Backspace: '\x7f', Tab: '\t', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D', Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~', Escape: '\x1b', PageUp: '\x1b[5~', PageDown: '\x1b[6~' };
+  if (keys[e.key]) { e.preventDefault(); writeSession(keys[e.key], true); }
+  else if (e.key.length === 1 && !e.altKey) { e.preventDefault(); writeSession(e.key, true); }
+}
+function bindPtySurface(element) {
+  if (!element || element._ptyBound) return;
+  element._ptyBound = true;
+  element.tabIndex = 0;
+  element.setAttribute('role', 'application');
+  element.setAttribute('aria-label', 'VORTEX Linux PTY');
+  element.addEventListener('click', () => {
+    const session = activeSession();
+    if (!session || session.status !== 'running') openSession();
+    else element.focus({ preventScroll: true });
+  });
+  element.addEventListener('keydown', ptyKey);
+  element.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = ((e.clipboardData || window.clipboardData).getData('text') || '').replace(/\x00/g, '').slice(0, 65536);
+    if (text) writeSession(text, true);
+  });
+}
 function activeSession() { return state.sessions.find(session => session.id === state.activeSessionId) || null; }
 function sessionOutput(sessionId) { return Array.from(document.querySelectorAll('[data-session-output]')).find(element => element.dataset.sessionOutput === sessionId) || null; }
 function appendAnsi(element, data) {
@@ -152,8 +194,9 @@ function ensureSessionPane(sessionId) {
   if (old && !old.dataset.sessionOutput && old.parentElement === host) host.innerHTML = '';
   output = document.createElement('pre');
   output.className = 'terminal-body'; output.dataset.sessionOutput = sessionId;
-  output.setAttribute('role', 'log'); output.setAttribute('aria-live', 'polite');
-  output.textContent = `[PTY ${sessionId.slice(0, 8)}] attaching…\n`;
+  output.setAttribute('role', 'application'); output.setAttribute('aria-live', 'polite');
+  output.textContent = `[PTY ${sessionId.slice(0, 8)}] attaching to this host…\n`;
+  bindPtySurface(output);
   host.appendChild(output);
   return output;
 }
@@ -180,8 +223,8 @@ function renderSessionState() {
   $('open-session').hidden = running;
   $('kill-session').hidden = !running;
   $('terminal-input').disabled = !running;
-  $('terminal-input').placeholder = running ? 'Type into the active local PTY…' : 'Open a shell to type into the real PTY…';
-  $('terminal-hint').textContent = running ? 'ENTER TO SEND · CTRL-C INTERRUPTS' : 'OPEN SESSION FIRST';
+  $('terminal-input').placeholder = running ? 'Or type here — keys also go to the PTY surface' : 'Click the black pane or OPEN LOCAL SHELL';
+  $('terminal-hint').textContent = running ? 'CLICK PANE · TYPE · PASTE · CTRL-C' : 'OPEN A REAL LINUX PTY';
   $('terminal-cwd').textContent = session?.cwd || state.doctor?.cwd || '—';
 }
 function selectSession(sessionId) {
@@ -190,6 +233,7 @@ function selectSession(sessionId) {
   if (!state.paneIds.includes(sessionId)) { if (state.paneIds.length >= 2) state.paneIds.shift(); state.paneIds.push(sessionId); }
   renderSessionTabs(); renderSessionPanes(); renderSessionState();
   if (activeSession()?.status === 'running') pollSessions();
+  focusPtySurface();
 }
 async function loadSessions() {
   try {
@@ -250,11 +294,12 @@ async function pollSessions() {
 async function openSession() {
   $('open-session').disabled = true;
   try {
-    const data = await api('/api/sessions', {method:'POST', body:{name:`local shell ${state.sessions.length + 1}`, cwd:state.doctor?.cwd || undefined, cols:100, rows:30}});
+    const size = terminalMetrics();
+    const data = await api('/api/sessions', {method:'POST', body:{name:`linux pty ${state.sessions.length + 1}`, cwd:state.doctor?.cwd || undefined, cols:size.cols, rows:size.rows}});
     state.sessions.push(data.session); state.activeSessionId = data.session.id; state.session = data.session; state.sessionSeqs[data.session.id] = 0;
     if (state.paneIds.length >= 2) state.paneIds.shift(); state.paneIds.push(data.session.id);
-    renderSessionTabs(); renderSessionPanes(); renderSessionState(); pollSessions(); $('terminal-input').focus();
-    toast('Real local PTY opened. Input stays inside the Python sidecar.');
+    renderSessionTabs(); renderSessionPanes(); renderSessionState(); pollSessions(); focusPtySurface();
+    toast('Real Linux PTY opened on this host. Type in the black pane.');
   } catch (e) { toast(e.message, true); }
   finally { $('open-session').disabled = false; renderSessionState(); }
 }
@@ -267,9 +312,12 @@ async function splitSession() {
   }
   toast('Split view already has two panes.');
 }
-async function writeSession(data) {
+async function writeSession(data, quiet = false) {
   const session = activeSession();
-  if (!session || session.status !== 'running') return toast('Open a local PTY session first.', true);
+  if (!session || session.status !== 'running') {
+    if (!quiet) toast('Open a local PTY session first.', true);
+    return;
+  }
   try { await api(`/api/sessions/${encodeURIComponent(session.id)}/input`, {method:'POST', body:{data}}); }
   catch (e) { toast(e.message, true); }
 }
@@ -286,5 +334,5 @@ async function resizeSession() {
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
-function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown',e=>{if(e.ctrlKey && !e.altKey && e.key.length===1){e.preventDefault();writeSession(String.fromCharCode(e.key.toLowerCase().charCodeAt(0)-96));return;} const keys={Enter:'\n',Backspace:'\x7f',Tab:'\t',ArrowUp:'\x1b[A',ArrowDown:'\x1b[B',ArrowRight:'\x1b[C',ArrowLeft:'\x1b[D',Home:'\x1b[H',End:'\x1b[F',Delete:'\x1b[3~'}; if(keys[e.key]){e.preventDefault();writeSession(keys[e.key]);} else if(e.key.length===1 && !e.metaKey && !e.altKey){e.preventDefault();writeSession(e.key);} }); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);

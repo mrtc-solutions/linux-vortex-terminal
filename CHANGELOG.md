@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.16 — 2026-08-27
+
+- The Terminal view is a real Linux PTY surface: click the pane, type, paste.
+  Keys go to the host shell via the sidecar. Cursor cell is marked in the
+  renderer. Root-required plans show `sudo vortex --allow-root run <plan-id>`.
+
 ## 0.2.15 — 2026-08-27
 
 - Ollama endpoints must be an exact loopback host (`127.0.0.1`, `localhost`,
