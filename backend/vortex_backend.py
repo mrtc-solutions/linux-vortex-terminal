@@ -2229,6 +2229,13 @@ class VortexHandler(BaseHTTPRequestHandler):
         return value
 
     @staticmethod
+    def _report_format(query: dict[str, list[str]], default: str = "json") -> str:
+        fmt = (query.get("format") or [default])[0]
+        if not isinstance(fmt, str) or fmt.lower() not in {"md", "html", "json", "pdf"}:
+            raise ValueError("report format must be md, html, json, or pdf")
+        return fmt.lower()
+
+    @staticmethod
     def _bounded_int(body: dict[str, Any], key: str, default: int, lo: int, hi: int) -> int:
         value = body.get(key, default)
         if value is None:
@@ -2324,7 +2331,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 render_system = _load("reports.engine").render_system
                 from tools.registry import inventory
                 query = urllib.parse.parse_qs(parsed.query)
-                fmt = (query.get("format") or ["json"])[0]
+                fmt = self._report_format(query, "json")
                 data, content_type, ext = render_system(fmt, detect_context(), inventory())
                 self.send_response(200)
                 self._headers(content_type)
@@ -2384,7 +2391,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/reports/") and path.endswith("/download"):
                 report_id = path.split("/")[-2]
                 query = urllib.parse.parse_qs(parsed.query)
-                fmt = (query.get("format") or ["md"])[0]
+                fmt = self._report_format(query, "md")
                 report = self.workspace.get_report(report_id)
                 if not report:
                     return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
@@ -2490,6 +2497,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                         return False
                 if any(is_under(asset, root) for root in allowed) and asset.is_file(): return self._static(asset, mime)
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
+        except (ValueError, PolicyError) as exc:
+            return self._json(422, {"error": {"code": "invalid_plan", "message": redact(str(exc)), "exit_code": EXIT_CODES["policy_denied"]}})
         except (sqlite3.IntegrityError, sqlite3.DatabaseError) as exc:
             return self._json(409, {"error": {"code": "persistence_integrity", "message": redact(str(exc)), "exit_code": EXIT_CODES["integrity_failure"]}})
         except Exception as exc:

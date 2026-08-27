@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.9 — 2026-08-26
+
+- SEND fallback in `app.js` uses `/api/workspace/turn` (Guardian + council), not
+  `/api/plan`. Workspace still overwrites `window.makePlan` when it loads.
+- Report download formats are md/html/json/pdf only. Unknown GET formats are
+  422 instead of 500.
+
 ## 0.2.8 — 2026-08-26
 
 - Settings files with string booleans (`"false"`) keep compiled defaults; they

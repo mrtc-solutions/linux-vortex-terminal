@@ -248,6 +248,13 @@ class HttpApiTests(unittest.TestCase):
         bad_path = self._json("POST", "/api/artifacts/analyze", {"path": 1, "kind": "text"}, expected=422)
         self.assertEqual(bad_path["error"]["code"], "invalid_plan")
 
+    def test_http_rejects_unknown_report_format(self):
+        denied = self._json("GET", "/api/reports/system?format=exe", expected=422)
+        self.assertEqual(denied["error"]["code"], "invalid_plan")
+        ok = self._json("GET", "/api/reports/system?format=json")
+        self.assertEqual(ok["product"], "VORTEX")
+        self.assertEqual(ok["kind"], "system")
+
     def test_complete_task_requires_bound_task(self):
         denied = self._json("POST", "/api/operations/missing/complete-task", {"task_id": "VTX-none"}, expected=404)
         self.assertEqual(denied["error"]["code"], "not_found")
