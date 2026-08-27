@@ -14,8 +14,9 @@ from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
 from backend.vortex_backend import sanitize_pty
 from backend.facts import parse_apt_preflight, parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_show
 from backend.network import resolve_target, resolve_targets, resolution_digest
+from backend import vortex_backend as vtx_backend  # noqa: E402
 from backend.vortex_backend import (
-    ExecutionManager, PolicyError, SessionManager, Store, build_plan, build_undo_plan, command_spec,
+    ExecutionManager, PolicyError, SessionManager, Store, build_plan, build_undo_plan, clear_probe_caches, command_spec,
     apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, parse_systemd_mutation, probe_executable, plan_digest, sanitize_pty, systemd_user_bus_state, target_in_engagement,
 )
 
@@ -52,6 +53,20 @@ class VortexCoreTests(unittest.TestCase):
         self.assertIsNone(inventory_probe["version"])
         run.assert_not_called()
         self.assertEqual(inventory_probe["sha256"], observed["sha256"])
+
+    def test_probe_lookup_is_briefly_shared_but_can_be_cleared(self):
+        clear_probe_caches()
+        name = f"vortex-absent-{id(self)}"
+        with patch.object(vtx_backend, "_resolve_executable_lookup", wraps=vtx_backend._resolve_executable_lookup) as resolver:
+            first = probe_executable(name, include_version=False)
+            second = probe_executable(name, include_version=False)
+            self.assertEqual(first["state"], "absent")
+            self.assertEqual(second["state"], "absent")
+            self.assertEqual(resolver.call_count, 1)
+        clear_probe_caches()
+        with patch.object(vtx_backend, "_resolve_executable_lookup", wraps=vtx_backend._resolve_executable_lookup) as resolver:
+            probe_executable(name, include_version=False)
+            self.assertEqual(resolver.call_count, 1)
 
     def test_container_detection_never_fabricates_runtime_state(self):
         plan = build_plan(self.store, 'inspect docker containers', self.tmp.name)
@@ -125,6 +140,90 @@ class VortexCoreTests(unittest.TestCase):
         plan = build_plan(self.store, "nmap evil.example.test", self.tmp.name, "eng-test")
         self.assertEqual(plan["status"], "rejected")
         self.assertEqual(plan["commands"], [])
+
+    def test_scanner_proposal_without_adapter_id_is_safe(self):
+        engagement = {
+            "id": "eng-scanner", "created_at": "2026-08-25T00:00:00+00:00",
+            "expires_at": "2099-08-25T00:00:00+00:00", "name": "lab",
+            "authorization": "ticket-scanner", "targets": ["lab.example.test"],
+            "classes": ["reconnaissance"], "status": "active",
+        }
+        self.store.create_engagement(engagement)
+        scanner_module = type("Scanners", (), {
+            "build_scan": lambda self, tool, targets, request: {"ok": True, "argv": ["nuclei", "-u", targets[0]], "explanation": "incomplete"}
+        })()
+        scope_module = type("Scope", (), {"excluded": lambda self, target, item: False})()
+        original_load = vtx_backend._load
+        def fake_load(name):
+            if name == "security.scanners":
+                return scanner_module
+            if name == "security.scope":
+                return scope_module
+            return original_load(name)
+        with patch.object(vtx_backend, "_load", side_effect=fake_load), \
+             patch.object(vtx_backend, "probe_executable", return_value={"state": "installed", "path": "/usr/bin/nuclei", "version": None}), \
+             patch.object(vtx_backend, "resolve_targets", return_value={"state": "observed", "targets": [{"target": "lab.example.test"}]}):
+            plan = build_plan(self.store, "nuclei lab.example.test", self.tmp.name, "eng-scanner")
+        self.assertEqual(plan["status"], "unavailable")
+        self.assertEqual(plan["commands"], [])
+        self.assertTrue(any("incomplete proposal" in note for note in plan["notes"]))
+
+    def test_refresh_flag_distinguishes_cached_and_fresh_probes(self):
+        clear_probe_caches()
+        calls = {"tools": 0, "doctor": 0, "deps": 0}
+        def fresh_tools():
+            calls["tools"] += 1
+            return [{"state": f"p{calls['tools']}"}]
+        def fresh_doctor():
+            calls["doctor"] += 1
+            return {"cwd": f"/host-{calls['doctor']}"}
+        def fresh_deps():
+            calls["deps"] += 1
+            return {"items": [{"id": str(calls['deps'])}]}
+
+        cache = vtx_backend._TOOLS_CACHE
+        cache.get("catalog", fresh_tools)
+        cache.get("catalog", fresh_tools)
+        cache.invalidate("catalog")
+        cache.get("catalog", fresh_tools)
+        self.assertEqual(calls["tools"], 2)
+
+        doctor = vtx_backend._DOCTOR_CACHE
+        doctor.get("context", fresh_doctor)
+        doctor.get("context", fresh_doctor)
+        doctor.invalidate("context")
+        doctor.get("context", fresh_doctor)
+        self.assertEqual(calls["doctor"], 2)
+
+        deps = vtx_backend._DEPENDENCIES_CACHE
+        deps.get("inventory", fresh_deps)
+        deps.get("inventory", fresh_deps)
+        deps.invalidate("inventory")
+        deps.get("inventory", fresh_deps)
+        self.assertEqual(calls["deps"], 2)
+        clear_probe_caches()
+
+    def test_refresh_invalidates_deep_executable_lookup_cache(self):
+        clear_probe_caches()
+        name = f"vortex-fresh-{id(self)}"
+        probe_executable(name, include_version=False)
+        self.assertTrue(vtx_backend._EXECUTABLE_LOOKUP_CACHE._data)
+        with patch.object(vtx_backend, "_resolve_executable_lookup", wraps=vtx_backend._resolve_executable_lookup) as resolver:
+            probe_executable(name, include_version=False)
+            self.assertEqual(resolver.call_count, 0)
+        vtx_backend._invalidate_probe_lookups()
+        with patch.object(vtx_backend, "_resolve_executable_lookup", wraps=vtx_backend._resolve_executable_lookup) as resolver:
+            probe_executable(name, include_version=False)
+            self.assertEqual(resolver.call_count, 1)
+        clear_probe_caches()
+
+    def test_install_requests_route_to_package_plan_not_container_inspection(self):
+        plan = build_plan(self.store, "install podman", self.tmp.name)
+        self.assertEqual(plan["kind"], "package_operation")
+        self.assertEqual(plan["request"], "install podman")
+        self.assertNotEqual(plan["kind"], "container_inspection")
+        self.assertTrue(all(command["adapter_id"] == "linux.packages.apt" for command in plan["commands"]))
+        self.assertNotIn("docker", plan["commands"][0]["required_tool"])
 
     def test_audit_chain_detects_tamper(self):
         self.store.append_audit("test", {"value": "original"})
@@ -429,8 +528,10 @@ The following packages will be upgraded:
             self.assertEqual(plan['commands'][1]['privilege'], 'root-required')
         else:
             self.assertEqual(plan['commands'], [])
-        with self.assertRaises(Exception):
-            build_plan(self.store, 'restart ../../evil; echo unsafe', self.tmp.name)
+        unsafe = build_plan(self.store, 'restart ../../evil; echo unsafe', self.tmp.name)
+        self.assertEqual(unsafe['kind'], 'unsupported_shell_syntax')
+        self.assertEqual(unsafe['status'], 'rejected')
+        self.assertEqual(unsafe['commands'], [])
 
     def test_nmap_artifact_parser_reports_only_observed_ports(self):
         data = b'''<?xml version="1.0"?><nmaprun scanner="nmap" args="nmap -sV lab.example.test"><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="lab.example.test"/></hostnames><ports><port protocol="tcp" portid="443"><state state="open"/><service name="https" product="Example" version="1.2"/></port></ports></host></nmaprun>'''

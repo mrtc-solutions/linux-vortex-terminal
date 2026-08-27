@@ -8,7 +8,7 @@ from unittest.mock import patch
 from backend.agents.council import critic, discover, consult
 from backend.reports.engine import render, to_pdf
 from backend.security.guardian import evaluate, recompute_risk
-from backend.vortex_backend import ExecutionManager, Store, build_plan, command_spec, plan_digest
+from backend.vortex_backend import ExecutionManager, Store, build_plan, cancel_task_operation, command_spec, plan_digest, safe_file_target
 from backend.workspace import Workspace
 
 ALLOW_ROOT = os.geteuid() == 0
@@ -20,6 +20,43 @@ class WorkspaceTests(unittest.TestCase):
         os.environ["VORTEX_DATA_DIR"] = self.tmp.name
         self.store = Store(Path(self.tmp.name) / "vortex.db")
         self.workspace = Workspace(self.store)
+        self.cwd = str(Path(self.tmp.name))
+
+    def test_pass7_shell_syntax_is_rejected_but_plain_reads_route(self):
+        for request in (
+            "cat /etc/passwd | grep root",
+            "echo hi > /tmp/x",
+            "ls && whoami",
+            "ls; cat /etc/passwd",
+            "echo `id`",
+            "echo $(id)",
+        ):
+            plan = build_plan(self.store, request, self.cwd)
+            self.assertEqual(plan["kind"], "unsupported_shell_syntax", request)
+            self.assertEqual(plan["status"], "rejected", request)
+            self.assertEqual(plan["commands"], [], request)
+        plain = build_plan(self.store, "cat /etc/passwd", self.cwd)
+        self.assertEqual(plain["kind"], "filesystem_read")
+        self.assertNotEqual(plain["status"], "rejected")
+
+    def test_pass7_process_kill_forms_are_honest_rejections(self):
+        for request in ("kill -9 1", "kill 12345", "pkill nginx", "killall nginx",
+                        "kill process nginx", "stop process web"):
+            plan = build_plan(self.store, request, self.cwd)
+            self.assertEqual(plan["kind"], "unsupported_system_mutation", request)
+            self.assertEqual(plan["status"], "rejected", request)
+            self.assertEqual(plan["commands"], [], request)
+            self.assertEqual(plan["risk"], "high", request)
+
+    def test_pass7_bare_ss_routes_to_read_only_socket_plan(self):
+        for request in ("ss -lntup", "ss -tulpn", "ss", "show sockets", "show listening ports"):
+            plan = build_plan(self.store, request, self.cwd)
+            self.assertIn(plan["kind"], ("plan", "authorized_engagement"), request)
+            self.assertNotEqual(plan["status"], "rejected", request)
+            if plan["status"] == "planned":
+                self.assertEqual(plan["commands"][0]["executable"], "ss")
+                self.assertTrue(plan["commands"][0]["privilege"] in ("user", "unknown"))
+                self.assertLessEqual(plan["risk"], "low")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -63,6 +100,57 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(nets["kind"], "network_interfaces")
         if nets["status"] == "planned":
             self.assertEqual(nets["commands"][0]["argv"][:3], ["ip", "-br", "addr"])
+
+    def test_natural_language_service_and_user_routing(self):
+        user = build_plan(self.store, "what is my username", self.tmp.name)
+        self.assertEqual(user["kind"], "identity")
+        self.assertIn(user["status"], ("planned", "unavailable"))
+        service = build_plan(self.store, "show service nginx status", self.tmp.name)
+        self.assertEqual(service["kind"], "plan")
+        if service["status"] == "planned":
+            self.assertEqual(service["commands"][0]["adapter_id"], "linux.systemd.inspect")
+            self.assertIn("nginx.service", service["commands"][0]["argv"])
+        running = build_plan(self.store, "check if nginx is running", self.tmp.name)
+        self.assertEqual(running["kind"], "plan")
+        mutation = build_plan(self.store, "restart service nginx", self.tmp.name)
+        self.assertEqual(mutation["kind"], "systemd_mutation")
+        if mutation["status"] == "planned":
+            self.assertIn("nginx.service", mutation["commands"][-1]["argv"])
+            self.assertIn("restart", mutation["commands"][-1]["argv"])
+
+    def test_service_status_and_unit_listing_routing(self):
+        service = build_plan(self.store, "is docker service active", self.tmp.name)
+        self.assertEqual(service["kind"], "plan")
+        if service["status"] == "planned":
+            self.assertEqual(service["commands"][0]["adapter_id"], "linux.systemd.inspect")
+            self.assertIn("docker.service", service["commands"][0]["argv"])
+        units = build_plan(self.store, "list systemd units", self.tmp.name)
+        self.assertEqual(units["kind"], "plan")
+        if units["status"] == "planned":
+            self.assertEqual(units["commands"][0]["adapter_id"], "linux.systemd.inspect")
+            self.assertEqual(units["commands"][0]["argv"], ["systemctl", "list-units", "--type=service", "--all", "--no-pager"])
+        log = build_plan(self.store, "show log for nginx", self.tmp.name)
+        self.assertEqual(log["kind"], "plan")
+        if log["status"] == "planned":
+            self.assertEqual(log["commands"][0]["adapter_id"], "linux.systemd.inspect")
+            self.assertIn("nginx.service", log["commands"][0]["argv"])
+        containers = build_plan(self.store, "docker ps", self.tmp.name)
+        self.assertEqual(containers["kind"], "container_inspection")
+
+    def test_ping_requires_engagement_and_plans_bounded_command(self):
+        bare = build_plan(self.store, "ping google.com", self.tmp.name)
+        self.assertEqual(bare["kind"], "authorized_engagement")
+        self.assertEqual(bare["status"], "clarified")
+        self.store.create_engagement({
+            "id": "ping-eng", "created_at": "2026-08-25T00:00:00+00:00",
+            "expires_at": "2099-08-25T00:00:00+00:00", "name": "ping lab",
+            "authorization": "ticket", "targets": ["google.com"],
+            "classes": ["reconnaissance"], "status": "active",
+        })
+        planned = build_plan(self.store, "ping google.com", self.tmp.name, "ping-eng")
+        self.assertEqual(planned["status"], "planned")
+        self.assertEqual(planned["commands"][0]["adapter_id"], "linux.network.ping")
+        self.assertEqual(planned["commands"][0]["argv"], ["ping", "-c", "2", "-W", "2", "google.com"])
 
     def test_executor_finishes_linked_task(self):
         from backend.orchestrate import run_turn
@@ -343,6 +431,22 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(rejected["rejected"])
         self.assertEqual(rejected["task"]["state"], "CANCELLED")
 
+    def test_task_lifecycle_cancels_live_operation_before_reuse(self):
+        calls = []
+        class FakeExecutor:
+            def cancel(self, operation_id):
+                calls.append(operation_id)
+                return True
+        task = {"id": "t1", "operation_id": "op-1"}
+        self.assertTrue(cancel_task_operation(FakeExecutor(), task))
+        self.assertEqual(calls, ["op-1"])
+        self.assertFalse(cancel_task_operation(FakeExecutor(), {"id": "t2"}))
+        self.assertEqual(calls, ["op-1"])
+        class BrokenExecutor:
+            def cancel(self, _operation_id):
+                raise RuntimeError("already gone")
+        self.assertFalse(cancel_task_operation(BrokenExecutor(), task))
+
     def test_reject_plan_and_secret_slots(self):
         from backend.secretstore import put, status
         from backend.tools.router import route
@@ -395,6 +499,101 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(plan["status"], "planned")
         self.assertTrue(plan["commands"])
         self.assertEqual(plan["commands"][0]["adapter_id"], "linux.system.identity")
+
+    def test_reviewed_read_only_adapters_route_instead_of_abstain(self):
+        packages = build_plan(self.store, "list installed packages", self.tmp.name)
+        self.assertEqual(packages["kind"], "plan")
+        if packages["status"] == "planned":
+            self.assertEqual(packages["commands"][0]["adapter_id"], "linux.system.packages")
+        hosts = build_plan(self.store, "show file /etc/hosts", self.tmp.name)
+        self.assertEqual(hosts["kind"], "filesystem_read")
+        if hosts["status"] == "planned":
+            self.assertEqual(hosts["commands"][0]["adapter_id"], "linux.filesystem.read")
+            self.assertIn("/etc/hosts", hosts["commands"][0]["argv"])
+        tree = build_plan(self.store, "show process tree", self.tmp.name)
+        self.assertEqual(tree["kind"], "processes")
+        self.assertEqual(tree["commands"][0]["argv"], ["ps", "-ef", "--forest"])
+        storage = build_plan(self.store, "show block devices", self.tmp.name)
+        self.assertEqual(storage["kind"], "plan")
+        if storage["status"] == "planned":
+            self.assertEqual(storage["commands"][0]["adapter_id"], "linux.system.storage")
+        routes = build_plan(self.store, "show route table", self.tmp.name)
+        self.assertEqual(routes["kind"], "plan")
+        if routes["status"] == "planned":
+            self.assertEqual(routes["commands"][0]["argv"], ["ip", "route", "show"])
+        self.assertIsNone(safe_file_target("/etc/shadow"))
+        fw = evaluate({
+            "commands": [{"adapter_id": "linux.network.firewall", "risk": "low", "privilege": "user", "network_class": "no-network", "display": "nft list ruleset", "source": "deterministic"}],
+        }, {"auto_low_risk": True})
+        self.assertFalse(fw["blocked"])
+
+    def test_pass6_deterministic_routing_and_honest_rejections(self):
+        # Previously these phrases abstained or routed to the wrong adapter.
+        services = build_plan(self.store, "show running services", self.tmp.name)
+        self.assertEqual(services["kind"], "plan")
+        if services["status"] == "planned":
+            self.assertEqual(services["commands"][0]["adapter_id"], "linux.systemd.inspect")
+        disk = build_plan(self.store, "df -h", self.tmp.name)
+        self.assertEqual(disk["kind"], "plan")
+        if disk["status"] == "planned":
+            self.assertEqual(disk["commands"][0]["adapter_id"], "linux.filesystem.usage")
+            self.assertIn("df", disk["commands"][0]["executable"])
+        reachable = build_plan(self.store, "is target.test up", self.tmp.name)
+        self.assertEqual(reachable["kind"], "authorized_engagement")
+        self.assertNotEqual(reachable["kind"], "plan")
+        container = build_plan(self.store, "remove container web", self.tmp.name)
+        self.assertEqual(container["kind"], "container_mutation")
+        self.assertEqual(container["status"], "clarified")
+        mutation = build_plan(self.store, "block port 22", self.tmp.name)
+        self.assertEqual(mutation["kind"], "unsupported_system_mutation")
+        self.assertEqual(mutation["status"], "rejected")
+        self.assertEqual(mutation["commands"], [])
+        journal = build_plan(self.store, "show syslog", self.tmp.name)
+        self.assertEqual(journal["kind"], "plan")
+        if journal["status"] == "planned":
+            self.assertEqual(journal["commands"][0]["adapter_id"], "linux.systemd.journal")
+        remotes = build_plan(self.store, "show git remotes", self.tmp.name)
+        self.assertEqual(remotes["kind"], "plan")
+        if remotes["status"] == "planned":
+            self.assertIn("git", remotes["commands"][0]["argv"])
+        route = build_plan(self.store, "show route", self.tmp.name)
+        if route["status"] == "planned":
+            self.assertIn("route", route["commands"][0]["argv"])
+        mounts = build_plan(self.store, "show mounts", self.tmp.name)
+        self.assertEqual(mounts["kind"], "plan")
+        if mounts["status"] == "planned":
+            self.assertIn("findmnt", mounts["commands"][0]["executable"])
+        kernel = build_plan(self.store, "show kernel modules", self.tmp.name)
+        self.assertEqual(kernel["kind"], "plan")
+        self.assertNotEqual(kernel["kind"], "os_release")
+        pci = build_plan(self.store, "show pci devices", self.tmp.name)
+        self.assertEqual(pci["kind"], "plan")
+        self.assertNotEqual(pci["kind"], "abstain")
+        listing = build_plan(self.store, "show /var/log", self.tmp.name)
+        self.assertEqual(listing["kind"], "filesystem_list")
+        if listing["status"] == "planned":
+            self.assertEqual(listing["commands"][0]["adapter_id"], "linux.filesystem.list")
+        mutation2 = build_plan(self.store, "create file", self.tmp.name)
+        self.assertEqual(mutation2["kind"], "filesystem_mutation")
+        self.assertEqual(mutation2["status"], "rejected")
+        apt_update = build_plan(self.store, "apt-get update", self.tmp.name)
+        self.assertEqual(apt_update["kind"], "package_index_update")
+        config = build_plan(self.store, "show nginx config", self.tmp.name)
+        self.assertEqual(config["kind"], "config_file_request")
+        pid_proc = build_plan(self.store, "show process 1", self.tmp.name)
+        self.assertEqual(pid_proc["kind"], "processes")
+        if pid_proc["status"] == "planned":
+            self.assertEqual(pid_proc["commands"][0]["argv"], ["ps", "-p", "1", "-o", "pid,user,pcpu,pmem,comm"])
+        login = build_plan(self.store, "who is logged in", self.tmp.name)
+        self.assertEqual(login["kind"], "plan")
+        if login["status"] == "planned":
+            self.assertEqual(login["commands"][0]["adapter_id"], "linux.system.login")
+        self.assertEqual(build_plan(self.store, "stop process 1234", self.tmp.name)["kind"], "unsupported_system_mutation")
+        # A bare FQDN with a service-like word is a reachability question, not a systemd unit.
+        fqdn = build_plan(self.store, "is web.online running", self.tmp.name)
+        self.assertEqual(fqdn["kind"], "authorized_engagement")
+        self.assertNotEqual(fqdn["kind"], "plan")
+        self.assertEqual(build_plan(self.store, "is nginx running", self.tmp.name)["kind"], "plan")
 
     def test_agents_never_fabricate_success(self):
         items = discover()

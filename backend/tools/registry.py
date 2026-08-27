@@ -4,9 +4,9 @@ from __future__ import annotations
 from typing import Any
 
 CATEGORIES = {
-    "system": ("uname", "uptime", "free", "ps", "whoami", "id", "hostname", "pwd", "date", "cat", "lscpu"),
-    "filesystem": ("df", "du", "ls"),
-    "network": ("ss", "ip", "tshark", "tcpdump"),
+    "system": ("uname", "uptime", "free", "ps", "whoami", "id", "hostname", "pwd", "date", "cat", "lscpu", "lsblk", "lsusb", "who", "last", "vmstat"),
+    "filesystem": ("df", "du", "ls", "tail", "findmnt"),
+    "network": ("ss", "ip", "tshark", "tcpdump", "nft", "iptables", "nmcli", "iw", "nslookup", "dig", "whois"),
     "web": ("curl", "nmap", "nuclei", "ffuf", "nikto", "gobuster", "sqlmap", "amass"),
     "analysis": ("john", "hashcat"),
     "development": ("git", "python3", "gcc"),

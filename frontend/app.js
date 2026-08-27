@@ -15,11 +15,11 @@ function toast(message, bad = false) { const el = $('toast'); el.textContent = m
 function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); }
 function statusClass(status) { return ['succeeded','success'].includes(status) ? 'badge-green' : ['failed','timed_out','interrupted'].includes(status) ? 'badge-red' : status === 'planned' || status === 'awaiting_confirmation' ? 'badge-amber' : 'badge-muted'; }
 function statusLabel(status) { return ({succeeded:'VERIFIED OK',failed:'FAILED',timed_out:'TIMED OUT',interrupted:'INTERRUPTED',unavailable:'TOOL MISSING',running:'RUNNING',started:'STARTED',planned:'CONFIRM REQUIRED',awaiting_confirmation:'PREFLIGHT COMPLETE',clarified:'PLAN ONLY',rejected:'BLOCKED',unknown_after_crash:'UNKNOWN AFTER CRASH'}[status] || String(status || 'STANDBY').toUpperCase()); }
-async function loadDoctor() { try { const data = await api('/api/doctor'); state.doctor = data.doctor; renderDoctor(); } catch (e) { $('side-context').textContent = 'backend offline'; toast(e.message, true); } }
+async function loadDoctor(refresh = false) { try { const data = await api(`/api/doctor${refresh ? '?fresh=1' : ''}`); state.doctor = data.doctor; renderDoctor(); } catch (e) { $('side-context').textContent = 'backend offline'; toast(e.message, true); } }
 function renderDoctor() { const d = state.doctor; if (!d) return; $('side-context').textContent = `${d.distribution.pretty_name || d.distribution.id} · ${d.architecture}`; $('terminal-cwd').textContent = d.cwd; $('context-content').innerHTML = [
   ['DISTRIBUTION', d.distribution.pretty_name || d.distribution.id], ['SUPPORT TIER', d.support_tier], ['KERNEL', d.kernel], ['PID 1 / SYSTEMD', `${d.pid1 || 'unknown'} / ${d.systemd ? 'available' : 'unavailable'}`], ['CONTEXT', [d.container ? 'container' : 'host', d.ssh ? 'SSH' : 'local', d.tmux ? 'tmux' : 'direct'].join(' · ')], ['PRIVILEGE', d.root ? 'UID 0 — guarded' : `UID ${d.uid}`], ['MODEL', 'disabled by default']
 ].map(([a,b]) => `<div class="context-row"><label>${esc(a)}</label><span class="${String(b).includes('available') || String(b).includes('local') ? 'ok':''}">${esc(b)}</span></div>`).join(''); }
-async function loadTools() { try { const data = await api('/api/tools'); state.tools = data.tools; renderTools(); } catch(e) { toast(e.message, true); } }
+async function loadTools(refresh = false) { try { const data = await api(`/api/tools${refresh ? '?fresh=1' : ''}`); state.tools = data.tools; renderTools(); } catch(e) { toast(e.message, true); } }
 function renderTools() {
   $('tool-grid').innerHTML = state.tools.map(t => `<article class="tool-card ${esc(t.state)}"><span class="badge ${t.state === 'installed' ? 'badge-green' : t.state === 'blocked' ? 'badge-red' : 'badge-muted'}">${esc(t.state.replace('-', ' ').toUpperCase())}</span><h3>${esc(t.name)}</h3><div class="tool-family">${esc(t.family)}</div><p>${esc(t.role)}<br><span class="tool-path">${esc(t.path || 'No executable found')}</span><br>${t.version ? esc(t.version) : 'Version unavailable'}</p>${t.state === 'installed' ? '' : `<p><button class="text-button" data-tool-install="tool:${esc(t.name)}">INSTALL</button></p>`}</article>`).join('');
   document.querySelectorAll('[data-tool-install]').forEach(btn => btn.addEventListener('click', () => {
@@ -49,8 +49,12 @@ function renderPlan(plan) { state.plan = plan; const badge = $('plan-badge'); ba
  $('plan-content').className = 'plan-card'; $('plan-content').innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>OBJECTIVE / ${esc(plan.kind.replace('_',' '))}</span>${esc(plan.request)}</div><span class="badge ${statusClass(plan.status)}">${esc(statusLabel(plan.status))}</span></div><ul class="plan-notes">${notes}</ul>${commands}<div class="worker-row">WORKERS · ${worker}</div>${plan.approval_required && plan.status === 'planned' ? `<div class="approval"><small>⌁ ${esc(plan.approval_phrase)}</small><button class="approve-button" id="approve-plan">APPROVE &amp; EXECUTE</button></div>` : ''}`;
  $('approve-plan')?.addEventListener('click', approvePlan);
 }
+let planSubmitBusy = false;
 async function makePlan(request) {
-  if (!request || !String(request).trim()) return;
+  const text = String(request || '').trim();
+  if (!text) return;
+  if (planSubmitBusy) { toast('A request is already in progress.'); return; }
+  planSubmitBusy = true;
   setView('overview');
   $('plan-button').disabled = true;
   $('plan-button').textContent = 'INSPECTING…';
@@ -64,7 +68,7 @@ async function makePlan(request) {
     toast(data.explanation || (data.plan?.status === 'planned' ? 'Typed plan ready — review before execution.' : statusLabel(data.plan?.status)), data.plan?.status === 'rejected');
     if (data.auto_executed && data.operation?.id) await watchOperation(data.operation.id);
   } catch(e) { toast(e.message, true); }
-  finally { $('plan-button').disabled = false; $('plan-button').innerHTML = '<span class="spark">✦</span> SEND'; }
+  finally { planSubmitBusy = false; $('plan-button').disabled = false; $('plan-button').innerHTML = '<span class="spark">✦</span> SEND'; }
 }
 async function approvePlan() { if (!state.plan) return; const button = $('approve-plan'); button.disabled = true; button.textContent = 'STARTING…'; try { const data = await api('/api/execute', {method:'POST', body:{plan_id:state.plan.id, approval_token:state.plan.approval_token, confirm:true}}); const op = data.operation; renderPlan({...state.plan, status:'started'}); toast('Operation started. Streaming real output from the local sidecar.'); await watchOperation(op.id); } catch(e) { button.disabled = false; button.textContent = 'APPROVE & EXECUTE'; toast(e.message, true); } }
 async function watchOperation(id) {
@@ -136,7 +140,36 @@ async function createEngagement() {
   try { const data = await api('/api/engagements',{method:'POST',body}); state.engagements.unshift(data.engagement); state.activeEngagementId = data.engagement.id; renderEngagements(); $('engagement-form').hidden=true; toast('Engagement scope created. Targets are rechecked at execution.'); } catch(e) { toast(e.message,true); }
 }
 async function verifyAudit() { try { const data = await api('/api/audit/verify'); const el = $('audit-result'); el.className = `audit-strip ${data.audit.valid ? 'valid':'invalid'}`; el.innerHTML = `<span class="status-dot"></span> ${data.audit.valid ? `AUDIT CHAIN VERIFIED · ${data.audit.checked} event(s)` : `AUDIT CHAIN INVALID · ${esc(data.audit.error)}`}`; } catch(e) { toast(e.message,true); } }
-function setupMatrix() { const canvas = $('matrix'), ctx = canvas.getContext('2d'); let columns = [], frame = 0; function resize(){canvas.width=innerWidth;canvas.height=innerHeight;columns=Array(Math.ceil(canvas.width/17)).fill(0).map(()=>Math.random()*-40)} function tick(){ if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; } if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 4 : 2)) !== 0) return; ctx.fillStyle='rgba(10,10,12,.09)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.font='12px monospace';ctx.fillStyle='rgba(0,212,170,.54)';columns.forEach((y,i)=>{ctx.fillText(Math.random()>.5?'1':'0',i*17,y*17);if(y*17>canvas.height && Math.random()>.975)columns[i]=0;columns[i]++});} resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
+function setupMatrix() {
+  const canvas = $('matrix'), ctx = canvas.getContext('2d'); let columns = [], frame = 0;
+  const GLYPH_SET = '01アイウエオカキクケコサシスセソタチツテトナニヌネノABCDEF'.split('');
+  function resize(){
+    canvas.width=innerWidth;canvas.height=innerHeight;
+    columns=Array(Math.ceil(canvas.width/16)).fill(0).map(()=>({y:Math.random()*-70,speed:.55+Math.random()*.85,idx:Math.floor(Math.random()*GLYPH_SET.length),head:true}));
+  }
+  function tick(){
+    if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; }
+    if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 3 : 2)) !== 0) return;
+    ctx.globalAlpha=1; ctx.shadowBlur=0;
+    ctx.fillStyle='rgba(8,9,11,.12)';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.font='13px "JetBrains Mono",ui-monospace,monospace';ctx.textBaseline='top';
+    for (let i=0;i<columns.length;i++) {
+      const col=columns[i];
+      const glyph=GLYPH_SET[col.idx];
+      // bright head with a soft glow, then a short dimmer tail for a smooth stream.
+      ctx.globalAlpha=.95; ctx.shadowColor='rgba(0,212,170,.95)'; ctx.shadowBlur=state.matrix==='high'?14:8;
+      ctx.fillStyle='rgba(0,212,170,1)'; ctx.fillText(glyph,i*16,col.y*16);
+      ctx.shadowBlur=0; ctx.fillStyle='rgba(0,212,170,.42)'; ctx.globalAlpha=.42;
+      ctx.fillText(GLYPH_SET[(col.idx+1)%GLYPH_SET.length],i*16,(col.y-1)*16);
+      ctx.fillStyle='rgba(0,212,170,.16)'; ctx.globalAlpha=.16;
+      ctx.fillText(GLYPH_SET[(col.idx+2)%GLYPH_SET.length],i*16,(col.y-2)*16);
+      col.y+=col.speed;
+      if (Math.random()>.985){ col.idx=Math.floor(Math.random()*GLYPH_SET.length); col.speed=.55+Math.random()*.85; }
+      if (col.y*16>canvas.height+64 || Math.random()>.985) { col.y=Math.random()*-70; col.idx=Math.floor(Math.random()*GLYPH_SET.length); col.speed=.55+Math.random()*.85; }
+    }
+    ctx.globalAlpha=1; ctx.shadowBlur=0;
+  }
+  resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
 function terminalMetrics() {
   const host = $('terminal-panes');
   const width = (host && host.clientWidth) || Math.max(640, innerWidth - 280);
@@ -334,5 +367,5 @@ async function resizeSession() {
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
-function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',loadDoctor); $('refresh-tools').addEventListener('click',loadTools); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);

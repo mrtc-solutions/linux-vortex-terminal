@@ -7,6 +7,7 @@
 
   state.conversationId = null;
   state.settings = { profile: 'safe', privacy_mode: 'local', developer_mode: false, offline: false, lab_mode: false };
+  let planning = false;
 
   function renderList(id, items, empty, mapper) {
     const el = $(id);
@@ -95,6 +96,16 @@
     } catch (e) { /* settings are optional on first boot */ }
   }
 
+  function hideFirstRun() {
+    const host = $('first-run');
+    if (!host) return;
+    if (window.VortexWindows?.closeSurface) {
+      window.VortexWindows.closeSurface(host);
+      return;
+    }
+    host.hidden = true;
+  }
+
   async function loadSetup() {
     try {
       const data = await api('/api/setup');
@@ -103,8 +114,6 @@
       const host = $('first-run');
       const steps = $('setup-steps');
       if (!host || !steps) return;
-      if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
-      else host.hidden = false;
       steps.innerHTML = (setup.steps || []).map(step => {
         const badge = step.ok ? 'badge-green' : step.required ? 'badge-red' : 'badge-muted';
         const label = step.ok ? 'OK' : step.required ? 'FAILED' : 'OPTIONAL';
@@ -112,12 +121,18 @@
       }).join('');
       const go = $('complete-setup');
       if (go) go.disabled = !setup.ready;
+      // Never let the first-run surface cover the request input while the host
+      // is not ready to complete setup. It remains reachable from the Dependencies
+      // button and can always be dismissed with SKIP.
+      if (!setup.ready) return;
+      if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
+      else host.hidden = false;
     } catch (e) { toast(e.message, true); }
   }
 
-  async function loadHealth() {
+  async function loadHealth(refresh = false) {
     try {
-      const data = await api('/api/system/health');
+      const data = await api(`/api/system/health${refresh ? '?fresh=1' : ''}`);
       const components = data.health?.components || {};
       $('health-grid').innerHTML = Object.entries(components).map(([name, item]) => {
         const stateName = item.state || 'unknown';
@@ -129,18 +144,29 @@
     } catch (e) { toast(e.message, true); }
   }
 
-  async function loadAgents() {
+  async function loadAgents(refresh = false) {
     try {
-      const data = await api('/api/agents');
+      const data = await api(`/api/agents${refresh ? '?fresh=1' : ''}`);
       $('agent-grid').innerHTML = (data.agents || []).map(agent => {
         const healthy = !!agent.health?.healthy;
         return `<article class="tool-card ${healthy ? 'installed' : 'absent'}"><span class="badge ${healthy ? 'badge-green' : 'badge-muted'}">${esc((agent.status || 'missing').toUpperCase())}</span><h3>${esc(agent.name)}</h3><div class="tool-family">${esc(agent.trust_level)} · ${esc(agent.execution_mode)}</div><p>${esc(agent.health?.message || agent.notes || '')}<br><span class="tool-path">${esc(agent.source || 'no verified repository')}</span><br>${esc(agent.version || 'Version unavailable')}</p>${healthy ? '' : `<button class="text-button" data-agent-install="${esc(agent.id)}">INSTALL PROPOSAL</button>`}</article>`;
       }).join('');
       document.querySelectorAll('[data-agent-install]').forEach(btn => btn.addEventListener('click', async () => {
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'OPENING…';
         try {
-          const data = await api(`/api/agents/${encodeURIComponent(btn.dataset.agentInstall)}/install`);
-          toast(data.install?.message || 'Install remains operator-controlled.');
+          if (typeof window.openDependency === 'function') {
+            await window.openDependency(`agent:${btn.dataset.agentInstall}`);
+          } else {
+            const data = await api(`/api/agents/${encodeURIComponent(btn.dataset.agentInstall)}/install`);
+            toast(data.install?.message || 'Install remains operator-controlled.');
+          }
         } catch (e) { toast(e.message, true); }
+        finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
       }));
     } catch (e) { toast(e.message, true); }
   }
@@ -183,7 +209,11 @@
       const data = await api('/api/tasks');
       const interrupted = data.interrupted || [];
       $('interrupted-tasks').textContent = interrupted.length ? `Resume available: ${interrupted.map(t => t.id).join(', ')}` : 'No interrupted tasks.';
-      renderList('task-list', data.tasks || [], 'No tasks recorded.', t => `<article class="activity-item"><span class="activity-icon ${t.state === 'COMPLETED' ? '' : t.state === 'FAILED' ? 'failed' : 'running'}"></span><div><div class="activity-title">${esc(t.id)} · ${esc(t.state)}</div><div class="activity-command">${esc(t.request)}</div></div><div class="activity-meta"><div>${esc(t.risk || '—')}</div><div>${esc(fmtDate(t.updated_at))}</div><div><button class="text-button" data-task-resume="${esc(t.id)}">RESUME</button> <button class="text-button" data-task-delete="${esc(t.id)}">DELETE</button></div></div></article>`);
+      renderList('task-list', data.tasks || [], 'No tasks recorded.', t => `<article class="activity-item"><span class="activity-icon ${t.state === 'COMPLETED' ? '' : t.state === 'FAILED' ? 'failed' : 'running'}"></span><div><div class="activity-title">${esc(t.id)} · ${esc(t.state)}</div><div class="activity-command">${esc(t.request)}</div></div><div class="activity-meta"><div>${esc(t.risk || '—')}</div><div>${esc(fmtDate(t.updated_at))}</div><div><button class="text-button" data-task-restart="${esc(t.id)}">RESTART</button> <button class="text-button" data-task-resume="${esc(t.id)}">RESUME</button> <button class="text-button" data-task-delete="${esc(t.id)}">DELETE</button></div></div></article>`);
+      document.querySelectorAll('[data-task-restart]').forEach(btn => btn.addEventListener('click', async () => {
+        try { await api(`/api/tasks/${encodeURIComponent(btn.dataset.taskRestart)}/restart`, { method: 'POST', body: { cwd: state.doctor?.cwd } }); toast('Task restarted with a fresh plan.'); loadTasks(); }
+        catch (e) { toast(e.message, true); }
+      }));
       document.querySelectorAll('[data-task-resume]').forEach(btn => btn.addEventListener('click', async () => {
         try { await api(`/api/tasks/${encodeURIComponent(btn.dataset.taskResume)}/resume`, { method: 'POST', body: { cwd: state.doctor?.cwd } }); toast('Task resumed with a fresh plan.'); loadTasks(); }
         catch (e) { toast(e.message, true); }
@@ -253,12 +283,26 @@
   }
 
   window.makePlan = async function (request) {
-    if (!request || !request.trim()) return;
+    const text = String(request || '').trim();
+    if (!text) return;
+    if (planning) { toast('A request is already in progress.'); return; }
+    planning = true;
+    const thread = $('chat-thread');
+    if (thread) {
+      const echo = document.createElement('article');
+      echo.className = 'chat-msg user local-echo';
+      echo.innerHTML = `<span class="role">YOU</span><p>${esc(text)}</p>`;
+      thread.appendChild(echo);
+      thread.scrollTop = thread.scrollHeight;
+    }
+    const input = $('request-input');
+    if (input) input.value = '';
     setView('overview');
-    $('plan-button').disabled = true;
-    $('plan-button').textContent = 'INSPECTING…';
+    const sendButton = $('plan-button');
+    if (sendButton) sendButton.disabled = true;
+    if (sendButton) sendButton.textContent = 'INSPECTING…';
     try {
-      const payload = { request, cwd: state.doctor?.cwd || undefined, conversation_id: state.conversationId, offline: !!state.settings.offline };
+      const payload = { request: text, cwd: state.doctor?.cwd || undefined, conversation_id: state.conversationId, offline: !!state.settings.offline };
       if (state.activeEngagementId) payload.engagement_id = state.activeEngagementId;
       const data = await api('/api/workspace/turn', { method: 'POST', body: payload });
       state.conversationId = data.conversation?.id || state.conversationId;
@@ -287,8 +331,15 @@
     } catch (e) {
       toast(e.message, true);
     } finally {
-      $('plan-button').disabled = false;
-      $('plan-button').innerHTML = '<span class="spark">✦</span> SEND';
+      planning = false;
+      const sendButton = $('plan-button');
+      if (sendButton) {
+        sendButton.disabled = false;
+        sendButton.innerHTML = '<span class="spark">✦</span> SEND';
+      }
+      if (input) {
+        try { input.focus({ preventScroll: true }); } catch (_) { input.focus(); }
+      }
     }
   };
 
@@ -304,8 +355,8 @@
         banner.onclick = () => setView('tasks');
       }
     }).catch(() => {});
-    $('refresh-agents')?.addEventListener('click', loadAgents);
-    $('refresh-health')?.addEventListener('click', loadHealth);
+    $('refresh-agents')?.addEventListener('click',()=>loadAgents(true));
+    $('refresh-health')?.addEventListener('click',()=>loadHealth(true));
     $('new-conversation')?.addEventListener('click', async () => {
       try {
         const data = await api('/api/conversations', { method: 'POST', body: { title: 'New conversation' } });
@@ -325,9 +376,13 @@
     $('complete-setup')?.addEventListener('click', async () => {
       try {
         await api('/api/setup/complete', { method: 'POST', body: {} });
-        $('first-run').hidden = true;
         toast('First-run checks recorded. Optional components remain unavailable until installed.');
       } catch (e) { toast(e.message, true); }
+      finally { hideFirstRun(); }
+    });
+    $('skip-setup')?.addEventListener('click', () => {
+      hideFirstRun();
+      toast('First-run checks skipped. You can open them from MISSING DEPENDENCIES.');
     });
     const persist = async (body) => {
       try { const data = await api('/api/settings', { method: 'POST', body }); state.settings = data.settings; toast('Settings saved.'); loadSettings(); }
@@ -378,13 +433,14 @@
       if (!host || !list) return;
       if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
       else host.hidden = false;
+      if ($('dep-detail')) $('dep-detail').hidden = true;
       list.textContent = 'Probing this host…';
       try {
         const data = await api('/api/dependencies');
         const deps = data.dependencies || {};
         const missing = deps.missing || [];
         const counts = deps.counts || {};
-        if (summary) summary.textContent = `${counts.installed || 0}/${counts.total || 0} present · ${counts.missing || 0} missing · auto_install=${deps.auto_install === false ? 'no' : 'no'}`;
+        if (summary) summary.textContent = `${counts.installed || 0}/${counts.total || 0} present · ${counts.missing || 0} missing · auto_install=${deps.auto_install ? 'yes' : 'no'}`;
         if (!missing.length) {
           list.innerHTML = '<div class="empty-inline">No missing catalog items on this host.</div>';
           return;
@@ -413,7 +469,8 @@
           try {
             const planned = await api('/api/dependencies/plan', { method: 'POST', body: { id: itemId, cwd: state.doctor?.cwd, conversation_id: state.conversationId } });
             if (planned.planned && planned.plan) {
-              host.hidden = true;
+              if (window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(host);
+              else host.hidden = true;
               state.conversationId = planned.conversation?.id || state.conversationId;
               state.task = planned.task;
               state.plan = planned.plan;
@@ -431,7 +488,12 @@
     $('open-deps')?.addEventListener('click', loadDependencies);
     $('open-deps-from-setup')?.addEventListener('click', loadDependencies);
     $('open-deps-from-tools')?.addEventListener('click', loadDependencies);
-    $('close-deps')?.addEventListener('click', () => { if ($('dep-window')) $('dep-window').hidden = true; });
+    $('close-deps')?.addEventListener('click', () => {
+      const host = $('dep-window');
+      if (!host) return;
+      if (window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(host);
+      else host.hidden = true;
+    });
 
     api('/api/models').then(data => {
       const local = data.model?.local || {};

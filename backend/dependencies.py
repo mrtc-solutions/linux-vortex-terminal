@@ -12,6 +12,7 @@ from typing import Any
 APT_PACKAGES: dict[str, str] = {
     "nmap": "nmap",
     "curl": "curl",
+    "ping": "iputils-ping",
     "git": "git",
     "docker": "docker.io",
     "podman": "podman",

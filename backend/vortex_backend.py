@@ -55,11 +55,13 @@ try:
     from .artifacts import ArtifactError, analyze_operation_http, analyze_path
     from .facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
     from .network import resolve_targets, resolution_digest
+    from .probe_cache import TTLCache
 except ImportError:  # direct `python backend/vortex_backend.py`
     from adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from artifacts import ArtifactError, analyze_operation_http, analyze_path
     from facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
     from network import resolve_targets, resolution_digest
+    from probe_cache import TTLCache
 
 SCHEMA_VERSION = 1
 APP_VERSION = "0.2.0"
@@ -88,6 +90,42 @@ EXIT_CODES = {
 }
 
 CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Aggregate host probes are expensive when many tools/agents are listed by the
+# UI or tests. These caches are deliberately short-lived and do not change the
+# facts returned for a single execution-time integrity probe.
+_SAFE_DIRS_CACHE: TTLCache = TTLCache(10.0)
+_EXECUTABLE_LOOKUP_CACHE: TTLCache = TTLCache(10.0)
+_CAPABILITIES_CACHE: TTLCache = TTLCache(10.0)
+_DEPENDENCIES_CACHE: TTLCache = TTLCache(10.0)
+_TOOLS_REGISTRY_CACHE: TTLCache = TTLCache(10.0)
+_TOOLS_CACHE: TTLCache = TTLCache(10.0)
+_ADAPTERS_CACHE: TTLCache = TTLCache(10.0)
+_DOCTOR_CACHE: TTLCache = TTLCache(10.0)
+
+
+def clear_probe_caches() -> None:
+    """Force a fresh probe pass. Used by tests, refresh actions, and fresh listings."""
+    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _ADAPTERS_CACHE, _DOCTOR_CACHE):
+        cache.clear()
+
+
+def _query_flag(query: dict[str, list[str]], key: str) -> bool:
+    """True when the caller asked for a forced refresh (``?fresh=1``)."""
+    return (query.get(key) or ["0"])[0].strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _invalidate_probe_lookups() -> None:
+    """Clear the low-level PATH/executable lookups behind aggregate probes.
+
+    ``clear_probe_caches`` is used when a full fresh pass is needed. A targeted
+    ``?fresh=1`` refresh on a single end-point must also clear these caches;
+    otherwise the aggregate result is rebuilt from the same stale executable
+    lookups and appears fresh without being fresh.
+    """
+    _SAFE_DIRS_CACHE.clear()
+    _EXECUTABLE_LOOKUP_CACHE.clear()
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
@@ -237,16 +275,9 @@ def _is_user_writable_directory(path: Path, st: os.stat_result | None = None) ->
     return bool(mode & 0o022) or (os.getuid() != 0 and st.st_uid == os.getuid() and bool(mode & 0o200))
 
 
-def _safe_executable_dirs() -> tuple[list[str], list[str]]:
-    """Return PATH directories safe for managed plans and rejected entries.
-
-    An empty PATH component means the current directory and is deliberately
-    never accepted for managed execution. User-writable directories are also
-    excluded to reduce PATH replacement risk.
-    """
+def _compute_safe_dirs(raw_path: str) -> tuple[list[str], list[str]]:
     safe: list[str] = []
     rejected: list[str] = []
-    raw_path = os.environ.get("PATH") or CONTROLLED_PATH
     for raw in raw_path.split(os.pathsep):
         directory = raw or "."
         try:
@@ -262,6 +293,35 @@ def _safe_executable_dirs() -> tuple[list[str], list[str]]:
     return safe, rejected
 
 
+def _safe_executable_dirs() -> tuple[list[str], list[str]]:
+    """Return PATH directories safe for managed plans and rejected entries.
+
+    An empty PATH component means the current directory and is deliberately
+    never accepted for managed execution. User-writable directories are also
+    excluded to reduce PATH replacement risk. The result is cached briefly
+    because aggregate inventory requests cause many probes in one request.
+    """
+    raw_path = os.environ.get("PATH") or CONTROLLED_PATH
+    return _SAFE_DIRS_CACHE.get(raw_path, lambda: _compute_safe_dirs(raw_path))
+
+
+def _resolve_executable_lookup(name: str) -> dict[str, str]:
+    if not name or "\x00" in name or (not os.path.isabs(name) and os.sep in name):
+        return {"status": "invalid"}
+    if os.path.isabs(name):
+        return {"status": "found", "path": name}
+    safe_dirs, rejected_dirs = _safe_executable_dirs()
+    found = shutil.which(name, path=os.pathsep.join(safe_dirs)) if safe_dirs else None
+    if found:
+        return {"status": "found", "path": found}
+    # Distinguish absence from a tool that only exists in an unsafe PATH
+    # location; callers must not silently execute the latter.
+    unsafe_found = shutil.which(name)
+    if unsafe_found and rejected_dirs:
+        return {"status": "unsafe", "path": unsafe_found}
+    return {"status": "absent"}
+
+
 def probe_executable(name: str, *, include_version: bool = True) -> dict[str, Any]:
     """Return the executable's factual identity and optionally invoke its version probe.
 
@@ -270,22 +330,16 @@ def probe_executable(name: str, *, include_version: bool = True) -> dict[str, An
     Planning and execution callers retain the default and therefore keep the
     version evidence that is useful for an individual command identity.
     """
-    if not name or "\x00" in name or (not os.path.isabs(name) and os.sep in name):
+    lookup_key = ("lookup", name, os.environ.get("PATH"))
+    lookup = _EXECUTABLE_LOOKUP_CACHE.get(lookup_key, lambda: _resolve_executable_lookup(name))
+    status = lookup.get("status") or "absent"
+    if status == "invalid":
         return {"name": name, "state": "blocked", "path": None, "version": None, "security_flags": ["invalid-executable-name"]}
-    if os.path.isabs(name):
-        found = name
-    else:
-        safe_dirs, rejected_dirs = _safe_executable_dirs()
-        found = shutil.which(name, path=os.pathsep.join(safe_dirs)) if safe_dirs else None
-        if not found:
-            # Distinguish absence from a tool that only exists in an unsafe PATH
-            # location; callers must not silently execute the latter.
-            unsafe_found = shutil.which(name)
-            if unsafe_found and rejected_dirs:
-                return {"name": name, "state": "blocked", "path": unsafe_found, "version": None, "security_flags": ["unsafe-path-directory"]}
-    if not found:
+    if status == "unsafe":
+        return {"name": name, "state": "blocked", "path": lookup.get("path"), "version": None, "security_flags": ["unsafe-path-directory"]}
+    if status == "absent":
         return {"name": name, "state": "absent", "path": None, "version": None}
-    path = Path(found)
+    path = Path(lookup["path"])
     try:
         real = path.resolve(strict=True)
         st = real.stat()
@@ -451,6 +505,40 @@ def validate_cwd(raw: str | None) -> Path:
     if not resolved.is_dir():
         raise ValueError("working directory is not a directory")
     return resolved
+
+
+_SENSITIVE_FILE_RE = re.compile(
+    r"(?:^|/)(?:shadow|gshadow|\.env|\.git-credentials|credentials|id_rsa|id_ed25519|id_dsa|id_ecdsa|.*\.(?:pem|p12|pfx|key|pkcs12|keystore|truststore))$",
+    re.I,
+)
+_READABLE_FILE_ROOTS = ("/etc", "/var", "/home", "/root", "/usr", "/opt", "/tmp", "/run")
+
+
+def safe_file_target(raw: str) -> Path | None:
+    """Return a bounded, non-secret read-only file path or None."""
+    candidate = Path(raw.strip().strip("\"'")).expanduser()
+    if not candidate.is_absolute():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        return None
+    if not resolved.is_file():
+        return None
+    if _SENSITIVE_FILE_RE.search(str(resolved)):
+        return None
+    return resolved if str(resolved).startswith(_READABLE_FILE_ROOTS) else None
+
+
+def safe_directory_target(raw: str) -> Path | None:
+    candidate = Path(raw.strip().strip("\"'")).expanduser()
+    if not candidate.is_absolute():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        return None
+    return resolved if resolved.is_dir() else None
 
 
 def quote_argv(argv: list[str]) -> str:
@@ -1213,6 +1301,8 @@ def command_spec(executable: str, argv: list[str], cwd: Path, *, risk: str = "lo
 def adapter_command(adapter_id: str, executable: str, argv: list[str], cwd: Path, *, required: str | None = None, scope: list[str] | None = None, explanation: str = "", timeout: int | None = None, privilege: str | None = None) -> dict[str, Any]:
     manifest = ADAPTER_MANIFESTS[adapter_id]
     spec = command_spec(executable, argv, cwd, risk=manifest["risk"], network=manifest["network_class"], required=required or executable, scope=scope, explanation=explanation, timeout=timeout or int(manifest["limits"].get("timeout_seconds", 30)))
+    cap = int(manifest["limits"].get("output_cap_bytes") or 512 * 1024)
+    spec["output_cap_bytes"] = cap
     spec["adapter_id"] = adapter_id
     spec["adapter_version"] = manifest["version"]
     spec["adapter_limits"] = manifest["limits"]
@@ -1233,6 +1323,11 @@ def parse_package_request(text: str) -> tuple[str, str | None]:
         return operation, None
     match = re.search(rf"\b{operation}\s+(?:packages?\s+)?([a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?)\b", lower)
     package = match.group(1) if match else None
+    if package and package.lower() in {"container", "containers", "service", "unit", "process", "processes", "program", "package", "pkg", "snap", "flatpak", "image", "images", "volume", "network", "all", "everything"}:
+        # "remove container web" must never become an apt removal of the
+        # container binary. Common apt packages such as docker/podman remain
+        # valid package operations.
+        return "", None
     if package and not PACKAGE_RE.fullmatch(package):
         raise PolicyError("invalid apt package name")
     return operation, package
@@ -1274,19 +1369,86 @@ def reboot_required_state() -> dict[str, Any]:
     return {"required": required, "packages": packages.read_text(encoding="utf-8", errors="replace").splitlines()[:50] if packages.exists() else [], "source": str(marker)}
 
 
+def _looks_like_fqdn(raw: str) -> bool:
+    """A bare domain like target.test is a host, not a systemd unit name."""
+    value = str(raw or "").strip().lower()
+    if value.endswith(".service") or value.endswith(".socket") or value.endswith(".timer"):
+        return False
+    return bool(re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}", value))
+
+
 def parse_service(text: str) -> str | None:
-    match = re.search(r"(?:service|unit)\s+([A-Za-z0-9][A-Za-z0-9_.@:-]*\.service)", text, re.I)
-    return match.group(1) if match else None
+    lower = text.lower()
+    def unit_value(raw: str) -> str | None:
+        raw = raw.strip()
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@:-]*", raw):
+            return raw if raw.endswith(".service") else raw + ".service"
+        return None
+    # Explicit "service|unit <name>".
+    match = re.search(r"\b(?:service|unit)\s+(?:named\s+)?([A-Za-z0-9][A-Za-z0-9_.@:-]*)(?:\s+(?:service|unit)\b)?", lower)
+    if match and match.group(1) not in {"status", "running", "active", "up", "started"}:
+        unit = unit_value(match.group(1))
+        if unit:
+            return unit
+    # "<name> service|unit".
+    match = re.search(r"\b([A-Za-z0-9][A-Za-z0-9_.@:-]*)\s+(?:service|unit)\b", lower)
+    if match:
+        unit = unit_value(match.group(1))
+        if unit:
+            return unit
+    # "is|are <name> running|active|up|started", and "check if|whether <name> is ...".
+    match = re.search(r"\b(?:is|are|whether)\s+([A-Za-z0-9][A-Za-z0-9_.@:-]*)\s+(?:running|active|up|started)\b", lower)
+    if not match:
+        match = re.search(r"\bcheck\s+(?:if|whether)\s+([A-Za-z0-9][A-Za-z0-9_.@:-]*)\s+(?:is|are)\s+(?:running|active|up|started)\b", lower)
+    if match and not _looks_like_fqdn(match.group(1)):
+        unit = unit_value(match.group(1))
+        if unit:
+            return unit
+    # "status|state of <name>".
+    match = re.search(r"\b(?:status|state)\s+of\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9_.@:-]*)(?:\s+(?:service|unit))?\b", lower)
+    if match:
+        unit = unit_value(match.group(1))
+        if unit:
+            return unit
+    # "log|logs|journal [for|of] <name>". Container log requests are handled by their own adapter.
+    if "container" in text.lower() and re.search(r"\b(?:log|logs|journal)\b", text.lower()):
+        return None
+    match = re.search(r"\b(?:recent\s+)?(?:log|logs|journal)\s+(?:for|of)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9_.@:-]*)(?:\s+(?:service|unit))?\b", lower)
+    if match:
+        unit = unit_value(match.group(1))
+        if unit and unit.lower() not in {"container", "containers"}:
+            return unit
+    return None
 
 
 def parse_systemd_mutation(text: str) -> tuple[str, str, bool] | None:
     if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
         raise PolicyError("systemd request contains unsafe shell syntax")
     user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", text, re.I))
-    match = re.search(r"(?:--user\s+)?\b(restart|start|stop|enable|disable)\s+(?:--user\s+)?([^\s,;|&`$()<>]+)", text, re.I)
+    lower = text.lower()
+    match = re.search(r"\b(restart|start|stop|enable|disable)\b", lower)
     if not match:
         return None
-    action, raw_unit = match.group(1).lower(), match.group(2)
+    action = match.group(1)
+    rest = text[match.end():]
+    rest = re.sub(r"--user\b", "", rest, flags=re.I).strip()
+    # Allow common phrasings: "restart service nginx", "restart the nginx service",
+    # "restart the service named nginx".
+    while True:
+        stripped = re.sub(r"^(?:the|a|an|service|unit|named)\s+", "", rest, flags=re.I)
+        if stripped == rest:
+            break
+        rest = stripped
+    candidate = re.search(r"([A-Za-z0-9][A-Za-z0-9_.@:-]*)", rest)
+    if not candidate:
+        return None
+    raw_unit = candidate.group(1)
+    if raw_unit.lower() in {"the", "service", "unit", "process", "processes", "pid", "pids"}:
+        return None
+    if re.fullmatch(r"\d+", raw_unit):
+        return None
+    if re.search(r"\b(?:process|pid)\b", rest, re.I) or re.search(r"\b\d{3,}\b", rest):
+        return None
     if raw_unit.endswith(".service"):
         unit = raw_unit
     elif re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@:-]*", raw_unit):
@@ -1345,7 +1507,45 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             engagement = attach_engagement_scope(store, engagement)
     bound_engagement_id = engagement["id"] if engagement else None
 
-    if lower.startswith("explain ") or lower.startswith("what does ") or lower.startswith("why does "):
+    _unsupported_mutation = (
+        re.search(r"\b(?:reboot|poweroff|halt|suspend|hibernate|shut\s*down)\b", lower)
+        or re.search(r"\b(?:block|open|close|allow|deny|drop)\s+(?:port|ports)\b", lower)
+        or re.search(r"\b(?:add|delete|remove|drop|allow|deny|block|open|close)\s+(?:a\s+)?(?:firewall|iptables|nftables)\s*(?:rule)?\b", lower)
+        or re.search(r"\biptables\s+-\w*[ADICRFJW]\w*\b", lower)
+        or re.search(r"\bnft\s+(?:add|delete|insert|replace|create)\b", lower)
+        or re.search(r"\bip\s+route\s+(?:add|del|delete|change|replace|append|prepend)\b", lower)
+        or re.search(r"\b(?:kill|stop|terminate|pkill|killall|start)\s+(?:the\s+)?(?:process(?:es)?|pid|program)\b", lower)
+        or re.search(r"\bkill\s+(?:-\w+\s+)?\d+\b", lower)
+        or re.search(r"\bpkill(?:\s+-\w+)*\s+[\w./@:-]+\b", lower)
+        or re.search(r"\bkillall(?:\s+-\w+)*\s+[\w./@:-]+\b", lower)
+    )
+    _shell_syntax = bool(re.search(r";|&&|\|\||[|<>]|`|\$\(", lower))
+    if _unsupported_mutation:
+        kind = "unsupported_system_mutation"
+        risk = "high"
+        authorization = "operator-controlled system mutation"
+        status = "rejected"
+        notes.append("Vortex has no reviewed adapter for this host-mutation intent and will not fabricate an equivalent read-only command.")
+        notes.append("No command was created. Approve only the reviewed, typed plans shown by Vortex for supported operations.")
+    elif _shell_syntax:
+        kind = "unsupported_shell_syntax"
+        risk = "high"
+        authorization = "operator-controlled command interpretation"
+        status = "rejected"
+        notes.append("Vortex executes reviewed argv only and does not interpret shell pipelines, redirection, command substitution, or compound operators.")
+        notes.append("Use a PTY session for a real interactive shell, or ask for a narrower single reviewed command.")
+    elif re.search(r"\b(?:show|read|open|view|cat)\s+(?:config\s+)?file\s+(/[^\s;]+)", lower):
+        kind = "filesystem_read"
+        raw_match = re.search(r"(?:show|read|open|view|cat)\s+(?:config\s+)?file\s+(/[^\s;]+)", lower)
+        candidate = safe_file_target(raw_match.group(1)) if raw_match else None
+        if candidate is None:
+            status = "clarified"; notes.append("Vortex only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
+        elif probe_executable("cat")["state"] != "installed":
+            status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cat; the requested file was not read.")
+        else:
+            specs.append(adapter_command("linux.filesystem.read", "cat", ["cat", str(candidate)], cwd, required="cat", explanation=f"Read the observed regular text file {candidate} only; it is not modified."))
+            status = "planned"; notes.append("Bounded read-only file inspection; secret-key and credential files are refused.")
+    elif lower.startswith("explain ") or lower.startswith("what does ") or lower.startswith("why does "):
         kind = "explanation"
         command = request.split(" ", 1)[1] if " " in request else ""
         try:
@@ -1358,12 +1558,17 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             notes.append(f"{argv[0]} would be invoked with {len(argv) - 1} argument(s). No command will be executed by ask or plan.")
         status = "clarified"
-    elif re.search(r"\bssh\b", lower) and any(word in lower for word in ("diagnos", "config", "connection", "connect")):
+    elif re.search(r"\b(?:help|capabilities|what can you do)\b", lower) or lower.strip() in {"hello", "hi", "hey"}:
+        kind = "help"
+        status = "clarified"
+        notes.append("VORTEX reads only reviewed local adapters before any typed plan is approved. Common areas include identity, system health, memory/CPU, files and directories, processes, Git, services/journal, listening ports, network interfaces/routes, disk usage, and installed packages.")
+        notes.append("Active cybersecurity work (nmap, nuclei, gobuster, curl, ping, DNS/WHOIS, SSH) requires an authorized engagement with an owner, target scope, limits, and expiry.")
+    elif re.search(r"\bssh\b", lower) and (any(word in lower for word in ("diagnos", "config", "connection", "connect")) or re.search(r"\bssh\s+(?:to|for|towards)\s+", lower)):
         kind = "ssh_diagnostics"
         active_connection = bool(re.search(r"\b(?:test|check|diagnose)\b.*\bssh\b.*\b(?:connection|connect|connectivity)\b", lower) or re.search(r"\bssh\s+connectivity\b", lower))
         target_match = (
             re.search(r"\bssh\s+(?:config|diagnostics?|connection)\s+(?:for|to)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
-            or re.search(r"\bssh\s+(?:to|for)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
+            or re.search(r"\bssh\s+(?:to|for|towards)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
             or re.search(r"\bssh\s+(?:config|diagnostics?|connection)\s+([A-Za-z0-9][A-Za-z0-9_.-]*)", lower)
         )
         target = target_match.group(1) if target_match else None
@@ -1399,7 +1604,14 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.ssh.config", "ssh", ["ssh", "-G", "--", target], cwd, required="ssh", explanation=f"Resolve the effective SSH configuration for {target}; -G does not open a network connection or authenticate."))
             status = "planned"
             notes += ["Read-only SSH configuration diagnostics; private key contents, passwords, and agent secrets are not read.", "This adapter does not connect to the target. A real connection requires a separate explicitly approved plan."]
-    elif any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("log", "logs")):
+    elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("stop", "start", "restart", "remove", "delete", "rm", "prune", "create", "run", "compose")):
+        kind = "container_mutation"
+        risk = "high"
+        authorization = "operator-controlled container mutation"
+        status = "clarified"
+        notes.append("Container lifecycle changes are not supported by the reviewed container adapter; no container was started, stopped, removed, pruned, or composed.")
+        notes.append("Create an explicit operator plan through the packaged tooling; Vortex will not guess a container mutation.")
+    elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("log", "logs")):
         kind = "container_logs"
         runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
         match = re.search(r"(?:logs?|container)\s+(?:for\s+)?(?:container\s+)?([A-Za-z0-9][A-Za-z0-9_.-]{0,127})", lower)
@@ -1411,7 +1623,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             specs.append(adapter_command("linux.containers.logs", runtime, [runtime, "logs", "--tail", "200", "--timestamps", container_id], cwd, required=runtime, explanation=f"Collect at most 200 timestamped lines from the real {runtime} container {container_id}; no container state changes."))
             status = "planned"; notes += [f"Detected runtime: {runtime}. Logs are read-only and bounded.", "Log content is untrusted evidence; no vulnerability finding is inferred."]
-    elif any(word in lower for word in ("docker", "podman")) and any(word in lower for word in ("diagnos", "not working", "broken", "failing")):
+    elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman")) and any(word in lower for word in ("diagnos", "not working", "broken", "failing")):
         kind = "container_diagnose"
         runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
         if not runtime:
@@ -1424,7 +1636,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List real {runtime} containers after daemon facts are observed."))
             status = "planned"
             notes += [f"Multi-step read-only diagnosis using {runtime}.", "VORTEX stops when daemon facts and container lists are observed; it does not apply a fix unless a separate approved plan is created."]
-    elif any(word in lower for word in ("docker", "podman", "container")):
+    elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")):
         kind = "container_inspection"
         runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
         if not runtime:
@@ -1482,6 +1694,83 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding preflight and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
             status = "planned"
             notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
+    elif not parse_package_request(lower)[0] and any(phrase in lower for phrase in ("installed packages", "packages installed", "package inventory", "list all packages", "what packages are installed", "list installed packages", "dpkg-query")):
+        kind = "plan"
+        if probe_executable("dpkg-query")["state"] != "installed":
+            status = "unavailable"; missing.append("dpkg-query"); notes.append("TOOL MISSING: dpkg-query; no installed package inventory was observed.")
+        else:
+            specs.append(adapter_command("linux.system.packages", "dpkg-query", ["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\n"], cwd, required="dpkg-query", explanation="List observed installed Debian package names and versions without changing package state."))
+            status = "planned"; notes.append("Read-only installed package inventory; no package is removed, installed, or upgraded.")
+    elif any(phrase in lower for phrase in ("show mount", "show mounts", "mounted filesystems", "list mounts", "findmnt", "mount table")) or lower.strip() in {"mount", "findmnt", "findmnt -t"}:
+        kind = "plan"
+        if probe_executable("findmnt")["state"] != "installed":
+            status = "unavailable"
+            missing.append("findmnt")
+            notes.append("TOOL MISSING: findmnt; no mount table was observed.")
+        else:
+            specs.append(adapter_command("linux.filesystem.usage", "findmnt", ["findmnt", "--output", "TARGET,SOURCE,FSTYPE,SIZE,USED,AVAIL,USE%,OPTIONS", "--notruncate"], cwd, required="findmnt", explanation="Show the observed mount table without changing mounts."))
+            status = "planned"
+            notes.append("Read-only mount table inspection; no filesystem is mounted or unmounted.")
+    elif any(phrase in lower for phrase in ("block devices", "block device", "show partitions", "list partitions", "disk devices", "lsblk", "partition table", "disk layout", "show disks", "show disk")) or "fdisk" in lower or "parted" in lower:
+        kind = "plan"
+        if "fdisk" in lower or lower.strip() in {"fdisk -l", "fdisk -l full"}:
+            executable, argv, adapter_id = "fdisk", ["fdisk", "-l"], "linux.system.storage"
+        elif "parted" in lower or lower.strip() in {"parted -l"}:
+            executable, argv, adapter_id = "parted", ["parted", "-l"], "linux.system.storage"
+        else:
+            executable, argv, adapter_id = "lsblk", ["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT"], "linux.system.storage"
+        if probe_executable(executable)["state"] != "installed":
+            # A partition layout ask is still answerable from the observed block
+            # device table when lsblk exists. Only a literal fdisk/parted request
+            # stays unavailable rather than silently switching tools.
+            if executable != "lsblk" and probe_executable("lsblk")["state"] == "installed":
+                specs.append(adapter_command("linux.system.storage", "lsblk", ["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT"], cwd, required="lsblk", explanation="The requested partition tool is absent; lsblk lists observed block devices and mounts without changing storage."))
+                status = "planned"; missing.append(executable); notes.append(f"TOOL MISSING: {executable}; lsblk was used to read the observed block layout instead.")
+            else:
+                status = "unavailable"; missing.append(executable); notes.append(f"TOOL MISSING: {executable}; no block storage facts were observed.")
+        else:
+            specs.append(adapter_command(adapter_id, executable, argv, cwd, required=executable, explanation="List observed block devices, partitions, and mounts without changing storage."))
+            status = "planned"; notes.append("Read-only block storage inspection; no filesystem is mounted or modified.")
+    elif any(phrase in lower for phrase in ("usb devices", "usb", "show usb", "list usb")):
+        kind = "plan"
+        if probe_executable("lsusb")["state"] != "installed":
+            status = "unavailable"; missing.append("lsusb"); notes.append("TOOL MISSING: lsusb; no USB device facts were observed.")
+        else:
+            specs.append(adapter_command("linux.system.hardware", "lsusb", ["lsusb"], cwd, required="lsusb", explanation="List observed USB devices without changing device state."))
+            status = "planned"; notes.append("Read-only hardware inspection.")
+    elif any(phrase in lower for phrase in ("route table", "routing table", "show routes", "show route", "ip route", "list routes", "default gateway")) or lower.strip() in {"route"}:
+        kind = "plan"
+        if probe_executable("ip")["state"] != "installed":
+            status = "unavailable"; missing.append("ip"); notes.append("TOOL MISSING: ip; no routing table was observed.")
+        else:
+            specs.append(adapter_command("linux.network.routes", "ip", ["ip", "route", "show"], cwd, required="ip", explanation="Show the observed kernel routing table without changing routes."))
+            status = "planned"; notes.append("Read-only routing table inspection; no route is added, deleted, or changed.")
+    elif any(phrase in lower for phrase in ("firewall rules", "show firewall", "list firewall", "iptables", "nftables", "nft list", "nft ruleset")) or any(word in lower for word in ("firewall", "nft")):
+        kind = "plan"
+        if probe_executable("nft")["state"] == "installed":
+            executable, argv, adapter_id = "nft", ["nft", "list", "ruleset"], "linux.network.firewall"
+        elif probe_executable("iptables")["state"] == "installed":
+            executable, argv, adapter_id = "iptables", ["iptables", "-S"], "linux.network.firewall"
+        else:
+            executable, argv, adapter_id = None, [], None
+        if not executable:
+            status = "unavailable"; missing.extend([tool for tool in ("nft", "iptables") if probe_executable(tool)["state"] != "installed"]); notes.append("TOOL MISSING: nft/iptables were not found; no firewall rules were observed.")
+        else:
+            specs.append(adapter_command(adapter_id, executable, argv, cwd, required=executable, explanation="Show observed firewall rules without modifying any rule or chain."))
+            status = "planned"; notes.append("Read-only firewall ruleset inspection; no rule, chain, or policy is changed.")
+    elif any(phrase in lower for phrase in ("wifi networks", "wireless networks", "show wifi", "list wifi", "internet")) or any(word in lower for word in ("nmcli", "iw")):
+        kind = "plan"
+        if probe_executable("nmcli")["state"] == "installed":
+            executable, argv, adapter_id = "nmcli", ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"], "linux.network.wifi"
+        elif probe_executable("iw")["state"] == "installed":
+            executable, argv, adapter_id = "iw", ["iw", "dev", "wifi", "list"], "linux.network.wifi"
+        else:
+            executable, argv, adapter_id = None, [], None
+        if not executable:
+            status = "unavailable"; missing.extend([tool for tool in ("nmcli", "iw") if probe_executable(tool)["state"] != "installed"]); notes.append("TOOL MISSING: nmcli/iw were not found; no wireless facts were observed.")
+        else:
+            specs.append(adapter_command(adapter_id, executable, argv, cwd, required=executable, explanation="Show observed wireless interface/network facts without changing the radio or profiles."))
+            status = "planned"; notes.append("Read-only wireless inspection; no network is joined, disconnected, or changed.")
     elif parse_systemd_mutation(lower):
         action, unit, user_mode = parse_systemd_mutation(lower) or ("", "", False)
         kind = "systemd_mutation"
@@ -1509,11 +1798,22 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         authorization = "active engagement required"
         status = "unavailable"
         notes.append("ADAPTER NOT IMPLEMENTED: sqlmap/msfconsole remain catalog probes only. No command was created and no output was fabricated.")
-    elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl", "http headers", "web application", "enumerate the web", "scan ")):
+    elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl", "ping", "nslookup", "whois", "reachable", "reachability", "connectivity", "http headers", "web application", "enumerate the web", "scan ", "directory brute", "directory bust", "brute force director", "content discovery", "resolve", "traceroute", "trace route")) or re.search(r"\bdig\b", lower) or re.search(r"\b(?:is|are)\s+(?:[a-z0-9-]+\.)+[a-z]{2,}\s+(?:up|online|reachable|running|active|responding)\b", lower) or lower.strip() in {"host"}:
         kind = "authorized_engagement"
         risk = "high"
         authorization = "active engagement required"
-        tool = next((name for name in ("nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl") if name in lower), "nmap")
+        tool = next((name for name in ("nslookup", "dig", "whois", "nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl", "ping", "traceroute") if name in lower), None)
+        if not tool:
+            if "resolve" in lower:
+                tool = "nslookup"
+            elif "trace route" in lower or "traceroute" in lower:
+                tool = "traceroute"
+            elif any(word in lower for word in ("reachable", "reachability", "connectivity", "ping")) or re.search(r"\b(?:is|are)\s+\S+\s+(?:up|online|reachable|running|active|responding)\b", lower):
+                tool = "ping"
+            elif any(word in lower for word in ("directory brute", "directory bust", "brute force director", "content discovery")):
+                tool = "gobuster"
+            else:
+                tool = "nmap"
         targets = re.findall(r"https?://[^\s,]+|\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b", request)
         if offline:
             status = "unavailable"
@@ -1554,6 +1854,9 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 notes.append(f"TOOL MISSING: {tool}. The host probe found no executable; no scan output exists.")
             else:
                 network_facts = resolve_targets(normalized)
+                adapter_id = None
+                explanation = ""
+                args = []
                 if network_facts["state"] != "observed":
                     status = "unavailable"
                     notes.append("Target DNS resolution was not observed; no network command was created.")
@@ -1582,6 +1885,35 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                     args = ["curl", "--fail", "--silent", "--show-error", "--max-time", "15", "--dump-header", "-", "--output", "/dev/null", normalized[0]]
                     adapter_id = "security.http.headers"
                     explanation = "Inspect real HTTP response headers without following redirects; any Location target requires a fresh scope check."
+                elif tool == "ping":
+                    if any("/" in target for target in normalized):
+                        raise PolicyError("ping accepts one hostname or IP inside scope; a CIDR is not supported")
+                    if len(normalized) > 1:
+                        raise PolicyError("ping adapter accepts exactly one scoped host; use a fresh plan for additional targets")
+                    args = ["ping", "-c", "2", "-W", "2", normalized[0]]
+                    adapter_id = "linux.network.ping"
+                    explanation = "Send two bounded ICMP echo requests to the exact scoped host; no sweep or continuous stream is used."
+                elif tool in {"nslookup", "dig"}:
+                    if len(normalized) > 1:
+                        raise PolicyError("DNS lookup accepts one scoped hostname at a time")
+                    lookup = normalized[0]
+                    if "/" in lookup or lookup.startswith(("http://", "https://")):
+                        raise PolicyError("DNS lookup requires a bare hostname or IP inside scope")
+                    if tool == "nslookup":
+                        args = ["nslookup", "-timeout=5", "-retry=1", lookup]
+                    else:
+                        args = ["dig", "+short", "+time=5", "+tries=1", lookup]
+                    adapter_id = "linux.network.dns"
+                    explanation = "Perform one bounded DNS query for the exact scoped host; no zone transfer, brute force, or recursive enumeration is attempted."
+                elif tool == "whois":
+                    if len(normalized) > 1:
+                        raise PolicyError("whois accepts one scoped domain or IP at a time")
+                    registry = normalized[0]
+                    if "/" in registry or registry.startswith(("http://", "https://")):
+                        raise PolicyError("whois requires a bare domain or IP inside scope")
+                    args = ["whois", "-H", registry]
+                    adapter_id = "linux.network.whois"
+                    explanation = "Perform one bounded registry lookup for the exact scoped domain or IP; no WHOIS server brute force is attempted."
                 else:
                     try:
                         scanners = _load("security.scanners")
@@ -1589,9 +1921,16 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                         scanners = None
                     proposal = scanners.build_scan(tool, normalized, request) if scanners else {"ok": False, "reason": f"ADAPTER NOT IMPLEMENTED: {tool}; no command was created."}
                     if proposal.get("ok"):
-                        args = list(proposal["argv"])
-                        adapter_id = proposal["adapter_id"]
-                        explanation = proposal["explanation"]
+                        proposed_args = list(proposal.get("argv") or [])
+                        proposed_adapter = proposal.get("adapter_id")
+                        if not proposed_adapter or not proposed_args:
+                            status = "unavailable"
+                            notes.append(f"Scanner returned an incomplete proposal for {tool}; no command was created.")
+                            adapter_id = None
+                        else:
+                            args = proposed_args
+                            adapter_id = proposed_adapter
+                            explanation = proposal.get("explanation") or ""
                     else:
                         status = "unavailable"
                         if proposal.get("missing"):
@@ -1602,7 +1941,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                     specs.append(adapter_command(adapter_id, tool, args, cwd, required=tool, scope=normalized, explanation=explanation))
                     status = "planned"
                 notes += ["This is active authorized assessment, not a generic shell command.", "Targets, DNS, redirects, limits, and engagement expiry must be checked again at execution."]
-    elif any(phrase in lower for phrase in ("ip address", "network interface", "show interfaces", "list interfaces")) or lower.strip() in {"ip addr", "ip address"}:
+    elif any(phrase in lower for phrase in ("ip address", "network interface", "show interfaces", "list interfaces", "network config", "check my network", "what is my ip", "my ip address", "show ip")) or lower.strip() in {"ip addr", "ip address"}:
         kind = "network_interfaces"
         if probe_executable("ip")["state"] != "installed":
             status = "unavailable"; missing.append("ip"); notes.append("TOOL MISSING: ip; no interface facts were observed.")
@@ -1616,13 +1955,41 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             specs.append(adapter_command("linux.system.clock", "date", ["date", "--iso-8601=seconds"], cwd, required="date", explanation="Report the host clock as observed."))
             status = "planned"; notes.append("Read-only clock observation.")
-    elif any(phrase in lower for phrase in ("os-release", "what distro", "which distro", "linux distribution", "os release")):
+    elif any(phrase in lower for phrase in ("kernel modules", "loaded modules", "lsmod", "dmesg", "show dmesg", "kernel ring buffer", "pci devices", "show pci")) or lower.strip() in {"lsmod", "dmesg", "lspci"}:
+        kind = "plan"
+        if "pci" in lower or lower.strip() == "lspci":
+            executable = "lspci"
+            if probe_executable(executable)["state"] != "installed":
+                status = "unavailable"; missing.append("lspci"); notes.append("TOOL MISSING: lspci; no PCI device facts were observed.")
+            else:
+                specs.append(adapter_command("linux.system.hardware", "lspci", ["lspci", "-mm"], cwd, required="lspci", explanation="List observed PCI devices without changing device state."))
+                status = "planned"; notes.append("Read-only PCI inspection.")
+        elif "dmesg" in lower or "ring buffer" in lower:
+            executable = "dmesg"
+            if probe_executable(executable)["state"] != "installed":
+                status = "unavailable"; missing.append("dmesg"); notes.append("TOOL MISSING: dmesg; no kernel ring buffer was observed.")
+            else:
+                specs.append(adapter_command("linux.system.health", "dmesg", ["dmesg", "--nopager", "--level=err,warn"], cwd, required="dmesg", explanation="Read the observed kernel ring buffer warning and error lines without changing kernel state."))
+                status = "planned"; notes.append("Read-only bounded dmesg inspection.")
+        else:
+            if Path("/proc/modules").is_file() and probe_executable("cat")["state"] == "installed":
+                specs.append(adapter_command("linux.filesystem.read", "cat", ["cat", "/proc/modules"], cwd, required="cat", explanation="Read the observed kernel module list from /proc/modules without loading or unloading any module."))
+                status = "planned"; notes.append("Read-only kernel module list.")
+            else:
+                status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: /proc/modules was not readable; no kernel module list was observed.")
+        if not specs and status != "unavailable":
+            status = "clarified"
+    elif any(word in lower for word in ("os-release", "os release", "distro", "distribution", "kernel")) or any(phrase in lower for phrase in ("show os", "what os", "which os", "linux version")) or lower.strip() in {"os", "uname", "uname -a"}:
         kind = "os_release"
         if probe_executable("cat")["state"] != "installed" or not Path("/etc/os-release").is_file():
             status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cannot observe /etc/os-release.")
         else:
-            specs.append(adapter_command("linux.system.os-release", "cat", ["cat", "/etc/os-release"], cwd, required="cat", explanation="Read the observed /etc/os-release file only."))
-            status = "planned"; notes.append("Read-only distribution identification. No packages are changed.")
+            if lower.strip() == "uname -a" or "kernel" in lower or lower.strip() in {"uname"}:
+                specs.append(adapter_command("linux.system.health", "uname", ["uname", "-a"], cwd, required="uname", explanation="Identify the running kernel and architecture."))
+                status = "planned"; notes.append("Read-only kernel and architecture identification.")
+            else:
+                specs.append(adapter_command("linux.system.os-release", "cat", ["cat", "/etc/os-release"], cwd, required="cat", explanation="Read the observed /etc/os-release file only."))
+                status = "planned"; notes.append("Read-only distribution identification. No packages are changed.")
     elif "lscpu" in lower or "cpu details" in lower or "processor details" in lower:
         kind = "cpu"
         if probe_executable("lscpu")["state"] != "installed":
@@ -1630,7 +1997,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             specs.append(adapter_command("linux.system.cpu", "lscpu", ["lscpu"], cwd, required="lscpu", explanation="Report observed CPU topology from the host."))
             status = "planned"; notes.append("Read-only processor inspection.")
-    elif any(word in lower for word in ("port", "listen", "socket")):
+    elif any(word in lower for word in ("port", "listen", "socket")) or lower.strip().startswith("ss -") or lower.strip() in {"ss", "ss -lntup", "ss -lntpn", "ss -lntn", "ss -tulpn"}:
         if probe_executable("ss")["state"] != "installed":
             status = "unavailable"; missing.append("ss"); notes.append("TOOL MISSING: ss. Install instructions may be shown separately; no socket facts were observed.")
         else:
@@ -1653,7 +2020,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 adapter_command("linux.systemd.inspect", "journalctl", [*journal_prefix, "-u", unit, "-n", "80", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation=f"Read the last bounded {('user ' if user_mode else '')}journal lines for {unit}; no service mutation is requested."),
             ])
             status = "planned"; notes.append("Read-only systemd and journal inspection. Restart/enable/disable require a separate fresh plan and confirmation.")
-    elif any(word in lower for word in ("whoami", "who am i", "current user", "hostname")) or lower.strip() in {"pwd", "id"}:
+    elif any(word in lower for word in ("whoami", "who am i", "who am", "current user", "hostname", "username", "user name", "pwd", "working directory", "current directory", "present working directory", "uid", "gid", "groups", "group id", "user id")) or lower.strip() in {"pwd", "id"}:
         kind = "identity"
         catalog = [
             ("whoami", ["whoami"], "Report the current user name."),
@@ -1661,7 +2028,18 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             ("hostname", ["hostname"], "Report the local hostname."),
             ("pwd", ["pwd"], "Report the working directory."),
         ]
-        wanted = {lower.strip()} if lower.strip() in {"whoami", "id", "pwd", "hostname"} else {item[0] for item in catalog}
+        if lower.strip() in {"whoami", "pwd", "hostname"}:
+            wanted = {lower.strip()}
+        elif lower.strip() == "id" or re.search(r"\b(?:uid|gid|groups|user id|group id)\b", lower):
+            wanted = {"id"}
+        elif "hostname" in lower or "host name" in lower or "host-name" in lower or "computer name" in lower:
+            wanted = {"hostname"}
+        elif "pwd" in lower or "working directory" in lower or "current directory" in lower or "present working directory" in lower:
+            wanted = {"pwd"}
+        elif any(phrase in lower for phrase in ("who am i", "whoami", "current user", "user name", "username", "my user")):
+            wanted = {"whoami"}
+        else:
+            wanted = set()
         for executable, argv, explanation in catalog:
             if executable not in wanted:
                 continue
@@ -1671,34 +2049,285 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 missing.append(executable)
         status = "planned" if specs else "unavailable"
         notes.append("Read-only identity facts from the local host.")
-    elif lower.strip() in {"ls", "list files", "list directory"} or any(phrase in lower for phrase in ("list files", "list the directory", "show files in")):
-        kind = "filesystem_list"
-        if probe_executable("ls")["state"] != "installed":
-            status = "unavailable"; missing.append("ls"); notes.append("TOOL MISSING: ls; no directory listing was observed.")
+    elif any(phrase in lower for phrase in ("who is logged in", "logged in users", "show logged in", "list logged in", "login history", "who has logged in")) or lower.strip() in {"who", "w", "last", "last -n 20"}:
+        kind = "plan"
+        if lower.strip() in {"last", "last -n 20"} or "login history" in lower or "who has logged" in lower:
+            executable, argv, text = "last", ["last", "-n", "20"], "Report the observed bounded login history."
         else:
-            specs.append(adapter_command("linux.filesystem.list", "ls", ["ls", "-la", str(cwd)], cwd, required="ls", explanation="List files in the current working-directory scope only."))
+            executable, argv, text = "who", ["who"], "Report currently logged-in sessions from the host."
+        if probe_executable(executable)["state"] != "installed":
+            status = "unavailable"; missing.append(executable); notes.append(f"TOOL MISSING: {executable}; no login session facts were observed.")
+        else:
+            specs.append(adapter_command("linux.system.login", executable, argv, cwd, required=executable, explanation=text))
+            status = "planned"; notes.append("Read-only login session inspection; no session is terminated or altered.")
+    elif lower.strip().startswith(("show file ", "read file ", "cat ", "view ")) or (any(phrase in lower for phrase in ("show file ", "read file ", "open file ", "cat ")) and "/" in lower):
+        kind = "filesystem_read"
+        raw_match = re.search(r"(?:show|read|open|view|cat)\s+(?:file\s+)?(/[^\s;]+)", lower)
+        if not raw_match:
+            status = "clarified"; notes.append("Tell Vortex the absolute path of the text file to read.")
+        else:
+            candidate = safe_file_target(raw_match.group(1))
+            directory = safe_directory_target(raw_match.group(1)) if candidate is None else None
+            if candidate is None and directory is None:
+                status = "clarified"; notes.append("Vortex only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
+            elif candidate is not None and probe_executable("cat")["state"] != "installed":
+                status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cat; the requested file was not read.")
+            elif candidate is not None:
+                specs.append(adapter_command("linux.filesystem.read", "cat", ["cat", str(candidate)], cwd, required="cat", explanation=f"Read the observed regular text file {candidate} only; it is not modified."))
+                status = "planned"; notes.append("Bounded read-only file inspection; secret-key and credential files are refused.")
+            elif probe_executable("ls")["state"] != "installed":
+                status = "unavailable"; missing.append("ls"); notes.append("TOOL MISSING: ls; no directory listing was observed.")
+            else:
+                kind = "filesystem_list"
+                specs.append(adapter_command("linux.filesystem.list", "ls", ["ls", "-la", str(directory)], cwd, required="ls", explanation=f"List files in {directory} only."))
+                status = "planned"; notes.append("Read-only directory listing; no files are modified.")
+    elif re.search(r"\b(?:show|read|open|display)\s+(/[^\s;]+)", lower):
+        match = re.search(r"\b(?:show|read|open|display)\s+(/[^\s;]+)", lower)
+        target = match.group(1) if match else ""
+        candidate = safe_file_target(target) if target else None
+        directory = safe_directory_target(target) if target and candidate is None else None
+        if candidate is not None:
+            kind = "filesystem_read"
+            if probe_executable("cat")["state"] != "installed":
+                status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cat; the requested file was not read.")
+            else:
+                specs.append(adapter_command("linux.filesystem.read", "cat", ["cat", str(candidate)], cwd, required="cat", explanation=f"Read the observed regular text file {candidate} only; it is not modified."))
+                status = "planned"; notes.append("Bounded read-only file inspection; secret-key and credential files are refused.")
+        elif directory is not None:
+            kind = "filesystem_list"
+            if probe_executable("ls")["state"] != "installed":
+                status = "unavailable"; missing.append("ls"); notes.append("TOOL MISSING: ls; no directory listing was observed.")
+            else:
+                specs.append(adapter_command("linux.filesystem.list", "ls", ["ls", "-la", str(directory)], cwd, required="ls", explanation=f"List files in {directory} only."))
+                status = "planned"; notes.append("Read-only directory listing; no files are modified.")
+        else:
+            kind = "path"
+            status = "clarified"; notes.append("Provide an existing absolute file or directory path under a reviewed read root.")
+    elif lower.strip() in {"ls", "list files", "list directory", "list all files", "show all files"} or any(phrase in lower for phrase in ("list files", "list the directory", "show files in", "show all files", "list all files", "home directory", "my home directory", "list home")) or re.search(r"\b(?:show|list)\s+(?:all\s+)?files\s+in\s+[^\s]+", lower) or re.search(r"^\s*list\s+(?:the\s+)?(?:contents\s+of\s+)?(/[^\s]*)", lower):
+        kind = "filesystem_list"
+        target = cwd
+        if "home directory" in lower or re.search(r"\bmy\s+home\b", lower) or re.search(r"\blist\s+home\b", lower):
+            home = Path(os.path.expanduser("~")).resolve(strict=False)
+            if home.is_dir():
+                target = home
+        elif re.search(r"\b(?:show|list)\s+(?:all\s+)?files\s+in\s+([^\s]+)", lower):
+            match = re.search(r"\b(?:show|list)\s+(?:all\s+)?files\s+in\s+([^\s]+)", lower)
+            target = safe_directory_target(match.group(1)) if match else None
+            if target is None:
+                status = "clarified"; notes.append("Provide an existing, non-sensitive directory path.")
+        elif re.search(r"\b(?:show|list)\s+(?:the\s+)?directory\s+(/|~)", lower):
+            match = re.search(r"\b(?:show|list)\s+(?:the\s+)?directory\s+([^\s]+)", lower)
+            if match:
+                target = safe_directory_target(match.group(1))
+            if target is None:
+                status = "clarified"; notes.append("Provide an existing, non-sensitive directory path.")
+        elif re.search(r"^\s*list\s+(?:the\s+)?(?:contents\s+of\s+)?(/[^\s]*)", lower):
+            match = re.search(r"^\s*list\s+(?:the\s+)?(?:contents\s+of\s+)?(/[^\s]*)", lower)
+            target = safe_directory_target(match.group(1)) if match else None
+            if target is None:
+                status = "clarified"; notes.append("Provide an existing directory path.")
+        if target is not None and probe_executable("ls")["state"] != "installed":
+            status = "unavailable"; missing.append("ls"); notes.append("TOOL MISSING: ls; no directory listing was observed.")
+        elif target is not None:
+            specs.append(adapter_command("linux.filesystem.list", "ls", ["ls", "-la", str(target)], cwd, required="ls", explanation=f"List files in {target} only."))
             status = "planned"; notes.append("Read-only directory listing; no files are modified.")
-    elif any(word in lower for word in ("process list", "running processes", "list processes")) or lower.strip() in {"ps", "show processes"}:
+    elif any(word in lower for word in ("process list", "running processes", "list processes", "top processes", "show processes", "process tree", "child process", "processes by", "cpu processes", "memory processes", "my processes", "zombie processes", "thread count", "number of processes", "how many processes", "show pids", "list pids", "all pids", "process 1", "usage for process", "process usage", "process memory", "process cpu")) or lower.strip() in {"ps", "ps -ef", "ps aux", "pstree"}:
         kind = "processes"
         if probe_executable("ps")["state"] != "installed":
             status = "unavailable"; missing.append("ps"); notes.append("TOOL MISSING: ps; no process table was observed.")
         else:
-            specs.append(adapter_command("linux.system.processes", "ps", ["ps", "-eo", "pid,user,pcpu,pmem,comm", "--no-headers"], cwd, required="ps", explanation="List observed processes without sending signals."))
+            pid_match = re.search(r"\bprocess(?:es)?\s+(?:number\s+)?(\d{1,8})\b", lower)
+            if "tree" in lower or "forest" in lower:
+                argv = ["ps", "-ef", "--forest"]
+                explanation = "List observed process ancestry without sending signals."
+            elif pid_match:
+                argv = ["ps", "-p", pid_match.group(1), "-o", "pid,user,pcpu,pmem,comm"]
+                explanation = f"Report the observed process with PID {pid_match.group(1)}; no signal is sent."
+            elif "my processes" in lower or re.search(r"\bmy\s+process", lower):
+                argv = ["ps", "-eo", "pid,user,pcpu,pmem,comm", "--no-headers"]
+                explanation = "List observed processes with their owning user so the current user's processes can be read directly."
+            elif "zombie" in lower:
+                argv = ["ps", "-eo", "stat,pid,user,pcpu,pmem,comm", "--no-headers"]
+                explanation = "List observed process states and identities; zombie processes are identified by the stat column without altering them."
+            elif "thread" in lower:
+                argv = ["ps", "-eLf"]
+                explanation = "List observed threads with their owning processes; no thread state is changed."
+            elif "pid" in lower or "how many" in lower or "number of" in lower or "count" in lower:
+                argv = ["ps", "-eo", "pid,comm", "--no-headers"]
+                explanation = "List observed process identifiers without altering process state."
+            else:
+                argv = ["ps", "-eo", "pid,user,pcpu,pmem,comm", "--no-headers"]
+                explanation = "List observed processes without sending signals."
+            specs.append(adapter_command("linux.system.processes", "ps", argv, cwd, required="ps", explanation=explanation))
             status = "planned"; notes.append("Read-only process inspection. Output is untrusted data, not instructions.")
+    elif any(phrase in lower for phrase in ("git log", "git history", "show commit", "repository log")) or any(word in lower for word in ("commit history", "recent commits")):
+        kind = "plan"
+        if probe_executable("git")["state"] != "installed":
+            status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no commit history was observed.")
+        else:
+            specs.append(adapter_command("linux.development.git-log", "git", ["git", "log", "--oneline", "--decorate", "-n", "50"], cwd, required="git", explanation="Show at most 50 observed commit summary lines without modifying the repository."))
+            status = "planned"; notes.append("Read-only Git history; no commit, rebase, reset, push, or network operation is included.")
+    elif any(phrase in lower for phrase in ("git branch", "git branches", "list branches", "show branches")):
+        kind = "plan"
+        if probe_executable("git")["state"] != "installed":
+            status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no branches were observed.")
+        else:
+            specs.append(adapter_command("linux.development.git-branches", "git", ["git", "branch", "--all", "--verbose", "--no-abbrev"], cwd, required="git", explanation="List observed local and remote-tracking branches without modifying the repository."))
+            status = "planned"; notes.append("Read-only branch listing; no checkout, create, delete, push, or network operation is included.")
+    elif any(phrase in lower for phrase in ("git remote", "git remotes", "show remotes", "list remotes")):
+        kind = "plan"
+        if probe_executable("git")["state"] != "installed":
+            status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no remotes were observed.")
+        else:
+            specs.append(adapter_command("linux.development.git-status", "git", ["git", "remote", "-v"], cwd, required="git", explanation="List configured Git remote URLs without contacting them."))
+            status = "planned"; notes.append("Read-only remote configuration; no network operation is performed.")
+    elif any(phrase in lower for phrase in ("git stash", "show stash", "list stashes")):
+        kind = "plan"
+        if probe_executable("git")["state"] != "installed":
+            status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no stashes were observed.")
+        else:
+            specs.append(adapter_command("linux.development.git-status", "git", ["git", "stash", "list"], cwd, required="git", explanation="List observed Git stash entries without applying, dropping, or popping any stash."))
+            status = "planned"; notes.append("Read-only stash listing; no stash is applied, popped, dropped, or modified.")
+    elif any(phrase in lower for phrase in ("git diff", "repository diff", "show diff", "working tree diff")) or ("changeset" in lower and "git" in lower):
+        kind = "plan"
+        if probe_executable("git")["state"] != "installed":
+            status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no diff was observed.")
+        else:
+            specs.append(adapter_command("linux.development.git-diff", "git", ["git", "diff", "--stat", "--patch", "--color=never"], cwd, required="git", explanation="Show the observed working-tree diff without staging, committing, or modifying files."))
+            status = "planned"; notes.append("Read-only unified diff; no file is changed by the observation.")
     elif any(word in lower for word in ("git status", "repository status", "git hygiene", "check my repo")):
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no repository state was observed.")
         else:
             specs.append(adapter_command("linux.development.git-status", "git", ["git", "status", "--short", "--branch"], cwd, required="git", explanation="Show the current branch and working-tree changes without modifying the repository."))
             status = "planned"; notes.append("Read-only Git status; no hooks, checkout, reset, clean, push, or network operation is included.")
-    elif any(word in lower for word in ("disk", "space", "large file", "cache")):
-        specs.append(adapter_command("linux.filesystem.usage", "df", ["df", "-h", str(cwd)], cwd, required="df", explanation="Show human-readable filesystem capacity for the current scope."))
-        specs.append(adapter_command("linux.filesystem.usage", "du", ["du", "-x", "-h", "-d", "1", str(cwd)], cwd, required="du", explanation="Measure immediate directory usage on the same filesystem; it does not delete anything."))
-        status = "planned" if all(x["tool_state_at_plan"] == "ready" for x in specs) else "unavailable"
-        if status == "unavailable":
-            missing = [x["required_tool"] for x in specs if x["tool_state_at_plan"] != "ready"]
-        notes += ["Read-only disk inspection. Cleanup is not bundled into a discovery plan.", "No files are removed or moved by these commands."]
-    elif any(word in lower for word in ("system", "health", "cpu", "memory", "ram", "diagnos", "kernel")):
+    elif any(word in lower for word in ("disk", "space", "large file", "cache", "inode", "filesystem")) or any(phrase in lower for phrase in ("mounted filesystems", "mounted filesystem", "show mounts", "list mounts")) or lower.strip() in {"df", "df -h", "df -hT", "du"}:
+        kind = "plan"
+        if "du" in lower or re.search(r"\bdirectory\s+usage\b", lower):
+            if probe_executable("du")["state"] != "installed":
+                status = "unavailable"; missing.append("du"); notes.append("TOOL MISSING: du; no directory usage was observed.")
+            else:
+                specs.append(adapter_command("linux.filesystem.usage", "du", ["du", "-x", "-h", "-d", "1", str(cwd)], cwd, required="du", explanation="Measure immediate directory usage on the same filesystem; it does not delete anything."))
+                status = "planned"
+            notes.append("Read-only directory usage; no files are removed or moved.")
+        else:
+            if probe_executable("df")["state"] != "installed":
+                status = "unavailable"; missing.append("df"); notes.append("TOOL MISSING: df; no filesystem capacity was observed.")
+            else:
+                specs.append(adapter_command("linux.filesystem.usage", "df", ["df", "-hT"], cwd, required="df", explanation="Show human-readable filesystem capacity and types for observed mounts."))
+                status = "planned"
+            notes.append("Read-only filesystem capacity inspection. No files are removed or moved; cleanup is not bundled into a discovery plan.")
+    elif any(phrase in lower for phrase in ("list units", "list services", "show services", "all services", "systemd units", "unit files", "which services are running", "what services are running", "running services", "running service", "service list", "all units", "service units", "loaded units", "failed services", "failed units", "inactive services", "active services")):
+        kind = "plan"
+        user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", lower))
+        context = detect_context()
+        user_bus_available = context.get("systemd_context", {}).get("user_bus", {}).get("state") == "available"
+        systemd_available = user_bus_available if user_mode else context["systemd"]
+        if not systemd_available or probe_executable("systemctl")["state"] != "installed":
+            status = "unavailable"
+            missing.append("systemd-user-bus" if user_mode else "systemd")
+            notes.append("The requested systemd context is not usable; no unit listing was created.")
+        else:
+            prefix = ["systemctl", "--user"] if user_mode else ["systemctl"]
+            unit_flags = ["--type=service"]
+            if "failed" in lower:
+                unit_flags.append("--state=failed")
+            specs.append(adapter_command("linux.systemd.inspect", "systemctl", [*prefix, "list-units", *unit_flags, "--all", "--no-pager"], cwd, required="systemctl", explanation="List observed systemd service units without changing their state."))
+            status = "planned"
+            notes.append("Read-only systemd unit listing. No service is started, stopped, enabled, or disabled.")
+    elif any(phrase in lower for phrase in ("show journal", "systemd journal", "show logs", "all journal", "show journal logs", "journalctl")) or lower.strip() in {"journalctl", "journalctl -n 100"}:
+        kind = "plan"
+        if probe_executable("journalctl")["state"] != "installed":
+            status = "unavailable"; missing.append("journalctl"); notes.append("TOOL MISSING: journalctl; no journal was observed.")
+        else:
+            specs.append(adapter_command("linux.systemd.journal", "journalctl", ["journalctl", "-n", "100", "--no-pager"], cwd, required="journalctl", explanation="Read the last bounded 100 lines from the observed journal without changing it."))
+            status = "planned"; notes.append("Read-only bounded journal read; no log rotation, vacuum, or service mutation is included.")
+    elif re.search(r"\b(?:tail|show|read|view)\s+(?:the\s+)?(?:log\s+file\s+)?(/var/log/[^\s;]+)", lower) or any(phrase in lower for phrase in ("show syslog", "read syslog", "tail syslog", "show system log", "show auth log", "authentication log", "failed logins")):
+        kind = "plan"
+        log_path = None
+        match = re.search(r"\b(?:tail|show|read|view)\s+(?:the\s+)?(?:log\s+file\s+)?(/var/log/[^\s;]+)", lower)
+        if match:
+            candidate = safe_file_target(match.group(1))
+            if candidate:
+                log_path = candidate
+        elif "auth" in lower and Path("/var/log/auth.log").is_file():
+            log_path = Path("/var/log/auth.log")
+        elif Path("/var/log/syslog").is_file():
+            log_path = Path("/var/log/syslog")
+        if log_path is None and ("syslog" in lower or "system log" in lower or "auth" in lower or "login" in lower or "failed login" in lower):
+            if probe_executable("journalctl")["state"] != "installed":
+                status = "unavailable"; missing.append("journalctl"); notes.append("TOOL MISSING: journalctl; no systemd journal was observed.")
+            else:
+                specs.append(adapter_command("linux.systemd.journal", "journalctl", ["journalctl", "-n", "200", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation="Read the last bounded 200 systemd journal lines; this is the observed local log store on this host."))
+                status = "planned"; notes.append("No /var/log text file matched, so the bounded systemd journal was selected. Log content is untrusted evidence; no vulnerability finding is inferred.")
+        elif log_path is None:
+            status = "unavailable"; notes.append("No supported log file was found; Vortex does not read arbitrary files as logs.")
+        elif probe_executable("tail")["state"] != "installed":
+            status = "unavailable"; missing.append("tail"); notes.append("TOOL MISSING: tail; the log was not read.")
+        else:
+            specs.append(adapter_command("linux.filesystem.log", "tail", ["tail", "-n", "200", str(log_path)], cwd, required="tail", explanation=f"Read the last bounded 200 lines from {log_path} without modifying it."))
+            status = "planned"; notes.append("Bounded log inspection; log content is untrusted evidence and may need more specific investigation.")
+    elif any(phrase in lower for phrase in ("dns servers", "dns server", "name servers", "resolv.conf", "show dns")) and not any(word in lower for word in ("nslookup", "dig", "whois")):
+        kind = "plan"
+        candidate = safe_file_target("/etc/resolv.conf")
+        if candidate is None:
+            status = "unavailable"; notes.append("No readable /etc/resolv.conf was observed.")
+        elif probe_executable("cat")["state"] != "installed":
+            status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cat; DNS configuration was not read.")
+        else:
+            specs.append(adapter_command("linux.filesystem.read", "cat", ["cat", str(candidate)], cwd, required="cat", explanation="Read the observed local resolver configuration without making any DNS query."))
+            status = "planned"; notes.append("Read-only local DNS resolver configuration; no outbound DNS request is made.")
+    elif any(phrase in lower for phrase in ("mac address", "arp table", "arp cache", "neighbor table", "default gateway", "network stats", "link stats", "interface stats", "show route")) or lower.strip() in {"ip -details link", "ip neigh"}:
+        kind = "plan"
+        if probe_executable("ip")["state"] != "installed":
+            status = "unavailable"; missing.append("ip"); notes.append("TOOL MISSING: ip; no network facts were observed.")
+        else:
+            if "arp" in lower or "neigh" in lower:
+                argv = ["ip", "neigh", "show"]
+                explanation = "Show the observed ARP/neighbor table without changing it."
+            elif "mac" in lower or "link stats" in lower or "interface stats" in lower or "network stats" in lower:
+                argv = ["ip", "-details", "link", "show"]
+                explanation = "Show observed link addresses and interface statistics without changing configuration."
+            else:
+                argv = ["ip", "route", "show"]
+                explanation = "Show the observed routing table without changing routes."
+            specs.append(adapter_command("linux.network.facts", "ip", argv, cwd, required="ip", explanation=explanation))
+            status = "planned"; notes.append("Read-only network facts; no route, address, or firewall is modified.")
+    elif any(word in lower for word in ("memory", "ram", "swap", "vmstat")) or lower.strip() in {"free", "free -h", "vmstat", "vmstat -s"}:
+        kind = "plan"
+        candidates = [("free", ["free", "-h"], "Report physical, swap, and cache counters from the host.")]
+        if "vmstat" in lower:
+            candidates.insert(0, ("vmstat", ["vmstat", "-s"], "Report observed virtual-memory statistics from the host."))
+        for executable, argv, explanation in candidates:
+            if probe_executable(executable)["state"] == "installed":
+                specs.append(adapter_command("linux.system.health", executable, argv, cwd, required=executable, explanation=explanation))
+            else:
+                missing.append(executable)
+        status = "planned" if specs else "unavailable"
+        notes.append("Read-only memory and swap facts observed from the host.")
+    elif any(word in lower for word in ("cpu", "processor")) or lower.strip() == "lscpu":
+        kind = "plan"
+        candidates = [
+            ("lscpu", ["lscpu"], "Report observed processor model, cores, and flags."),
+            ("uptime", ["uptime"], "Report observed system load averages."),
+        ]
+        for executable, argv, explanation in candidates:
+            if probe_executable(executable)["state"] == "installed":
+                specs.append(adapter_command("linux.system.health", executable, argv, cwd, required=executable, explanation=explanation))
+            else:
+                missing.append(executable)
+        status = "planned" if specs else "unavailable"
+        notes.append("Read-only processor and load facts; no load generation or benchmark is included.")
+    elif any(word in lower for word in ("uptime", "load average", "loadavg", "load")) or lower.strip() == "uptime":
+        kind = "plan"
+        if probe_executable("uptime")["state"] == "installed":
+            specs.append(adapter_command("linux.system.health", "uptime", ["uptime"], cwd, required="uptime", explanation="Report observed uptime and load averages from the host."))
+            status = "planned"
+        else:
+            status = "unavailable"; missing.append("uptime")
+        notes.append("Read-only uptime and load average facts.")
+    elif any(word in lower for word in ("system", "health", "diagnos", "kernel")) or lower.strip() in {"uname", "df"}:
+        kind = "plan"
         for executable, argv, explanation in [
             ("uname", ["uname", "-a"], "Identify the running kernel and architecture."),
             ("uptime", ["uptime"], "Report observed uptime and load averages."),
@@ -1711,6 +2340,24 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 missing.append(executable)
         status = "planned" if specs else "unavailable"
         notes += ["Deterministic local diagnostic mode is active; no model or network is required.", "Facts are probed only after approval and will be labelled observed in the analysis."]
+    elif re.search(r"\b(?:cd|change\s+directory|chdir)\b", lower) or re.search(r"\b(?:touch|create|rm|rmdir|mkdir|mv|cp|find)\b", lower):
+        kind = "filesystem_mutation"
+        risk = "medium"
+        authorization = "operator-controlled filesystem operation"
+        status = "rejected"
+        notes.append("Vortex does not create, delete, move, copy, or search the host filesystem from a natural-language ask; the reviewed plan engine only issues bounded read-only adapters.")
+        notes.append("Use the PTY terminal session for an interactive shell, or create an explicit operator-controlled plan with the exact path and operation scope.")
+    elif re.search(r"\b(?:show|view|display)\s+[A-Za-z0-9_-]+(?:https?)?\s+config\b", lower) or re.search(r"\b(?:show|read|view)\s+config(?:uration)?\s+(?:for|of|in)?\s*[A-Za-z0-9_-]+\b", lower):
+        kind = "config_file_request"
+        status = "clarified"
+        notes.append("Vortex reads configuration files only when given an exact safe absolute path. Provide e.g. /etc/nginx/nginx.conf.")
+    elif re.search(r"\b(?:apt-get\s+update|update\s+apt|apt\s+update)\b", lower):
+        kind = "package_index_update"
+        risk = "medium"
+        authorization = "operator-controlled package index refresh"
+        status = "rejected"
+        notes.append("Vortex does not refresh the apt package index from a natural-language ask; it refuses silent third-party repository or network trust changes.")
+        notes.append("Use the PTY terminal session for an operator-controlled apt-get update, or create an explicit reviewed plan.")
     else:
         kind = "abstain"
         status = "clarified"
@@ -2293,6 +2940,22 @@ def capabilities_document() -> dict[str, Any]:
     }
 
 
+def cancel_task_operation(executor: ExecutionManager, task: dict[str, Any] | None) -> bool:
+    """Cancel a live operation before a task is restarted, resumed, or deleted.
+
+    Task lifecycle actions should never leave a running PTY/process group
+    orphaned while a second task is created or the row is removed. ``cancel``
+    is idempotent: an already-finished operation simply returns False.
+    """
+    operation_id = (task or {}).get("operation_id")
+    if not operation_id:
+        return False
+    try:
+        return bool(executor.cancel(operation_id))
+    except Exception:
+        return False
+
+
 class VortexHandler(BaseHTTPRequestHandler):
     store: Store
     executor: ExecutionManager
@@ -2318,9 +2981,23 @@ class VortexHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "null")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Vortex-Token")
 
+    def _write(self, raw: bytes) -> None:
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # The client closed its request early (e.g. browser timeout while
+            # aggregate probes ran). The handler must exit quietly instead of
+            # surfacing a crash trace as a failed sidecar response.
+            return
+        except OSError as exc:
+            import errno as _errno
+            if exc.errno in (_errno.EPIPE, _errno.ECONNRESET, _errno.ECONNABORTED):
+                return
+            raise
+
     def _json(self, code: int, payload: dict[str, Any]) -> None:
         raw = (canonical({"schema_version": SCHEMA_VERSION, **payload}) + "\n").encode()
-        self.send_response(code); self._headers(); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        self.send_response(code); self._headers(); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self._write(raw)
 
     def _read_json(self) -> dict[str, Any]:
         raw_len = self.headers.get("Content-Length", "0")
@@ -2393,6 +3070,53 @@ class VortexHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT); self._headers(); self.end_headers()
 
+    def _asset_candidate(self) -> tuple[Path | None, str]:
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        relative = Path(path.removeprefix("/assets/")).as_posix() if path.startswith("/assets/") else None
+        if relative is None:
+            return None, "application/octet-stream"
+        asset = (self.frontend / relative).resolve()
+        if not asset.is_file():
+            asset = (self.frontend.parent / "assets" / relative).resolve()
+        allowed = (self.frontend.resolve(), (self.frontend.parent / "assets").resolve())
+        def is_under(candidate: Path, root: Path) -> bool:
+            try:
+                return os.path.commonpath((str(candidate), str(root))) == str(root)
+            except ValueError:
+                return False
+        mime = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png"}.get(asset.suffix, "application/octet-stream")
+        if any(is_under(asset, root) for root in allowed) and asset.is_file():
+            return asset, mime
+        return None, mime
+
+    def do_HEAD(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if not self._authorized():
+            return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
+        if path == "/" or path == "/index.html":
+            asset = self.frontend / "index.html"
+        else:
+            asset, mime = self._asset_candidate()
+            if asset is None:
+                self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                self._headers("text/plain")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        try:
+            data = asset.read_bytes()
+            self.send_response(200)
+            self._headers("text/html; charset=utf-8" if path in ("/", "/index.html") else mime)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+        except OSError:
+            self.send_response(404)
+            self._headers("text/plain")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
     def do_GET(self) -> None:
         if not self._authorized(): return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         parsed = urllib.parse.urlparse(self.path); path = parsed.path
@@ -2408,11 +3132,21 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/system/health":
                 load_settings = _load("config").load_settings
                 collect = _load("health").collect
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
                 return self._json(200, {"health": collect(self.store, self.sessions, load_settings())})
             if path == "/api/capabilities":
-                return self._json(200, capabilities_document())
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    clear_probe_caches()
+                payload = _CAPABILITIES_CACHE.get("document", capabilities_document)
+                return self._json(200, payload)
             if path == "/api/agents":
                 from agents.council import discover
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
                 return self._json(200, {"agents": discover()})
             if path == "/api/models":
                 load_settings = _load("config").load_settings
@@ -2427,7 +3161,14 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"setup": setup_checks(self.store, load_settings())})
             if path == "/api/dependencies":
                 deps = _load("dependencies")
-                return self._json(200, {"dependencies": deps.inventory()})
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
+                    _DEPENDENCIES_CACHE.invalidate("inventory")
+                    _TOOLS_CACHE.invalidate("catalog")
+                    _TOOLS_REGISTRY_CACHE.invalidate("inventory")
+                    _ADAPTERS_CACHE.invalidate("manifest")
+                return self._json(200, {"dependencies": _DEPENDENCIES_CACHE.get("inventory", deps.inventory)})
             if path == "/api/dependencies/proposal":
                 deps = _load("dependencies")
                 query = urllib.parse.parse_qs(parsed.query)
@@ -2449,8 +3190,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                 for _ in range(300):
                     op = self.store.get_operation(op_id)
                     payload = json.dumps({"schema_version": SCHEMA_VERSION, "operation": op})
-                    self.wfile.write(f"data: {payload}\n\n".encode())
-                    self.wfile.flush()
+                    try:
+                        self._write(f"data: {payload}\n\n".encode())
+                        self.wfile.flush()
+                    except OSError:
+                        break
                     if not op or op.get("status") not in ("started", "running"):
                         break
                     time.sleep(0.2)
@@ -2467,21 +3211,29 @@ class VortexHandler(BaseHTTPRequestHandler):
                 from plugins.loader import list_manifests
                 return self._json(200, {"plugins": list_manifests()})
             if path == "/api/tools/registry":
-                from tools.registry import by_category, inventory
-                tools = inventory()
+                from tools.registry import by_category
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
+                    _TOOLS_REGISTRY_CACHE.invalidate("inventory")
+                tools = _TOOLS_REGISTRY_CACHE.get("inventory", lambda: _load("tools.registry").inventory())
                 return self._json(200, {"tools": tools, "categories": by_category(tools)})
             if path == "/api/reports/system":
                 render_system = _load("reports.engine").render_system
-                from tools.registry import inventory
                 query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
+                    _TOOLS_REGISTRY_CACHE.invalidate("inventory")
+                    _DOCTOR_CACHE.invalidate("context")
+                tools = _TOOLS_REGISTRY_CACHE.get("inventory", lambda: _load("tools.registry").inventory())
                 fmt = self._report_format(query, "json")
-                data, content_type, ext = render_system(fmt, detect_context(), inventory())
+                data, content_type, ext = render_system(fmt, _DOCTOR_CACHE.get("context", detect_context), tools)
                 self.send_response(200)
                 self._headers(content_type)
                 self.send_header("Content-Disposition", f'attachment; filename="vortex-system.{ext}"')
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
-                self.wfile.write(data)
+                self._write(data)
                 return
             if path == "/api/conversations":
                 query = urllib.parse.parse_qs(parsed.query)
@@ -2496,7 +3248,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Disposition", f'attachment; filename="conversation-{cid[:12]}.json"')
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
-                self.wfile.write(raw)
+                self._write(raw)
                 return
             if path.startswith("/api/conversations/"):
                 cid = path.rsplit("/", 1)[-1]
@@ -2549,29 +3301,44 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Disposition", f'attachment; filename="{report_id}.{ext}"')
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
-                self.wfile.write(data)
+                self._write(data)
                 return
-            if path == "/api/doctor": return self._json(200, {"doctor": detect_context()})
+            if path == "/api/doctor":
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
+                    _DOCTOR_CACHE.invalidate("context")
+                return self._json(200, {"doctor": _DOCTOR_CACHE.get("context", detect_context)})
             if path == "/api/tools":
-                tools = [
-                    probe_executable(name, include_version=False) | {"family": meta["family"], "role": meta["role"]}
-                    for name, meta in TOOL_CATALOG.items()
-                ]
-                return self._json(200, {"tools": tools})
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
+                    _TOOLS_CACHE.invalidate("catalog")
+                def _tools_inventory() -> list[dict[str, Any]]:
+                    return [
+                        probe_executable(name, include_version=False) | {"family": meta["family"], "role": meta["role"]}
+                        for name, meta in TOOL_CATALOG.items()
+                    ]
+                return self._json(200, {"tools": _TOOLS_CACHE.get("catalog", _tools_inventory)})
             if path == "/api/adapters":
-                adapters = [
-                    {
-                        "id": adapter_id,
-                        **manifest,
-                        "tool_state": [
-                            probe_executable(tool, include_version=False)["state"]
-                            for tool in manifest["tool"].split("+")
-                            if tool != "multiple"
-                        ],
-                    }
-                    for adapter_id, manifest in ADAPTER_MANIFESTS.items()
-                ]
-                return self._json(200, {"adapters": adapters})
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
+                    _ADAPTERS_CACHE.invalidate("manifest")
+                def _adapters_inventory() -> list[dict[str, Any]]:
+                    return [
+                        {
+                            "id": adapter_id,
+                            **manifest,
+                            "tool_state": [
+                                probe_executable(tool, include_version=False)["state"]
+                                for tool in manifest["tool"].split("+")
+                                if tool != "multiple"
+                            ],
+                        }
+                        for adapter_id, manifest in ADAPTER_MANIFESTS.items()
+                    ]
+                return self._json(200, {"adapters": _ADAPTERS_CACHE.get("manifest", _adapters_inventory)})
             if path == "/api/sessions": return self._json(200, {"sessions": self.sessions.list()})
             if path.startswith("/api/sessions/"):
                 parts = path.split("/")
@@ -2585,8 +3352,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                     since = 0
                     for _ in range(300):
                         payload = self.sessions.events_since(session_id, since)
-                        self.wfile.write(f"data: {json.dumps({'schema_version': SCHEMA_VERSION, **payload})}\n\n".encode())
-                        self.wfile.flush()
+                        try:
+                            self._write(f"data: {json.dumps({'schema_version': SCHEMA_VERSION, **payload})}\n\n".encode())
+                            self.wfile.flush()
+                        except OSError:
+                            break
                         events = payload.get("events") or []
                         if events:
                             since = events[-1]["seq"]
@@ -2629,7 +3399,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Disposition", f'attachment; filename="assessment-{eng_id[:8]}.{ext}"')
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
-                self.wfile.write(data)
+                self._write(data)
                 return
             if path == "/api/audit/verify": return self._json(200, {"audit": self.store.verify_audit()})
             if path == "/api/store/integrity": return self._json(200, {"integrity": self.store.integrity_check()})
@@ -2667,7 +3437,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
 
     def _static(self, path: Path, content_type: str) -> None:
-        data = path.read_bytes(); self.send_response(200); self._headers(content_type); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+        data = path.read_bytes(); self.send_response(200); self._headers(content_type); self.send_header("Content-Length", str(len(data))); self.end_headers(); self._write(data)
 
     def do_POST(self) -> None:
         if not self._authorized(): return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
@@ -2791,7 +3561,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.workspace.delete_conversation(path.split("/")[-2]); return self._json(200, {"deleted": True})
             if path.startswith("/api/conversations/") and path.endswith("/edit"):
                 parts = path.split("/")
-                if len(parts) != 6 or parts[1] != "api" or parts[2] != "conversations" or parts[4] != "messages":
+                # Renderer sends /api/conversations/<cid>/messages/<mid>/edit.
+                if len(parts) != 7 or parts[1] != "api" or parts[2] != "conversations" or parts[4] != "messages" or parts[6] != "edit":
                     return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
                 branch = self.workspace.edit_and_branch(parts[3], parts[5], self._text(body, "content") or "")
                 return self._json(201, {"conversation": branch, "messages": self.workspace.list_messages(branch["id"])})
@@ -2847,6 +3618,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 task = self.workspace.get_task(path.split("/")[-2])
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                cancel_task_operation(self.executor, task)
                 result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=self._optional_str(body, "cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
                 return self._json(200, result)
             if path.startswith("/api/tasks/") and path.endswith("/restart"):
@@ -2855,10 +3627,12 @@ class VortexHandler(BaseHTTPRequestHandler):
                 task = self.workspace.get_task(path.split("/")[-2])
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
+                cancel_task_operation(self.executor, task)
                 self.workspace.update_task(task["id"], state="CANCELLED")
                 result = run_turn(self.store, self.workspace, self.executor, task["request"], cwd=self._optional_str(body, "cwd"), engagement_id=task.get("engagement_id"), conversation_id=task.get("conversation_id"), settings=load_settings())
                 return self._json(200, result)
             if path.startswith("/api/tasks/") and path.endswith("/delete"):
+                cancel_task_operation(self.executor, self.workspace.get_task(path.split("/")[-2]))
                 task = self.workspace.delete_task(path.split("/")[-2])
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
