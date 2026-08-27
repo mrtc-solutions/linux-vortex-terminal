@@ -28,7 +28,7 @@ def interpret_operation(plan: dict[str, Any], operation: dict[str, Any]) -> str:
     return f"Operation ended as {status}. Review the command timeline for observed evidence."
 
 
-def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: str | None, engagement_id: str | None, conversation_id: str | None, settings: dict[str, Any], confirm: bool = False, approval_token: str | None = None) -> dict[str, Any]:
+def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: str | None, engagement_id: str | None, conversation_id: str | None, settings: dict[str, Any], confirm: bool = False, approval_token: str | None = None, allow_root: bool = False) -> dict[str, Any]:
     try:
         from agents.council import consult
         from security.guardian import evaluate
@@ -83,7 +83,10 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
     elif guardian["decision"] == "auto" and plan["status"] == "planned":
         workspace.update_task(task["id"], state="EXECUTING")
         workspace.record_approval("auto", plan["id"], task["id"], guardian.get("risk"), {"policy": settings.get("profile")})
-        operation = executor.start(plan, True, plan["approval_token"], False, offline)
+        # Only the CLI can provide this explicit per-invocation override. The
+        # desktop/API callers leave it false, so a renderer can never cause
+        # UID 0 execution.
+        operation = executor.start(plan, True, plan["approval_token"], allow_root, offline)
         auto = True
         workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
         explanation = "Guardian authorized a low-risk local diagnostic under the current policy. Real execution started."
@@ -95,7 +98,7 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         else:
             workspace.update_task(task["id"], state="EXECUTING")
             workspace.record_approval("approve", plan["id"], task["id"], guardian.get("risk"), {"cli_yes": True})
-            operation = executor.start(plan, True, token, False, offline)
+            operation = executor.start(plan, True, token, allow_root, offline)
             workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
             explanation = "Approved plan execution started."
     else:

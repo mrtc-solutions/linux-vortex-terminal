@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.vortex_backend import ExecutionManager, SessionManager, Store, VortexHandler
 from backend.workspace import Workspace
@@ -48,10 +49,13 @@ class HttpApiTests(unittest.TestCase):
                 self.assertEqual(response.status, expected)
                 return payload
         except urllib.error.HTTPError as exc:
-            payload = json.loads(exc.read())
-            if exc.code != expected:
-                raise AssertionError(f"{method} {path} expected {expected} got {exc.code}: {payload}") from exc
-            return payload
+            try:
+                payload = json.loads(exc.read())
+                if exc.code != expected:
+                    raise AssertionError(f"{method} {path} expected {expected} got {exc.code}: {payload}") from exc
+                return payload
+            finally:
+                exc.close()
 
     def test_workspace_turn_creates_task_and_conversation(self):
         payload = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": self.tmp.name})
@@ -110,8 +114,11 @@ class HttpApiTests(unittest.TestCase):
                 status = response.status
                 body = response.read()
         except urllib.error.HTTPError as exc:
-            status = exc.code
-            body = exc.read()
+            try:
+                status = exc.code
+                body = exc.read()
+            finally:
+                exc.close()
         self.assertIn(status, (404, 400))
         self.assertNotIn(b"ExecutionManager", body)
 
@@ -160,6 +167,17 @@ class HttpApiTests(unittest.TestCase):
         denied = self._json("POST", "/api/execute", {"plan_id": planned["plan"]["id"], "confirm": True, "allow_root": True}, expected=422)
         self.assertEqual(denied["error"]["code"], "invalid_plan")
 
+    def test_http_execute_cannot_grant_root_override(self):
+        planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})["plan"]
+        with patch("backend.vortex_backend.os.getuid", return_value=0):
+            denied = self._json("POST", "/api/execute", {
+                "plan_id": planned["id"],
+                "confirm": True,
+                "approval_token": planned["approval_token"],
+                "allow_root": True,
+            }, expected=403)
+        self.assertEqual(denied["error"]["code"], "confirmation_or_privilege")
+
     def test_http_backup_stays_inside_data_root(self):
         outside = self._json("POST", "/api/store/backup", {"destination": "/tmp/vortex-exfil.db"}, expected=201)
         path = Path(outside["backup"]["path"])
@@ -177,8 +195,11 @@ class HttpApiTests(unittest.TestCase):
                 status = response.status
                 payload = json.loads(response.read())
         except urllib.error.HTTPError as exc:
-            status = exc.code
-            payload = json.loads(exc.read())
+            try:
+                status = exc.code
+                payload = json.loads(exc.read())
+            finally:
+                exc.close()
         self.assertEqual(status, 422)
         self.assertEqual(payload["error"]["code"], "invalid_plan")
         planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})

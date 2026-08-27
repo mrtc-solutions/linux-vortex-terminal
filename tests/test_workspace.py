@@ -10,6 +10,8 @@ from backend.security.guardian import evaluate, recompute_risk
 from backend.vortex_backend import ExecutionManager, Store, build_plan, command_spec, plan_digest
 from backend.workspace import Workspace
 
+ALLOW_ROOT = os.geteuid() == 0
+
 
 class WorkspaceTests(unittest.TestCase):
     def setUp(self):
@@ -65,7 +67,7 @@ class WorkspaceTests(unittest.TestCase):
         from backend.orchestrate import run_turn
         manager = ExecutionManager(self.store)
         manager.workspace = self.workspace
-        result = run_turn(self.store, self.workspace, manager, "whoami", cwd=self.tmp.name, engagement_id=None, conversation_id=None, settings={"profile": "standard", "auto_low_risk": True, "offline": False})
+        result = run_turn(self.store, self.workspace, manager, "whoami", cwd=self.tmp.name, engagement_id=None, conversation_id=None, settings={"profile": "standard", "auto_low_risk": True, "offline": False}, allow_root=ALLOW_ROOT)
         op_id = result["operation"]["id"]
         task = result["task"]
         for _ in range(250):
@@ -147,7 +149,8 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_cli_turn_yes_executes_with_profile(self):
         from cli import vortex as vortex_cli
-        code = vortex_cli.main(["--json", "--profile", "standard", "--yes", "--cwd", self.tmp.name, "turn", "whoami"])
+        root_flag = ["--allow-root"] if ALLOW_ROOT else []
+        code = vortex_cli.main(["--json", "--profile", "standard", "--yes", "--cwd", self.tmp.name, *root_flag, "turn", "whoami"])
         self.assertEqual(code, 0)
         tasks = self.workspace.list_tasks()
         self.assertTrue(tasks)
@@ -163,7 +166,8 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_cli_turn_yes_safe_profile_still_executes(self):
         from cli import vortex as vortex_cli
-        code = vortex_cli.main(["--json", "--profile", "safe", "--yes", "--cwd", self.tmp.name, "turn", "whoami"])
+        root_flag = ["--allow-root"] if ALLOW_ROOT else []
+        code = vortex_cli.main(["--json", "--profile", "safe", "--yes", "--cwd", self.tmp.name, *root_flag, "turn", "whoami"])
         self.assertEqual(code, 0)
         task = self.workspace.list_tasks()[0]
         self.assertTrue(task.get("operation_id"))
@@ -420,7 +424,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_low_risk_auto_execute_runs_real_command(self):
         from backend.orchestrate import run_turn
-        result = run_turn(self.store, self.workspace, ExecutionManager(self.store), "whoami", cwd=self.tmp.name, engagement_id=None, conversation_id=None, settings={"profile": "standard", "auto_low_risk": True, "offline": False})
+        result = run_turn(self.store, self.workspace, ExecutionManager(self.store), "whoami", cwd=self.tmp.name, engagement_id=None, conversation_id=None, settings={"profile": "standard", "auto_low_risk": True, "offline": False}, allow_root=ALLOW_ROOT)
         self.assertTrue(result["auto_executed"])
         self.assertEqual(result["guardian"]["decision"], "auto")
         op_id = result["operation"]["id"]
@@ -447,7 +451,7 @@ class WorkspaceTests(unittest.TestCase):
         plan["digest"] = plan_digest(plan)
         self.store.save_plan(plan)
         manager = ExecutionManager(self.store)
-        op = manager.start(plan, True, "stop-token")
+        op = manager.start(plan, True, "stop-token", allow_root=ALLOW_ROOT)
         time.sleep(0.05)
         class DummySessions:
             def list(self): return []

@@ -19,6 +19,8 @@ from backend.vortex_backend import (
     apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, parse_systemd_mutation, probe_executable, plan_digest, sanitize_pty, systemd_user_bus_state, target_in_engagement,
 )
 
+ALLOW_ROOT = os.geteuid() == 0
+
 
 class VortexCoreTests(unittest.TestCase):
     def setUp(self):
@@ -125,7 +127,7 @@ class VortexCoreTests(unittest.TestCase):
         plan["digest"] = plan_digest(plan)
         self.store.save_plan(plan)
         manager = ExecutionManager(self.store)
-        op = manager.start(plan, True, "token-test")
+        op = manager.start(plan, True, "token-test", allow_root=ALLOW_ROOT)
         for _ in range(100):
             result = self.store.get_operation(op["id"])
             if result and result["status"] not in ("started", "running"):
@@ -181,7 +183,7 @@ class VortexCoreTests(unittest.TestCase):
         }
         plan["digest"] = plan_digest(plan)
         self.store.save_plan(plan)
-        op = ExecutionManager(self.store).start(plan, True, "cap-token")
+        op = ExecutionManager(self.store).start(plan, True, "cap-token", allow_root=ALLOW_ROOT)
         for _ in range(150):
             result = self.store.get_operation(op["id"])
             if result and result["status"] not in ("started", "running"):
@@ -205,7 +207,7 @@ class VortexCoreTests(unittest.TestCase):
         plan["digest"] = plan_digest(plan)
         self.store.save_plan(plan)
         manager = ExecutionManager(self.store)
-        op = manager.start(plan, True, "cancel-token")
+        op = manager.start(plan, True, "cancel-token", allow_root=ALLOW_ROOT)
         time.sleep(.05)
         self.assertTrue(manager.cancel(op["id"]))
         for _ in range(150):
@@ -466,7 +468,7 @@ The following packages will be upgraded:
             plan = build_plan(self.store, f'curl {target}', self.tmp.name, engagement['id'])
             self.assertEqual(plan['status'], 'planned')
             manager = ExecutionManager(self.store)
-            operation = manager.start(plan, True, plan['approval_token'])
+            operation = manager.start(plan, True, plan['approval_token'], allow_root=ALLOW_ROOT)
             for _ in range(150):
                 result = self.store.get_operation(operation['id'])
                 if result and result['status'] not in ('started', 'running'):
