@@ -9,6 +9,7 @@ execution; the renderer is never allowed to spawn a process.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import errno
 import fcntl
 import hashlib
@@ -465,12 +466,32 @@ class Store:
         except OSError:
             pass
 
-    def connect(self) -> sqlite3.Connection:
+    def _connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=5, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
+
+    @contextmanager
+    def connect(self) -> Any:
+        """Yield a database connection and always close it after use.
+
+        ``sqlite3.Connection``'s context manager commits or rolls back but does
+        not close the connection.  This explicit wrapper prevents connection
+        accumulation in the long-running sidecar and under Python 3.14's
+        resource-warning checks.
+        """
+        conn = self._connection()
+        try:
+            yield conn
+        except BaseException:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self.connect() as db:
@@ -640,7 +661,7 @@ class Store:
         if dest.exists() and dest.is_symlink():
             raise ValueError("backup destination symlink is not accepted")
         self.append_audit("database_backup_requested", {"destination": redact(str(dest))})
-        source = self.connect()
+        source = self._connection()
         target = sqlite3.connect(dest)
         try:
             source.backup(target)
