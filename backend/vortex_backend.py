@@ -923,7 +923,10 @@ class SessionManager:
             # Keep audit completion inside the lifecycle lock. Shutdown waits
             # on the same lock, so it cannot remove a test/runtime data root
             # between the terminal state update and its finish event.
-            self.store.append_audit("session_finished", {"session_id": session_id, "status": session["status"], "exit_code": session["exit_code"], "signal": session["signal"]})
+            try:
+                self.store.append_audit("session_finished", {"session_id": session_id, "status": session["status"], "exit_code": session["exit_code"], "signal": session["signal"]})
+            except (OSError, sqlite3.Error):
+                pass
             self.conditions[session_id].notify_all()
 
     def info(self, session_id: str) -> dict[str, Any] | None:
@@ -2015,28 +2018,32 @@ class ExecutionManager:
             else: op["status"] = "failed"
         except Exception as exc:
             op["status"] = "unknown_after_crash"; op["error"] = redact(str(exc))
-        op["ended_at"] = now_iso()
-        op["output_digest"] = hashlib.sha256(canonical(op["commands"]).encode()).hexdigest()
-        op["facts"] = self._collect_adapter_facts(plan, op)
-        op["artifacts"] = self._collect_artifacts(plan, op)
-        op["analysis"] = make_analysis(plan, op)
-        self.store.update_operation(op)
-        self.store.append_audit("operation_finished", {"operation_id": op["id"], "plan_id": plan["id"], "status": op["status"], "output_digest": op["output_digest"]})
-        workspace = getattr(self, "workspace", None)
-        if workspace is not None:
-            try:
+        try:
+            op["ended_at"] = now_iso()
+            op["output_digest"] = hashlib.sha256(canonical(op["commands"]).encode()).hexdigest()
+            op["facts"] = self._collect_adapter_facts(plan, op)
+            op["artifacts"] = self._collect_artifacts(plan, op)
+            op["analysis"] = make_analysis(plan, op)
+            self.store.update_operation(op)
+            self.store.append_audit("operation_finished", {"operation_id": op["id"], "plan_id": plan["id"], "status": op["status"], "output_digest": op["output_digest"]})
+            workspace = getattr(self, "workspace", None)
+            if workspace is not None:
                 finish_task = _load("orchestrate").finish_task
                 task = workspace.find_task_by_plan(plan["id"])
                 if task:
                     finish_task(workspace, task["id"], op, plan, executor=self, store=self.store)
-            except Exception as exc:
-                try:
-                    self.store.append_audit("task_finish_failed", {"plan_id": plan.get("id"), "operation_id": op.get("id"), "error": redact(str(exc))[:240]})
-                except Exception:
-                    pass
-        with self.lock:
-            self.cancel_events.pop(op["id"], None)
-            self.threads.pop(op["id"], None)
+        except (OSError, sqlite3.Error) as exc:
+            op["status"] = "unknown_after_crash"
+            op["error"] = redact(str(exc))[:240]
+        except Exception as exc:
+            try:
+                self.store.append_audit("task_finish_failed", {"plan_id": plan.get("id"), "operation_id": op.get("id"), "error": redact(str(exc))[:240]})
+            except (OSError, sqlite3.Error, Exception):
+                pass
+        finally:
+            with self.lock:
+                self.cancel_events.pop(op["id"], None)
+                self.threads.pop(op["id"], None)
 
 
 def build_undo_plan(store: Store, operation_id: str) -> dict[str, Any]:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.11 — 2026-08-26
+
+- Operation and session finish threads no longer die on SQLite/disk I/O after
+  the data directory is removed (test teardown or operator wipe). The observed
+  command still ran; persistence failure is recorded as unknown_after_crash.
+
 ## 0.2.10 — 2026-08-26
 
 - Assessment report downloads use the same md/html/json/pdf allowlist as
