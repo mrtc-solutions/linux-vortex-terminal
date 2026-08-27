@@ -159,11 +159,12 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(denied["error"]["code"], "invalid_plan")
 
     def test_http_backup_stays_inside_data_root(self):
-        denied = self._json("POST", "/api/store/backup", {"destination": "/tmp/vortex-exfil.db"}, expected=422)
-        self.assertEqual(denied["error"]["code"], "invalid_plan")
-        inside = self._json("POST", "/api/store/backup", {"destination": "snapshot.db"}, expected=201)
-        path = Path(inside["backup"]["path"])
+        outside = self._json("POST", "/api/store/backup", {"destination": "/tmp/vortex-exfil.db"}, expected=201)
+        path = Path(outside["backup"]["path"])
         self.assertTrue(str(path).startswith(self.tmp.name))
+        self.assertIn("/backups/", str(path) + "/")
+        self.assertEqual(path.name, "vortex-exfil.db")
+        self.assertNotEqual(path.resolve(), Path("/tmp/vortex-exfil.db").resolve())
         self.assertTrue(path.is_file())
 
     def test_http_artifact_analyze_stays_inside_data_root(self):

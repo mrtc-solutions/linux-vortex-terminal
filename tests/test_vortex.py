@@ -260,6 +260,16 @@ class VortexCoreTests(unittest.TestCase):
         finally:
             sessions.shutdown()
 
+    def test_session_cap_is_enforced(self):
+        sessions = SessionManager(self.store, idle_seconds=120, max_sessions=1)
+        try:
+            first = sessions.create(name="one", cwd_raw=self.tmp.name, shell="/bin/sh", command=["/bin/sh", "-c", "sleep 8"])
+            with self.assertRaises(PolicyError):
+                sessions.create(name="two", cwd_raw=self.tmp.name, shell="/bin/sh", command=["/bin/sh", "-c", "true"])
+            sessions.kill(first["id"])
+        finally:
+            sessions.shutdown()
+
     def test_apt_preflight_parser_extracts_impact_counts(self):
         output = '''The following NEW packages will be installed:
   ripgrep

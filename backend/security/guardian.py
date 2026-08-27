@@ -123,7 +123,17 @@ def evaluate(plan: dict[str, Any], policy: dict[str, Any] | None = None, engagem
         blocked = True
         reasons.append("Offline policy blocks network-effecting commands.")
     if any(spec.get("network_class") not in LOW_NETWORK for spec in commands):
-        if not engagement or engagement.get("status") != "active":
+        engagement_ok = False
+        if engagement and engagement.get("status") == "active" and not engagement.get("expired"):
+            engagement_ok = True
+            try:
+                from datetime import datetime
+                import time as _time
+                if _time.time() > datetime.fromisoformat(str(engagement.get("expires_at"))).timestamp():
+                    engagement_ok = False
+            except (TypeError, ValueError):
+                engagement_ok = False
+        if not engagement_ok:
             if plan.get("kind") in {"authorized_engagement", "ssh_diagnostics"} and plan.get("status") == "planned":
                 blocked = True
                 reasons.append("Active network work requires an authorized engagement.")

@@ -744,10 +744,11 @@ class Store:
 class SessionManager:
     """Own Linux PTYs, process groups, live event buffers, and idle cleanup."""
 
-    def __init__(self, store: Store, idle_seconds: int | None = None):
+    def __init__(self, store: Store, idle_seconds: int | None = None, max_sessions: int | None = None):
         self.store = store
         self.store.mark_stale_sessions()
         self.idle_seconds = idle_seconds if idle_seconds is not None else int(os.environ.get("VORTEX_SESSION_IDLE_SECONDS", "1800"))
+        self.max_sessions = max_sessions if max_sessions is not None else int(os.environ.get("VORTEX_MAX_SESSIONS", "8"))
         self.sessions: dict[str, dict[str, Any]] = {}
         self.events: dict[str, deque[dict[str, Any]]] = {}
         self.conditions: dict[str, threading.Condition] = {}
@@ -777,6 +778,9 @@ class SessionManager:
         return identity["realpath"]
 
     def create(self, name: str | None = None, cwd_raw: str | None = None, shell: str | None = None, cols: Any = 100, rows: Any = 30, command: list[str] | None = None) -> dict[str, Any]:
+        running = sum(1 for item in self.list() if item.get("status") == "running")
+        if running >= max(1, min(self.max_sessions, 32)):
+            raise PolicyError("too many concurrent PTY sessions")
         cwd = validate_cwd(cwd_raw)
         shell_path = self._shell_path(shell)
         cols_i, rows_i = self._size(cols, 100), self._size(rows, 30)
@@ -2469,15 +2473,13 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/store/backup":
                 destination = body.get("destination")
                 if not isinstance(destination, str) or not destination.strip(): raise ValueError("backup destination is required")
-                root = self.store.root.resolve()
-                raw = Path(destination.strip())
-                dest = raw if raw.is_absolute() else (root / "backups" / raw.name)
-                try:
-                    resolved = dest.expanduser().resolve()
-                    resolved.relative_to(root)
-                except ValueError as exc:
-                    raise PolicyError("backup destination must be inside the VORTEX data directory") from exc
-                backup_path = self.store.backup(str(resolved), bool(body.get("overwrite", False)))
+                name = Path(destination.strip()).name
+                if not name or name.startswith("."):
+                    raise PolicyError("backup filename is required")
+                if not name.endswith(".db"):
+                    name += ".db"
+                dest = self.store.root / "backups" / name
+                backup_path = self.store.backup(str(dest), bool(body.get("overwrite", False)))
                 return self._json(201, {"backup": {"path": str(backup_path), "mode": oct(backup_path.stat().st_mode & 0o777)}})
             if path == "/api/artifacts/analyze":
                 artifact = analyze_path(body.get("path"), body.get("kind", "auto"), allowed_roots=[self.store.root])
@@ -2548,8 +2550,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.workspace.archive_conversation(path.split("/")[-2]); return self._json(200, {"archived": True})
             if path.startswith("/api/conversations/") and path.endswith("/delete"):
                 self.workspace.delete_conversation(path.split("/")[-2]); return self._json(200, {"deleted": True})
-            if path.startswith("/api/conversations/") and "/edit" in path:
+            if path.startswith("/api/conversations/") and path.endswith("/edit"):
                 parts = path.split("/")
+                if len(parts) != 6 or parts[1] != "api" or parts[2] != "conversations" or parts[4] != "messages":
+                    return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
                 branch = self.workspace.edit_and_branch(parts[3], parts[5], str(body.get("content") or ""))
                 return self._json(201, {"conversation": branch, "messages": self.workspace.list_messages(branch["id"])})
             if path.startswith("/api/engagements/") and path.endswith("/close"):

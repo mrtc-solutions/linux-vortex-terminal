@@ -1,40 +1,22 @@
 """Common adapter contract for external AI/security agents."""
 from __future__ import annotations
 
-import hashlib
-import os
-import shutil
-import stat
-import subprocess
 from dataclasses import dataclass, field
 from typing import Any
 
 
 def _probe(name: str) -> dict[str, Any]:
-    if not name or "\x00" in name:
-        return {"state": "blocked", "path": None, "version": None}
-    found = name if os.path.isabs(name) else shutil.which(name)
-    if not found:
-        return {"state": "absent", "path": None, "version": None}
     try:
-        real = os.path.realpath(found)
-        info = os.stat(real)
-        if not stat.S_ISREG(info.st_mode) or not os.access(real, os.X_OK):
-            return {"state": "blocked", "path": real, "version": None}
-        sha = hashlib.sha256()
-        with open(real, "rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                sha.update(chunk)
-        version = None
-        try:
-            proc = subprocess.run([real, "--version"], capture_output=True, text=True, timeout=2, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
-            line = (proc.stdout or proc.stderr).splitlines()
-            version = (line[0][:160] if line else None)
-        except (OSError, subprocess.SubprocessError, UnicodeError):
-            version = None
-        return {"state": "installed", "path": real, "version": version, "sha256": sha.hexdigest()}
-    except OSError:
-        return {"state": "blocked", "path": found, "version": None}
+        from vortex_backend import probe_executable
+    except ImportError:
+        from backend.vortex_backend import probe_executable
+    item = probe_executable(name)
+    return {
+        "state": item.get("state") or "absent",
+        "path": item.get("path"),
+        "version": item.get("version"),
+        "sha256": item.get("sha256"),
+    }
 
 
 @dataclass

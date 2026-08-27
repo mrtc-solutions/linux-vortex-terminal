@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4 — 2026-08-26
+
+- HTTP backups always write under `data/backups/<filename>.db`; absolute paths
+  cannot overwrite host files. Concurrent PTY sessions are capped.
+- Guardian treats expired engagements as inactive. Agent probes use the same
+  safe-PATH executable identity as managed tools. Conversation edit routes
+  reject malformed paths.
+
 ## 0.2.3 — 2026-08-26
 
 - HTTP `/api/execute` never accepts `allow_root`. Offline policy cannot be

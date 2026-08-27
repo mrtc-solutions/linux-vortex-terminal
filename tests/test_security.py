@@ -86,6 +86,20 @@ class VortexSecurityTests(unittest.TestCase):
         self.assertEqual(denied["state"], "absent")
         self.assertIsNone(denied["path"])
 
+    def test_expired_engagement_blocks_guardian_network_work(self):
+        plan = {
+            "kind": "authorized_engagement",
+            "status": "planned",
+            "scope": {"targets": ["https://lab.example.test"]},
+            "commands": [{"adapter_id": "security.http.headers", "risk": "high", "privilege": "user", "network_class": "outbound-read", "display": "curl https://lab.example.test/"}],
+        }
+        decision = evaluate(plan, {}, {
+            "id": "e1", "status": "active", "expired": True,
+            "expires_at": "2020-01-01T00:00:00+00:00",
+            "targets": ["https://lab.example.test"],
+        })
+        self.assertTrue(decision["blocked"])
+
     def test_safe_profile_cannot_auto_run_even_if_flag_is_set(self):
         plan = build_plan(self.store, "whoami", self.tmp.name)
         decision = evaluate(plan, {"profile": "safe", "auto_low_risk": True})
