@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.10 — 2026-08-26
+
+- Assessment report downloads use the same md/html/json/pdf allowlist as
+  system and task reports. Unknown formats are 422.
+
 ## 0.2.9 — 2026-08-26
 
 - SEND fallback in `app.js` uses `/api/workspace/turn` (Guardian + council), not

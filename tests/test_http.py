@@ -87,6 +87,8 @@ class HttpApiTests(unittest.TestCase):
         report = self._json("GET", f"/api/reports/assessment/{eng_id}")
         self.assertEqual(report["report"]["operations"], 0)
         self.assertEqual(report["report"]["engagement"]["id"], eng_id)
+        denied = self._json("GET", f"/api/reports/assessment/{eng_id}?format=exe", expected=422)
+        self.assertEqual(denied["error"]["code"], "invalid_plan")
 
     def test_capabilities_and_close_engagement(self):
         caps = self._json("GET", "/api/capabilities")

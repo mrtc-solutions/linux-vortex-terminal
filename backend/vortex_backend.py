@@ -2458,7 +2458,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 operations = self.workspace.operations_for_engagement(eng_id)
                 document = build(engagement, findings, operations)
                 query = urllib.parse.parse_qs(parsed.query)
-                fmt = (query.get("format") or ["json"])[0]
+                fmt = self._report_format(query, "json")
                 if fmt == "json":
                     return self._json(200, {"report": document})
                 data, content_type, ext = render(fmt, as_operation_view(document), {"request": "assessment"}, {"id": eng_id})
