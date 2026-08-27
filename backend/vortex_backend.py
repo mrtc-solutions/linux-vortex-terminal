@@ -262,7 +262,14 @@ def _safe_executable_dirs() -> tuple[list[str], list[str]]:
     return safe, rejected
 
 
-def probe_executable(name: str) -> dict[str, Any]:
+def probe_executable(name: str, *, include_version: bool = True) -> dict[str, Any]:
+    """Return the executable's factual identity and optionally invoke its version probe.
+
+    Aggregate inventory endpoints pass ``include_version=False`` so listing tools
+    cannot synchronously launch an arbitrary number of third-party processes.
+    Planning and execution callers retain the default and therefore keep the
+    version evidence that is useful for an individual command identity.
+    """
     if not name or "\x00" in name or (not os.path.isabs(name) and os.sep in name):
         return {"name": name, "state": "blocked", "path": None, "version": None, "security_flags": ["invalid-executable-name"]}
     if os.path.isabs(name):
@@ -313,7 +320,7 @@ def probe_executable(name: str) -> dict[str, Any]:
             "version": None,
         }
         spec = TOOL_CATALOG.get(name)
-        if spec:
+        if spec and include_version:
             try:
                 env = minimal_env(False)
                 proc = subprocess.run([str(real), *spec["probe"]], capture_output=True, text=True, timeout=2, env=env)
@@ -352,7 +359,7 @@ def systemd_user_bus_state() -> dict[str, Any]:
             return result
     except OSError:
         return result
-    systemctl = probe_executable("systemctl")
+    systemctl = probe_executable("systemctl", include_version=False)
     if systemctl.get("state") != "installed":
         result["state"] = "unavailable"
         return result
@@ -424,7 +431,7 @@ def detect_context() -> dict[str, Any]:
         "systemd": systemd,
         "systemd_context": {"system_bus": "available" if systemd else "unavailable", "user_bus": user_bus},
         "cgroup": cgroup,
-        "package_manager": {name: probe_executable(name)["state"] for name in ("apt-get", "apt-cache", "dpkg-query", "dpkg", "apt-mark", "sudo")},
+        "package_manager": {name: probe_executable(name, include_version=False)["state"] for name in ("apt-get", "apt-cache", "dpkg-query", "dpkg", "apt-mark", "sudo")},
         "model": {"state": "disabled by default", "endpoint": None},
     }
 
@@ -2246,9 +2253,9 @@ def parse_expiry(raw: Any, *, default_seconds: int) -> str:
 
 
 def capabilities_document() -> dict[str, Any]:
-    docker = probe_executable("docker")
-    podman = probe_executable("podman")
-    nmap = probe_executable("nmap")
+    docker = probe_executable("docker", include_version=False)
+    podman = probe_executable("podman", include_version=False)
+    nmap = probe_executable("nmap", include_version=False)
     try:
         agents = _load("agents.council").discover()
     except Exception:
@@ -2461,7 +2468,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"plugins": list_manifests()})
             if path == "/api/tools/registry":
                 from tools.registry import by_category, inventory
-                return self._json(200, {"tools": inventory(), "categories": by_category()})
+                tools = inventory()
+                return self._json(200, {"tools": tools, "categories": by_category(tools)})
             if path == "/api/reports/system":
                 render_system = _load("reports.engine").render_system
                 from tools.registry import inventory
@@ -2544,8 +2552,26 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 return
             if path == "/api/doctor": return self._json(200, {"doctor": detect_context()})
-            if path == "/api/tools": return self._json(200, {"tools": [probe_executable(name) | {"family": meta["family"], "role": meta["role"]} for name, meta in TOOL_CATALOG.items()]})
-            if path == "/api/adapters": return self._json(200, {"adapters": [{"id": adapter_id, **manifest, "tool_state": [probe_executable(tool)["state"] for tool in manifest["tool"].split("+") if tool != "multiple"]} for adapter_id, manifest in ADAPTER_MANIFESTS.items()]})
+            if path == "/api/tools":
+                tools = [
+                    probe_executable(name, include_version=False) | {"family": meta["family"], "role": meta["role"]}
+                    for name, meta in TOOL_CATALOG.items()
+                ]
+                return self._json(200, {"tools": tools})
+            if path == "/api/adapters":
+                adapters = [
+                    {
+                        "id": adapter_id,
+                        **manifest,
+                        "tool_state": [
+                            probe_executable(tool, include_version=False)["state"]
+                            for tool in manifest["tool"].split("+")
+                            if tool != "multiple"
+                        ],
+                    }
+                    for adapter_id, manifest in ADAPTER_MANIFESTS.items()
+                ]
+                return self._json(200, {"adapters": adapters})
             if path == "/api/sessions": return self._json(200, {"sessions": self.sessions.list()})
             if path.startswith("/api/sessions/"):
                 parts = path.split("/")

@@ -189,6 +189,13 @@ npm start
 Electron starts the Python sidecar on `127.0.0.1` with a random capability
 token. The renderer cannot spawn processes.
 
+The VORTEX title bar provides minimize, maximize/restore, and close controls on
+Linux without depending on window-manager decorations. Drag the title bar to
+move the app or double-click it to maximize/restore. Auto-opened first-run and
+dependency dialogs have their own minimize, maximize/restore, and close controls.
+The Terminal view has matching controls; closing that panel does not terminate a
+live PTY (use **STOP** when you intend to terminate one).
+
 ## 9. Authorized assessment (engagements)
 
 Active network tools need a declared engagement. Example:

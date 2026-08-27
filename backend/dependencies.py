@@ -57,7 +57,7 @@ def _probe_name(name: str) -> dict[str, Any]:
         from vortex_backend import probe_executable
     except ImportError:
         from backend.vortex_backend import probe_executable
-    return probe_executable(name)
+    return probe_executable(name, include_version=False)
 
 
 def _agent_proposal(agent_id: str) -> dict[str, Any]:
