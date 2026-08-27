@@ -226,6 +226,26 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(plan["commands"], [])
         self.assertTrue(any("expired" in note.lower() or "closed" in note.lower() for note in plan["notes"]))
 
+    def test_unknown_engagement_cannot_plan_outbound_or_bind_local(self):
+        outbound = build_plan(self.store, "curl https://lab.example.test", self.tmp.name, "does-not-exist")
+        self.assertEqual(outbound["status"], "rejected")
+        self.assertEqual(outbound["commands"], [])
+        self.assertIsNone(outbound["engagement_id"])
+        self.assertTrue(any("not found" in note.lower() for note in outbound["notes"]))
+        local = build_plan(self.store, "whoami", self.tmp.name, "does-not-exist")
+        self.assertEqual(local["kind"], "identity")
+        self.assertIsNone(local["engagement_id"])
+        self.assertEqual(local["status"], "planned")
+
+    def test_sqlmap_and_msf_never_fabricate_a_command(self):
+        sqlmap = build_plan(self.store, "sqlmap https://lab.example.test", self.tmp.name)
+        self.assertEqual(sqlmap["status"], "unavailable")
+        self.assertEqual(sqlmap["commands"], [])
+        self.assertTrue(any("NOT IMPLEMENTED" in note for note in sqlmap["notes"]))
+        msf = build_plan(self.store, "run msfconsole against lab.example.test", self.tmp.name)
+        self.assertEqual(msf["status"], "unavailable")
+        self.assertEqual(msf["commands"], [])
+
     def test_closed_engagement_cannot_plan_outbound_work(self):
         from backend.vortex_backend import now_iso
         engagement = {
@@ -238,7 +258,11 @@ class WorkspaceTests(unittest.TestCase):
         plan = build_plan(self.store, "curl https://lab.example.test", self.tmp.name, "closed-eng")
         self.assertEqual(plan["status"], "rejected")
         self.assertEqual(plan["commands"], [])
+        self.assertIsNone(plan["engagement_id"])
         self.assertTrue(any("closed" in note.lower() for note in plan["notes"]))
+        local = build_plan(self.store, "whoami", self.tmp.name, "closed-eng")
+        self.assertEqual(local["kind"], "identity")
+        self.assertIsNone(local["engagement_id"])
 
     def test_http_confirm_without_token_does_not_execute(self):
         from backend.orchestrate import run_turn

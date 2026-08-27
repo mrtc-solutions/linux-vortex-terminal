@@ -1241,6 +1241,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     network_facts: dict[str, Any] = {}
     engagement = store.get_engagement(engagement_id) if engagement_id else None
     closed_engagement = False
+    unknown_engagement = bool(engagement_id) and engagement is None
     if engagement:
         expired = False
         try:
@@ -1250,6 +1251,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         if engagement.get("status") != "active" or expired:
             closed_engagement = True
             engagement = None
+    bound_engagement_id = engagement["id"] if engagement else None
 
     if lower.startswith("explain ") or lower.startswith("what does ") or lower.startswith("why does "):
         kind = "explanation"
@@ -1285,6 +1287,8 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             elif not engagement:
                 if closed_engagement:
                     status = "rejected"; notes.append("Engagement is closed or expired; no SSH connection was planned.")
+                elif unknown_engagement:
+                    status = "rejected"; notes.append("Engagement not found; no SSH connection was planned.")
                 else:
                     status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex never bypasses host verification."]
             elif not target_in_engagement(target, engagement):
@@ -1405,6 +1409,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {('user ' if user_mode else '')}{action} operation on {unit}; no sudo escalation is inferred.", privilege=privilege))
             status = "planned"
             notes += [f"Fresh systemd {('user-bus ' if user_mode else '')}state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
+    elif any(word in lower for word in ("sqlmap", "msfconsole", "metasploit")):
+        kind = "authorized_engagement"
+        risk = "high"
+        authorization = "active engagement required"
+        status = "unavailable"
+        notes.append("ADAPTER NOT IMPLEMENTED: sqlmap/msfconsole remain catalog probes only. No command was created and no output was fabricated.")
     elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl", "http headers", "web application", "enumerate the web", "scan ")):
         kind = "authorized_engagement"
         risk = "high"
@@ -1418,6 +1428,9 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             if closed_engagement:
                 status = "rejected"
                 notes.append("Engagement is closed or expired; no assessment command was created.")
+            elif unknown_engagement:
+                status = "rejected"
+                notes.append("Engagement not found; no assessment command was created.")
             else:
                 status = "clarified"
                 notes += ["Active cybersecurity work requires an engagement before a target or network tool can run.", "Create an engagement with an owner/authorization reference, canonical targets, limits, and an expiry."]
@@ -1618,9 +1631,9 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "commands": specs,
         "notes": notes,
         "missing_tools": sorted(set(missing)),
-        "engagement_id": engagement_id,
+        "engagement_id": bound_engagement_id,
         "network_facts": network_facts,
-        "scope": {"cwd": str(cwd), "engagement_id": engagement_id, "targets": specs[0].get("scope", []) if specs else []},
+        "scope": {"cwd": str(cwd), "engagement_id": bound_engagement_id, "targets": specs[0].get("scope", []) if specs else []},
         "workers": [{"id": "vortex-deterministic-planner", "state": "responded", "evidence_used": bool(specs), "role": "reviewed local adapter"}, {"id": "local-model", "state": "disabled", "evidence_used": False, "role": "advisory only"}],
         "approval_required": bool(specs),
         "approval_phrase": "APPROVE " + (specs[0]["display"] if specs else "NO EXECUTION"),
@@ -1666,8 +1679,9 @@ class ExecutionManager:
             raise PermissionError("this plan requires root; rerun the reviewed plan with sudo vortex --allow-root run <plan-id>")
         if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
             raise TimeoutError("plan expired")
-        if plan.get("engagement_id"):
-            engagement = self.store.get_engagement(plan["engagement_id"])
+        needs_scope = any(spec.get("network_class") not in ("no-network", "loopback-only") for spec in plan.get("commands", []))
+        if needs_scope:
+            engagement = self.store.get_engagement(plan["engagement_id"]) if plan.get("engagement_id") else None
             workspace = getattr(self, "workspace", None)
             if workspace is not None:
                 engagement = workspace.enrich_engagement(engagement)
@@ -1748,8 +1762,9 @@ class ExecutionManager:
             identity = spec.get("executable_identity", {})
             if current.get("state") != "installed" or current.get("sha256") != identity.get("sha256") or current.get("device") != identity.get("device") or current.get("inode") != identity.get("inode"):
                 raise PolicyError(f"executable identity changed for {spec['executable']}; fresh plan required")
-        if plan.get("engagement_id"):
-            engagement = self.store.get_engagement(plan["engagement_id"])
+        needs_scope = any(spec.get("network_class") not in ("no-network", "loopback-only") for spec in plan.get("commands", []))
+        if needs_scope:
+            engagement = self.store.get_engagement(plan["engagement_id"]) if plan.get("engagement_id") else None
             workspace = getattr(self, "workspace", None)
             if workspace is not None:
                 engagement = workspace.enrich_engagement(engagement)
@@ -2452,7 +2467,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 backup_path = self.store.backup(destination, bool(body.get("overwrite", False)))
                 return self._json(201, {"backup": {"path": str(backup_path), "mode": oct(backup_path.stat().st_mode & 0o777)}})
             if path == "/api/artifacts/analyze":
-                artifact = analyze_path(body.get("path"), body.get("kind", "auto"))
+                artifact = analyze_path(body.get("path"), body.get("kind", "auto"), allowed_roots=[self.store.root])
                 self.store.save_artifact(artifact)
                 return self._json(201, {"artifact": artifact})
             if path == "/api/plan":

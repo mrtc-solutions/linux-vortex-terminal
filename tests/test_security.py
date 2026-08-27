@@ -37,6 +37,8 @@ class VortexSecurityTests(unittest.TestCase):
         self.assertFalse(looks_destructive("apt-get --assume-yes remove git"))
         self.assertTrue(looks_destructive("/bin/dd if=/dev/zero of=/dev/sda"))
         self.assertTrue(looks_destructive("rm -rf /"))
+        self.assertTrue(looks_destructive("/sbin/mkfs.ext4 /dev/sda1"))
+        self.assertFalse(looks_destructive("whoami"))
         allowed = evaluate(
             {"commands": [{"adapter_id": "linux.packages.apt", "risk": "high", "privilege": "root-required", "network_class": "no-network", "display": "apt-get --assume-yes --no-remove install adduser"}]},
             {"auto_low_risk": True},
@@ -73,3 +75,13 @@ class VortexSecurityTests(unittest.TestCase):
         from backend.artifacts import ArtifactError, analyze_path
         with self.assertRaises(ArtifactError):
             analyze_path("/no/such/file.xml", "nmap-xml")
+        outside = Path("/etc/hosts")
+        if outside.is_file():
+            with self.assertRaises(ArtifactError):
+                analyze_path(str(outside), "text", allowed_roots=[Path(self.tmp.name)])
+
+    def test_sensitive_wordlist_is_rejected(self):
+        from backend.security.scanners import discover_wordlist
+        denied = discover_wordlist("gobuster wordlist /etc/passwd")
+        self.assertEqual(denied["state"], "absent")
+        self.assertIsNone(denied["path"])

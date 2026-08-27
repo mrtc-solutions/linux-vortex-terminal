@@ -3,7 +3,7 @@
 VORTEX 0.2.0 is a real Linux application. Production paths use installed host
 tools and observed output only. Test doubles exist only inside tests.
 
-**89 Python tests + JS terminal emulator: passing.**
+**93 Python tests + JS terminal emulator: passing.**
 
 ## Directive coverage
 
@@ -35,7 +35,7 @@ tools and observed output only. Test doubles exist only inside tests.
 | Docker isolation **execution** | Probe only; runtime missing here |
 | Plugin code loading | Deliberately not implemented |
 | FastAPI / PostgreSQL / pgvector | Intentionally not added |
-| sqlmap / msf execution | Catalog probe only |
+| sqlmap / msf execution | Honest UNAVAILABLE; no command fabricated |
 | Signed 1.0 `.deb` | Not a 1.0 gate pass |
 
 ## Remaining host / release gates (cannot be faked)

@@ -55,7 +55,12 @@ def looks_destructive(display: str) -> bool:
     if any(phrase in text for phrase in DESTRUCTIVE_PHRASES):
         return True
     for part in TOKEN_RE.findall(text):
-        if part.rsplit("/", 1)[-1] in DESTRUCTIVE_WORDS:
+        base = part.rsplit("/", 1)[-1]
+        if base in DESTRUCTIVE_WORDS:
+            return True
+        # mkfs.ext4 / mkfs.xfs must match mkfs without treating adduser as dd.
+        stem = base.split(".", 1)[0]
+        if stem in DESTRUCTIVE_WORDS:
             return True
     return False
 

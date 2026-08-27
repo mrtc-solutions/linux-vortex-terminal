@@ -6,6 +6,7 @@ exist as regular files on this host.
 """
 from __future__ import annotations
 
+import os
 import re
 import stat
 from pathlib import Path
@@ -20,6 +21,29 @@ WORDLIST_CANDIDATES = (
 )
 MAX_WORDLIST_BYTES = 20 * 1024 * 1024
 WORDLIST_RE = re.compile(r"(?:wordlist|-w)\s+(\S+)", re.I)
+BLOCKED_WORDLIST_NAMES = {"shadow", "passwd", "group", "vortex.db", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"}
+
+
+def _data_root() -> Path:
+    override = os.environ.get("VORTEX_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path.home() / ".local" / "share" / "vortex").resolve()
+
+
+def _wordlist_permitted(resolved: Path) -> bool:
+    if any(part in {".ssh", ".gnupg"} for part in resolved.parts):
+        return False
+    if resolved.name.lower() in BLOCKED_WORDLIST_NAMES:
+        return False
+    allowed = [Path("/usr/share").resolve(), _data_root()]
+    for root in allowed:
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _http_url(targets: list[str]) -> str | None:
@@ -43,34 +67,44 @@ def _hostname(targets: list[str]) -> str | None:
 HOSTISH = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
 
 
+def _inspect_wordlist(raw: str) -> dict[str, Any] | None:
+    path = Path(raw).expanduser()
+    try:
+        resolved = path.resolve(strict=True)
+        st = resolved.stat()
+    except OSError:
+        return None
+    if not resolved.is_file() or not stat.S_ISREG(st.st_mode):
+        return None
+    mode = stat.S_IMODE(st.st_mode)
+    if mode & 0o022:
+        return None
+    if st.st_size <= 0 or st.st_size > MAX_WORDLIST_BYTES:
+        return None
+    if not _wordlist_permitted(resolved):
+        return None
+    return {"state": "observed", "path": str(resolved), "size": st.st_size}
+
+
 def discover_wordlist(request: str = "") -> dict[str, Any]:
     match = WORDLIST_RE.search(request or "")
-    candidates = []
     if match:
-        candidates.append(match.group(1))
-    candidates.extend(WORDLIST_CANDIDATES)
-    for raw in candidates:
-        path = Path(raw).expanduser()
-        try:
-            resolved = path.resolve(strict=True)
-        except OSError:
-            continue
-        try:
-            st = resolved.stat()
-        except OSError:
-            continue
-        if not resolved.is_file() or not stat.S_ISREG(st.st_mode):
-            continue
-        mode = stat.S_IMODE(st.st_mode)
-        if mode & 0o022:
-            continue
-        if st.st_size <= 0 or st.st_size > MAX_WORDLIST_BYTES:
-            continue
-        return {"state": "observed", "path": str(resolved), "size": st.st_size}
+        found = _inspect_wordlist(match.group(1))
+        if found:
+            return found
+        return {
+            "state": "absent",
+            "path": None,
+            "message": "The requested wordlist is missing, world-writable, too large, or outside /usr/share and the VORTEX data directory.",
+        }
+    for raw in WORDLIST_CANDIDATES:
+        found = _inspect_wordlist(raw)
+        if found:
+            return found
     return {
         "state": "absent",
         "path": None,
-        "message": "No reviewed wordlist was found. Provide an existing host path with `wordlist /absolute/path`.",
+        "message": "No reviewed wordlist was found. Provide an existing host path with `wordlist /absolute/path` under /usr/share or the VORTEX data directory.",
     }
 
 

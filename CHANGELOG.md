@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 — 2026-08-26
+
+- Unknown, closed, or expired engagement IDs cannot plan outbound work and
+  are not bound onto local diagnostics.
+- Guardian matches `mkfs.ext4`-style destructive stems. HTTP artifact analyze
+  stays inside the VORTEX data directory. Wordlists must live under `/usr/share`
+  or the data directory; `/etc/passwd` is never accepted.
+- sqlmap/msfconsole requests stay UNAVAILABLE with no fabricated command.
+
 ## 0.2.1 — 2026-08-26
 
 - Reviewed nuclei / nikto / amass / ffuf / gobuster argv adapters. Missing

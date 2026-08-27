@@ -147,6 +147,14 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(episode["task"]["id"], turn["task"]["id"])
         self.assertIsNotNone(episode.get("observation"))
 
+    def test_http_artifact_analyze_stays_inside_data_root(self):
+        outside = Path("/etc/hosts")
+        if not outside.is_file():
+            self.skipTest("/etc/hosts is not present")
+        payload = self._json("POST", "/api/artifacts/analyze", {"path": str(outside), "kind": "text"}, expected=422)
+        self.assertEqual(payload["error"]["code"], "invalid_plan")
+        self.assertIn("allowed", payload["error"]["message"].lower())
+
     def test_secret_values_never_returned(self):
         saved = self._json("POST", "/api/secrets", {"slot": "ollama_token", "value": "sk-never-echo"})
         self.assertIsNone(saved["secrets"]["values"])
