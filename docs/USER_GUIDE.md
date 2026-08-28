@@ -31,15 +31,15 @@ Installing VORTEX does **not** apt-install Kali tools, Docker, or agents.
 ```bash
 git clone https://github.com/mrtc-solutions/linux-vortex-terminal.git
 cd linux-vortex-terminal
-git checkout arena/01a048b6-linux-vortex-terminal
+git checkout arena/01a048e3-linux-vortex-terminal
 ```
 
 If you already have a clone:
 
 ```bash
 git fetch origin
-git checkout arena/01a048b6-linux-vortex-terminal
-git pull --ff-only origin arena/01a048b6-linux-vortex-terminal
+git checkout arena/01a048e3-linux-vortex-terminal
+git pull --ff-only origin arena/01a048e3-linux-vortex-terminal
 ```
 
 ## 3. Verify the build (recommended first)
@@ -48,7 +48,7 @@ No virtualenv is required.
 
 ```bash
 python3 -m compileall -q backend cli
-python3 -m unittest discover -s tests -q   # 153 tests
+python3 -m unittest discover -s tests -q
 node --check frontend/app.js
 node --check frontend/workspace.js
 node tests/test_terminal.js
@@ -117,10 +117,24 @@ vortex deps --json
 vortex sandbox --json
 vortex db integrity
 vortex audit verify
+vortex host-tools --json
+vortex mobile apk --sidecar-url http://127.0.0.1:8765/
 ```
 
 Read the `state` fields. `absent` / `UNAVAILABLE` means the binary is not
 on this host. That is expected in a minimal sandbox.
+
+`vortex host-tools` walks only safe PATH directories and reports Kali-known
+and newly installed binaries. Planning those tools still requires **Settings →
+Host tool access** (off by default). Guardian, engagement scope, and
+`shell=False` still apply.
+
+`vortex mobile apk` rebuilds a signed Android client from the live frontend
+before writing the APK. In the UI, **DOWNLOAD APK** does the same sync-then-
+download. The phone talks to this sidecar over the same HTTP API as the
+desktop workbench.
+
+VORTEX is MIT-licensed (`LICENSE`, `GET /api/license`, Settings → License).
 
 ## 6. Use it from the terminal (no browser)
 

@@ -39,6 +39,7 @@ LOW_ADAPTERS = {
     "linux.containers.logs",
     "linux.containers.diagnose",
     "linux.ssh.config",
+    "linux.host.help",
 }
 MEDIUM_ADAPTERS = {
     "linux.packages.apt",

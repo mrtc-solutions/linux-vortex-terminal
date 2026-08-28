@@ -19,7 +19,7 @@ Requires Linux and Python 3.11+. Core use has no pip dependency.
 
 ```bash
 # Verify
-python3 -m unittest discover -s tests -q   # 153 tests
+python3 -m unittest discover -s tests -q
 
 # User-local launcher (no sudo, no apt)
 ./vortex install --user
@@ -36,6 +36,8 @@ export PATH="$HOME/.local/bin:$PATH"
 ./vortex plan "whoami"
 ./vortex --profile standard --yes turn "whoami"
 ./vortex db integrity
+./vortex host-tools --json
+./vortex mobile apk --sidecar-url http://127.0.0.1:8765/
 
 # Local workbench (127.0.0.1) or Arena preview (0.0.0.0)
 ./vortex serve --bind-host 127.0.0.1 --bind-port 8765
@@ -88,6 +90,10 @@ UNAVAILABLE), or **Not implemented**.
 | Plugin JSON manifests (no plugin code execution) | Implemented |
 | Security tests: injection, prompt-injection text, Guardian | Implemented + tested |
 | Audit hash chain, redaction, output caps | Implemented + tested |
+| Host PATH / Kali tool discovery (newly installed tools) | Implemented + tested |
+| Operator setting: host-tool access for the agent | Implemented + tested; off by default; Guardian still authorizes |
+| Android APK client (sync-then-download, same API) | Implemented + tested |
+| MIT license (LICENSE, LICENSES.md, in-app, APK assets) | Implemented + tested |
 
 ## Explicitly not claimed on this host
 
@@ -173,8 +179,11 @@ records that it does not know the host outcome rather than inferring success.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow
 - [`docs/IMPLEMENTATION_REPORT.md`](docs/IMPLEMENTATION_REPORT.md) — current slice
 - [`docs/AUDIT_REPORT_2026-08-28.md`](docs/AUDIT_REPORT_2026-08-28.md) — full audit: defects found/fixed, test results, limitations
+- [`LICENSE`](LICENSE) — MIT License
+- [`LICENSES.md`](LICENSES.md) — SPDX MIT and third-party notes
 - [`NOTICE`](NOTICE) — third-party agent attribution
 - [`SECURITY.md`](SECURITY.md)
+- [`mobile/android/README.md`](mobile/android/README.md) — Android APK client
 
 ## Development
 

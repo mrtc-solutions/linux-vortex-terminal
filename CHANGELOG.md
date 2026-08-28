@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.19 — 2026-08-28
+
+- Host PATH scanner discovers Kali/Linux tools that were installed after VORTEX
+  started, including binaries outside the builtin catalog. Newly seen names are
+  marked `new_since_last_scan`. `GET /api/tools/host`, `POST /api/tools/host/rescan`,
+  and `./vortex host-tools` expose the live inventory.
+- Settings gain **host tool access**. When enabled, the planner and agent may
+  propose typed argv for discovered tools. Guardian, engagement scope, denylist,
+  and `shell=False` still apply. Interpreters cannot be passed `-c`/`-e` from
+  natural language. Off by default.
+- **DOWNLOAD APK** rebuilds a signed Android WebView client from the live
+  frontend before the download starts. The phone talks to the same sidecar API
+  as the desktop workbench. `./vortex mobile apk` is the CLI equivalent.
+- MIT License is shown in Settings, `GET /api/license`, `LICENSES.md`, and
+  inside the APK (`assets/LICENSE`).
+
 ## 0.2.18 — 2026-08-28
 
 Audit round: four defects found by a full-repository review, each reproduced

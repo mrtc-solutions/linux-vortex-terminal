@@ -89,6 +89,7 @@
       if ($('dev-setting')) $('dev-setting').value = state.settings.developer_mode ? 'on' : 'off';
       if ($('offline-setting')) $('offline-setting').value = state.settings.offline ? 'on' : 'off';
       if ($('lab-setting')) $('lab-setting').value = state.settings.lab_mode ? 'on' : 'off';
+      if ($('host-tools-setting')) $('host-tools-setting').value = state.settings.host_tool_access ? 'on' : 'off';
       const offline = !!state.settings.offline;
       if ($('mode-label')) $('mode-label').textContent = offline ? 'OFFLINE' : (state.settings.lab_mode ? 'LAB MODE' : 'LOCAL-FIRST');
       if ($('privacy-chip')) $('privacy-chip').textContent = (state.settings.privacy_mode || 'local').toUpperCase() + ' CORE';
@@ -393,6 +394,7 @@
     $('dev-setting')?.addEventListener('change', e => persist({ developer_mode: e.target.value === 'on' }));
     $('offline-setting')?.addEventListener('change', e => persist({ offline: e.target.value === 'on' }));
     $('lab-setting')?.addEventListener('change', e => persist({ lab_mode: e.target.value === 'on' }));
+    $('host-tools-setting')?.addEventListener('change', e => persist({ host_tool_access: e.target.value === 'on' }));
     $('conversation-search')?.addEventListener('input', () => loadConversations());
     $('reject-plan')?.addEventListener('click', async () => {
       if (!state.plan?.id) return toast('No plan to reject.', true);

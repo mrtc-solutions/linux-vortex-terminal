@@ -3,7 +3,14 @@
 VORTEX 0.2.0 is a real Linux application. Production paths use installed host
 tools and observed output only. Test doubles exist only inside tests.
 
-**153 Python tests + JS terminal, window-control, and frontend suites: passing.**
+**Python tests + JS terminal, window-control, and frontend suites: passing.**
+
+## 0.2.19 — host tools and Android APK
+
+- Live PATH discovery for Kali/Linux tools, including newly installed binaries.
+- Operator setting `host_tool_access` (default off) lets the agent plan discovered tools through Guardian.
+- Android APK client: sync live frontend, sign, download. Same HTTP API as the workbench.
+- MIT license surfaced in the UI, API, APK, and `LICENSES.md`.
 
 ## Audit round (2026-08-28)
 
