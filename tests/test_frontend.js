@@ -31,6 +31,14 @@ assert.ok(app.includes("$('request-input').addEventListener('keydown'"), 'reques
 assert.ok(workspace.includes('sendButton.disabled = false'), 'SEND button is re-enabled on failure');
 assert.ok(workspace.includes('if (planning)') && workspace.includes('planning = false'), 'chat submit is guarded against overlapping turns');
 
+// Unclear requests render clickable suggestion hints, and completed operations
+// render the backend's next_steps guidance on the analysis card.
+assert.ok(app.includes('data-suggestion'), 'plan suggestion chips are rendered');
+assert.ok(app.includes('TRY ONE OF THESE'), 'plan suggestion headings are rendered');
+assert.ok(app.includes('Next steps'), 'analysis next-steps section is rendered');
+assert.ok(backend.includes('"suggestions": suggestion_hints'), 'backend plan carries suggestion hints');
+assert.ok(backend.includes('analysis_next_steps(plan, op)'), 'backend operation carries concrete next steps');
+
 // Tasks view exposes the already-existing RESTART route.
 assert.ok(workspace.includes('data-task-restart'), 'Tasks RESTART button is rendered');
 assert.ok(workspace.includes('/restart'), 'Tasks RESTART route is wired');

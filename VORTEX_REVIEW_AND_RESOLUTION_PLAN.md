@@ -573,3 +573,63 @@ retrieval all returned coherently.
 
 **Final gate:** `npm test` = **138 Python tests + 4 JS suites green**;
 `npm run lint` clean.
+
+### 12.3 Operator feedback: suggestion hints + rendered next steps
+
+**Request.** When natural language is not understood, provide operator suggestions
+before execution, and render next-step guidance after each execution.
+
+**Implemented.**
+
+1. The plan payload now includes `suggestions`. For any plan that is not a typed,
+   executable plan (`clarified`, `rejected`, `unavailable`, or `abstain`), the
+   builder emits read-only example phrasings matched to the keywords in the
+   original request (logs/services, files/paths, user/host, processes,
+   network/socket, health/storage, packages, containers, git, ssh). Planned
+   plans carry an empty list so there is no "try this" noise on an executable
+   card. `suggestion_hints()` is the deterministic generator; nothing auto-runs.
+2. The renderer displays suggestions as clickable `TRY ONE OF THESE` chips on a
+   clarified/blocked plan. Each chip submits the example through the normal
+   `makePlan` path, so it still creates a reviewed plan and never executes
+   automatically.
+3. Completed operations now write concrete `analysis.next_steps` derived from
+   the adapters that actually ran (`analysis_next_steps()`), and both the
+   frontend analysis card and the Markdown report render that section.
+   Follow-ups are read-only suggestions only; mutations never get a one-click
+   re-run.
+
+**Live verification.** `/api/plan` for an unspecified phrase returned
+`abstain/clarified` with six useful hints. `what user am i` executed through the
+real sidecar and the finished operation carried concrete next steps
+(`whoami`, `host`, `plan only`).
+
+**Gate:** `npm test` = **140 Python tests + 4 JS suites green**;
+`npm run lint` clean.
+
+### 12.4 Assessment of the shared ChatGPT discussion
+
+The user shared a ChatGPT conversation about orchestration, stochastic
+parroting, and multi-agent names ("Terry", "Bradley"). Assessment against the
+actual codebase:
+
+- **Orchestration — already implemented.** `backend/orchestrate.py` runs
+  intent → deterministic planner (`build_plan`) → agent council
+  (`backend/agents/council.py`) → Guardian (`backend/security/guardian.py`) →
+  optional execution → report/observation. This is exactly the "one or several
+  agents review, a safety gate decides" shape the discussion recommends, minus
+  external model dependence.
+- **Stochastic parroting — addressed by design.** The plan engine is
+  deterministic and read-only-first. Dispatched adapters use reviewed `argv`,
+  real subprocesses, bounded output, executable-identity probes, evidence
+  digests, preflight gates for mutations, engagement scope rechecks, and
+  `untrusted_output=True` in analyses. The local model remains disabled by
+  default and is advisory only.
+- **Named sub-agents — partially present.** The repo has a local agent council
+  plus catalog agents (CAI, Nebula, PentestGPT, HexStrike, PentAGI, etc.) and
+  a critic. "Terry"/"Bradley" are not code components; they are product-facing
+  model labels and should not be copied blindly.
+- **Useful but not yet needed:** RAG/retrieval over external documentation,
+  wider external-agent collaboration, and a multi-role orchestrator with more
+  autonomous agents. The discussion's own recommendation — invest in
+  verification, permissions, sandboxing, and observability before many agents —
+  matches the current architecture, so no immediate feature change is warranted.

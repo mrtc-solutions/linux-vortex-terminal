@@ -1489,6 +1489,48 @@ def plan_digest(plan: dict[str, Any]) -> str:
     })
 
 
+def suggestion_hints(request: str, kind: str, status: str, has_commands: bool) -> list[str]:
+    """Return read-only example phrasings when a request was not turned into a
+    typed plan. These are guidance only: every hint stays on a reviewed local
+    adapter and is never executed automatically."""
+    if has_commands or status == "planned":
+        return []
+    lower = (request or "").lower()
+    hints: list[str] = []
+
+    def add(*items: str) -> None:
+        for item in items:
+            if item and item not in hints and len(hints) < 8:
+                hints.append(item)
+
+    if any(word in lower for word in ("log", "journal", "systemd", "service", "unit")):
+        add("show system logs", "show running services", "check if nginx is running", "show nginx logs")
+    if any(word in lower for word in ("file", "path", "directory", "folder")) or lower.startswith(("cat ", "read ")):
+        add("show /etc/os-release", "list files in /var/log", "list files in /usr/share/doc")
+    if any(word in lower for word in ("user", "login", "username", "whoami", "who am")):
+        add("what user am i", "who is logged in", "show login history")
+    if any(word in lower for word in ("host", "machine", "distro", "os release", "release")):
+        add("what host is this", "what distro is this", "show /etc/os-release")
+    if any(word in lower for word in ("process", "pid", "kill", "sleep", "task")):
+        add("show processes", "show process tree", "show process 1")
+    if any(word in lower for word in ("network", "socket", "port", "interface", "route", "listening")):
+        add("show listening ports", "show ip address", "show route table")
+    if any(word in lower for word in ("memory", "ram", "cpu", "load", "health", "uptime", "disk", "space", "storage")):
+        add("show system health", "show disk usage", "show memory", "show uptime")
+    if any(word in lower for word in ("install", "package", "apt", "dependency", "tool")):
+        add("list installed packages")
+    if any(word in lower for word in ("container", "docker", "podman")):
+        add("docker ps", "inspect docker containers")
+    if any(word in lower for word in ("git", "commit", "repo", "branch", "diff")):
+        add("git status", "show git remotes", "show recent commits")
+    if any(word in lower for word in ("ssh", "connect", "connectivity", "alias") or "connect" in lower) and "install" not in lower:
+        add("show ssh configuration for <host alias>")
+    if not hints:
+        add("show system health", "show listening ports", "show running services", "list files in /var/log", "show disk usage", "show processes")
+    return hints[:6]
+
+
+
 def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagement_id: str | None = None, offline: bool = False) -> dict[str, Any]:
     request = (request or "").strip()
     if not request:
@@ -2393,6 +2435,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "rollback": rollback,
         "commands": specs,
         "notes": notes,
+        "suggestions": suggestion_hints(request, kind, status, bool(specs)),
         "missing_tools": sorted(set(missing)),
         "engagement_id": bound_engagement_id,
         "network_facts": network_facts,
@@ -2788,6 +2831,7 @@ class ExecutionManager:
                             op["preflight"] = {"state": "ready", "next_command": plan["commands"][len(op["commands"])] ["display"], "digest": op["preflight_digest"]}
                             op["status"] = "awaiting_confirmation"
                             op["analysis"] = make_analysis(plan, op)
+                            op["analysis"]["next_steps"] = analysis_next_steps(plan, op)
                             self.store.update_operation(op)
                             self.store.append_audit("preflight_ready", {"operation_id": op["id"], "plan_id": plan["id"], "preflight_digest": op["preflight_digest"]})
                             with self.lock:
@@ -2809,6 +2853,7 @@ class ExecutionManager:
             op["facts"] = self._collect_adapter_facts(plan, op)
             op["artifacts"] = self._collect_artifacts(plan, op)
             op["analysis"] = make_analysis(plan, op)
+            op["analysis"]["next_steps"] = analysis_next_steps(plan, op)
             self.store.update_operation(op)
             self.store.append_audit("operation_finished", {"operation_id": op["id"], "plan_id": plan["id"], "status": op["status"], "output_digest": op["output_digest"]})
             workspace = getattr(self, "workspace", None)
@@ -2870,6 +2915,11 @@ def report_markdown(operation: dict[str, Any]) -> str:
         if command.get("stdout"): lines += ["```text", command["stdout"], "```", ""]
         if command.get("stderr"): lines += ["### stderr", "", "```text", command["stderr"], "```", ""]
     if analysis.get("rollback"): lines += ["## Rollback guidance", "", str(analysis["rollback"]), ""]
+    next_steps = analysis.get("next_steps") or []
+    if next_steps:
+        lines += ["", "## Next steps", ""]
+        for step in next_steps:
+            lines.append(f"- **{step.get('label', 'next')}** · {step.get('text', '')}")
     return "\n".join(lines)
 
 
@@ -2893,6 +2943,47 @@ def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
         "next_steps": [{"label": "explain", "text": "Review the observed command timeline and evidence digests."}, {"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."}],
         "workers": op["workers"],
     }
+
+
+def analysis_next_steps(plan: dict[str, Any], op: dict[str, Any]) -> list[dict[str, str]]:
+    """Build concrete, read-only follow-up suggestions for a finished operation.
+
+    Suggestions are derived from what actually ran, so they avoid telling the
+    operator to inspect a tool that was not part of the observed plan. Mutations
+    never get a one-click re-run; they only receive the same safe review options.
+    """
+    steps: list[dict[str, str]] = []
+    dispatched = {spec.get("adapter_id") for spec in plan.get("commands", [])}
+    if op.get("status") == "succeeded":
+        if "linux.system.identity" in dispatched:
+            steps.append({"label": "whoami", "text": "What user am i"})
+            steps.append({"label": "host", "text": "What host is this"})
+        if "linux.system.clock" in dispatched:
+            steps.append({"label": "date", "text": "Show the current date and time"})
+        if "linux.filesystem.list" in dispatched:
+            steps.append({"label": "list", "text": f"List files in {op.get('cwd', 'the workspace')}"})
+        if "linux.filesystem.read" in dispatched or "linux.system.os-release" in dispatched or "linux.filesystem.log" in dispatched:
+            steps.append({"label": "read", "text": "Read /etc/os-release"})
+            steps.append({"label": "logs", "text": "Show system logs"})
+        if "linux.system.processes" in dispatched:
+            steps.append({"label": "process", "text": "Show process tree"})
+        if "linux.systemd.inspect" in dispatched or "linux.systemd.journal" in dispatched:
+            steps.append({"label": "service", "text": "Show running services"})
+            steps.append({"label": "journal", "text": "Show systemd logs"})
+        if "linux.network.sockets" in dispatched or "linux.network.interfaces" in dispatched or "linux.network.routes" in dispatched:
+            steps.append({"label": "network", "text": "Show listening ports"})
+            steps.append({"label": "route", "text": "Show route table"})
+        if "linux.filesystem.usage" in dispatched:
+            steps.append({"label": "disk", "text": "Show disk usage"})
+        if "linux.system.packages" in dispatched or "linux.packages.apt" in dispatched:
+            steps.append({"label": "packages", "text": "List installed packages"})
+        if any(adapter and adapter.startswith("linux.development.git") for adapter in dispatched):
+            steps.append({"label": "git", "text": "Show git status"})
+    if not steps:
+        steps.append({"label": "explain", "text": "Review the observed command timeline and evidence digests."})
+    steps.append({"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."})
+    return steps[:6]
+
 
 
 def parse_expiry(raw: Any, *, default_seconds: int) -> str:
