@@ -47,6 +47,7 @@ def inventory() -> list[dict[str, Any]]:
             "requires_root": False,
             "output_type": "text",
             "sha256": probe.get("sha256"),
+            "source": "builtin-catalog",
         })
     return items
 

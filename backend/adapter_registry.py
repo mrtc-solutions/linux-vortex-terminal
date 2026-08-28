@@ -112,5 +112,7 @@ ADAPTER_MANIFESTS: dict[str, dict[str, Any]] = {
     "security.amass.passive": {"version": "1", "family": "passive-osint", "tool": "amass", "risk": "high", "network_class": "outbound-read", "operation": "passive domain enumeration", "limits": {"timeout_seconds": 180, "mode": "passive"}},
     "security.ffuf.discovery": {"version": "1", "family": "authorized-content-discovery", "tool": "ffuf", "risk": "high", "network_class": "outbound-read", "operation": "bounded content discovery with a host wordlist", "limits": {"timeout_seconds": 180, "threads": 10}},
     "security.gobuster.discovery": {"version": "1", "family": "authorized-content-discovery", "tool": "gobuster", "risk": "high", "network_class": "outbound-read", "operation": "bounded directory discovery with a host wordlist", "limits": {"timeout_seconds": 180, "threads": 10}},
+    "linux.host.help": {"version": "1", "family": "host-tools", "tool": "multiple", "risk": "low", "network_class": "no-network", "operation": "help or version of a discovered host tool", "limits": {"timeout_seconds": 15}},
+    "linux.host.tool": {"version": "1", "family": "host-tools", "tool": "multiple", "risk": "high", "network_class": "outbound-read", "operation": "operator-enabled discovered Kali/Linux host tool", "limits": {"timeout_seconds": 180}},
 }
 

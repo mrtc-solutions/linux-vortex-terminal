@@ -31,15 +31,15 @@ Installing VORTEX does **not** apt-install Kali tools, Docker, or agents.
 ```bash
 git clone https://github.com/mrtc-solutions/linux-vortex-terminal.git
 cd linux-vortex-terminal
-git checkout arena/01a03a09-linux-vortex-terminal
+git checkout arena/01a048e3-linux-vortex-terminal
 ```
 
 If you already have a clone:
 
 ```bash
 git fetch origin
-git checkout arena/01a03a09-linux-vortex-terminal
-git pull --ff-only origin arena/01a03a09-linux-vortex-terminal
+git checkout arena/01a048e3-linux-vortex-terminal
+git pull --ff-only origin arena/01a048e3-linux-vortex-terminal
 ```
 
 ## 3. Verify the build (recommended first)
@@ -117,10 +117,24 @@ vortex deps --json
 vortex sandbox --json
 vortex db integrity
 vortex audit verify
+vortex host-tools --json
+vortex mobile apk --sidecar-url http://127.0.0.1:8765/
 ```
 
 Read the `state` fields. `absent` / `UNAVAILABLE` means the binary is not
 on this host. That is expected in a minimal sandbox.
+
+`vortex host-tools` walks only safe PATH directories and reports Kali-known
+and newly installed binaries. Planning those tools still requires **Settings →
+Host tool access** (off by default). Guardian, engagement scope, and
+`shell=False` still apply.
+
+`vortex mobile apk` rebuilds a signed Android client from the live frontend
+before writing the APK. In the UI, **DOWNLOAD APK** does the same sync-then-
+download. The phone talks to this sidecar over the same HTTP API as the
+desktop workbench.
+
+VORTEX is MIT-licensed (`LICENSE`, `GET /api/license`, Settings → License).
 
 ## 6. Use it from the terminal (no browser)
 
@@ -240,7 +254,37 @@ In this Arena sandbox: Debian 12, no Docker/Podman, no Ollama, no third-party
 agent CLIs, typically no nmap. Local Linux adapters (whoami, df, ss, git,
 systemd inspect, os-release, lscpu, …) work because those binaries exist.
 
-## 11. Data, privacy, and stop
+## 11. If VORTEX restarts mid-operation
+
+A command runs in a process owned by one sidecar. If that sidecar is killed
+(crash, `Ctrl+C`, reboot) while an operation is in flight, VORTEX cannot know
+what the host actually did, so on the next start it says so instead of
+guessing:
+
+- the operation becomes `unknown_after_crash` with the reason `sidecar_restart`
+- the VTX task that was waiting on it moves to `PAUSED` with a recovery note
+- a `recovered_after_restart` task event is recorded
+
+A task is never marked `COMPLETED` on the basis of an outcome nobody observed.
+Inspect what happened, then resume or restart the task:
+
+```bash
+vortex tasks
+vortex task show <task-id>
+```
+
+## 12. Automatic follow-ups are bounded
+
+When an observed result does not meet the objective, VORTEX may propose one
+reviewed follow-up. That loop is capped: at most **2** follow-up iterations per
+task, and a follow-up is refused if it repeats a plan the same task already
+executed. Both the count and the executed plan digests are stored on the task,
+so the cap survives a sidecar restart. When the loop stops you will see a
+`replan_stopped` task event carrying the reason. Follow-ups are additionally
+restricted to low-risk local diagnostics that Guardian auto-approves; a
+follow-up never escalates into network or mutating work.
+
+## 13. Data, privacy, and stop
 
 | Item | Location |
 |---|---|
@@ -254,7 +298,7 @@ groups. It does not kill unrelated user processes.
 The path to “installed tools ⇒ real execution, nothing fabricated” is
 `docs/READY_WHEN_TOOLS_EXIST.md`.
 
-## 12. What is not claimed
+## 14. What is not claimed
 
 - Third-party agent consult APIs (CAI, Strix, Nebula, …) — discovery only
 - Docker sandbox **execution** when no runtime is installed

@@ -66,7 +66,7 @@ except ImportError:  # direct `python backend/vortex_backend.py`
     from probe_cache import TTLCache
 
 SCHEMA_VERSION = 1
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.19"
 REDACTION_RE = re.compile(
     r"(?i)(bearer\s+|password\s*[=:]\s*|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*|secret\s*[=:]\s*)([^\s,;]+)"
 )
@@ -104,12 +104,17 @@ _TOOLS_REGISTRY_CACHE: TTLCache = TTLCache(10.0)
 _TOOLS_CACHE: TTLCache = TTLCache(10.0)
 _ADAPTERS_CACHE: TTLCache = TTLCache(10.0)
 _DOCTOR_CACHE: TTLCache = TTLCache(10.0)
+_HOST_TOOLS_CACHE: TTLCache = TTLCache(10.0)
 
 
 def clear_probe_caches() -> None:
     """Force a fresh probe pass. Used by tests, refresh actions, and fresh listings."""
-    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _ADAPTERS_CACHE, _DOCTOR_CACHE):
+    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _ADAPTERS_CACHE, _DOCTOR_CACHE, _HOST_TOOLS_CACHE):
         cache.clear()
+    try:
+        _load("tools.hostscan").invalidate_host_scan_cache()
+    except Exception:
+        pass
 
 
 def _query_flag(query: dict[str, list[str]], key: str) -> bool:
@@ -651,6 +656,41 @@ class Store:
         except ImportError:
             from workspace import ensure_schema
         ensure_schema(self)
+
+    def reconcile_stale_operations(self) -> int:
+        """Close operations that a previous sidecar left mid-flight.
+
+        An operation only advances while the thread that owns it is alive. After
+        a crash or restart no such thread exists, so a row left in
+        ``started``/``running`` can never reach a terminal state and its task
+        stays permanently EXECUTING. This is called by the execution authority
+        at startup and marks those rows ``unknown_after_crash`` — an honest
+        unknown state, never a fabricated success.
+        """
+        stale = 0
+        with self.lock, self.connect() as db:
+            rows = db.execute("SELECT id, result_json FROM operations WHERE status IN ('started','running')").fetchall()
+            for row in rows:
+                try:
+                    operation = json.loads(row["result_json"])
+                except (TypeError, ValueError):
+                    operation = {"id": row["id"], "commands": []}
+                operation["status"] = "unknown_after_crash"
+                operation["ended_at"] = operation.get("ended_at") or now_iso()
+                operation["termination_reason"] = "sidecar_restart"
+                operation["error"] = "The sidecar stopped before this operation reached a terminal state. The real outcome on the host is unknown."
+                db.execute(
+                    "UPDATE operations SET ended_at=?, status=?, result_json=? WHERE id=?",
+                    (operation["ended_at"], "unknown_after_crash", canonical(operation), row["id"]),
+                )
+                stale += 1
+        if stale:
+            try:
+                self.append_audit("operations_reconciled_after_restart", {"count": stale})
+            except (OSError, sqlite3.Error):
+                pass
+        return stale
+
     def mark_stale_sessions(self) -> None:
         # A sidecar restart cannot prove that an old PTY is still alive. This is
         # called by the session authority at startup, not by every read-only
@@ -1616,7 +1656,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             notes.append(f"{argv[0]} would be invoked with {len(argv) - 1} argument(s). No command will be executed by ask or plan.")
         status = "clarified"
-    elif re.search(r"\b(?:help|capabilities|what can you do)\b", lower) or lower.strip() in {"hello", "hi", "hey"}:
+    elif re.search(r"(?<!-)\b(?:help|capabilities|what can you do)\b", lower) or lower.strip() in {"hello", "hi", "hey"}:
         kind = "help"
         status = "clarified"
         notes.append("VORTEX reads only reviewed local adapters before any typed plan is approved. Common areas include identity, system health, memory/CPU, files and directories, processes, Git, services/journal, listening ports, network interfaces/routes, disk usage, and installed packages.")
@@ -1856,7 +1896,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         authorization = "active engagement required"
         status = "unavailable"
         notes.append("ADAPTER NOT IMPLEMENTED: sqlmap/msfconsole remain catalog probes only. No command was created and no output was fabricated.")
-    elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl", "ping", "nslookup", "whois", "reachable", "reachability", "connectivity", "http headers", "web application", "enumerate the web", "scan ", "directory brute", "directory bust", "brute force director", "content discovery", "resolve", "traceroute", "trace route")) or re.search(r"\bdig\b", lower) or re.search(r"\b(?:is|are)\s+(?:[a-z0-9-]+\.)+[a-z]{2,}\s+(?:up|online|reachable|running|active|responding)\b", lower) or lower.strip() in {"host"}:
+    elif any(word in lower for word in ("nmap", "nuclei", "ffuf", "nikto", "amass", "gobuster", "curl", "ping", "nslookup", "whois", "reachable", "reachability", "connectivity", "http headers", "web application", "enumerate the web", "directory brute", "directory bust", "brute force director", "content discovery", "resolve", "traceroute", "trace route")) or re.search(r"\bdig\b", lower) or re.search(r"\bscan\b", lower) or re.search(r"\b(?:is|are)\s+(?:[a-z0-9-]+\.)+[a-z]{2,}\s+(?:up|online|reachable|running|active|responding)\b", lower) or lower.strip() in {"host"}:
         kind = "authorized_engagement"
         risk = "high"
         authorization = "active engagement required"
@@ -2417,9 +2457,102 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         notes.append("Vortex does not refresh the apt package index from a natural-language ask; it refuses silent third-party repository or network trust changes.")
         notes.append("Use the PTY terminal session for an operator-controlled apt-get update, or create an explicit reviewed plan.")
     else:
-        kind = "abstain"
-        status = "clarified"
-        notes += ["Vortex does not have a reviewed adapter for this request yet.", "Try system health, disk usage, listening ports, Git status, a service status query, or create an authorized engagement for supported reconnaissance."]
+        host_match = None
+        try:
+            settings_now = _load("config").load_settings()
+        except Exception:
+            settings_now = {}
+        if settings_now.get("host_tool_access") is True:
+            try:
+                host_match = _load("tools.hostscan").match_request(request)
+            except Exception:
+                host_match = None
+        if host_match and host_match.get("status") == "rejected":
+            kind = "host_tool"
+            risk = "high"
+            authorization = "operator-controlled host tool"
+            status = "rejected"
+            notes.append(str(host_match.get("reason") or "Host tool request was rejected."))
+        elif host_match and host_match.get("status") == "unavailable":
+            kind = "host_tool"
+            status = "unavailable"
+            missing.append(str(host_match.get("missing") or host_match.get("name") or "host-tool"))
+            notes.append(str(host_match.get("reason") or "TOOL MISSING."))
+        elif host_match and host_match.get("status") == "clarified":
+            kind = "host_tool"
+            status = "clarified"
+            notes.append(str(host_match.get("reason") or "Host tool request needs a narrower typed argv."))
+        elif host_match and host_match.get("status") == "ok":
+            kind = "host_tool"
+            tool_name = str(host_match["name"])
+            argv = list(host_match["argv"])
+            network = str(host_match.get("network_class") or "outbound-read")
+            risk = str(host_match.get("risk") or "high")
+            authorization = "operator-enabled host tool access"
+            if host_match.get("needs_engagement"):
+                if offline:
+                    status = "unavailable"
+                    notes.append("OFFLINE mode blocks outbound host-tool plans; no command was created.")
+                elif not engagement:
+                    if closed_engagement:
+                        status = "rejected"
+                        notes.append("Engagement is closed or expired; no host-tool command was created.")
+                    elif unknown_engagement:
+                        status = "rejected"
+                        notes.append("Engagement not found; no host-tool command was created.")
+                    else:
+                        status = "clarified"
+                        notes.append("This discovered host tool contacts the network. Create an authorized engagement with a target before it can run.")
+                else:
+                    targets = re.findall(r"https?://[^\s,]+|\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b", request)
+                    try:
+                        normalized = [normalize_target(t.rstrip(".,")) for t in targets] if targets else list(engagement.get("targets") or [])[:1]
+                    except PolicyError as exc:
+                        raise PolicyError(str(exc)) from exc
+                    out_scope = [target for target in normalized if not target_in_engagement(target, engagement)]
+                    try:
+                        scope_mod = _load("security.scope")
+                    except Exception:
+                        scope_mod = None
+                    excluded_hits = [] if out_scope else (list(normalized) if scope_mod is None else [target for target in normalized if scope_mod.excluded(target, engagement)])
+                    if not normalized:
+                        status = "clarified"
+                        notes.append("Tell VORTEX the exact authorized hostname, URL, IP, or CIDR target for this host tool.")
+                    elif out_scope:
+                        status = "rejected"
+                        notes.append("Target is outside the active engagement scope: " + ", ".join(out_scope))
+                    elif excluded_hits:
+                        status = "rejected"
+                        notes.append("Target is on the engagement exclusion list: " + ", ".join(excluded_hits))
+                    elif probe_executable(tool_name)["state"] != "installed":
+                        status = "unavailable"
+                        missing.append(tool_name)
+                        notes.append(f"TOOL MISSING: {tool_name}. The host probe found no executable; no output exists.")
+                    else:
+                        spec = command_spec(tool_name, argv, cwd, risk=risk, network=network, required=tool_name, scope=normalized, explanation=str(host_match.get("explanation") or ""), timeout=180)
+                        spec["adapter_id"] = str(host_match.get("adapter_id") or "linux.host.tool")
+                        spec["adapter_version"] = "1"
+                        spec["adapter_limits"] = {"timeout_seconds": 180}
+                        specs.append(spec)
+                        status = "planned"
+                        notes.append("Host-tool access is enabled. Guardian still authorizes execution; argv is typed and shell-free.")
+                        notes.append(f"Discovered tool source: {host_match.get('source')}. License: {host_match.get('license') or 'unknown'}.")
+            else:
+                if probe_executable(tool_name)["state"] != "installed":
+                    status = "unavailable"
+                    missing.append(tool_name)
+                    notes.append(f"TOOL MISSING: {tool_name}.")
+                else:
+                    spec = command_spec(tool_name, argv, cwd, risk=risk, network=network, required=tool_name, explanation=str(host_match.get("explanation") or ""), timeout=15 if host_match.get("help_only") else 180)
+                    spec["adapter_id"] = str(host_match.get("adapter_id") or "linux.host.help")
+                    spec["adapter_version"] = "1"
+                    specs.append(spec)
+                    status = "planned"
+                    notes.append("Host-tool access is enabled for a local help/version or no-network discovered tool. Guardian still authorizes execution.")
+        else:
+            kind = "abstain"
+            status = "clarified"
+            notes += ["Vortex does not have a reviewed adapter for this request yet.", "Try system health, disk usage, listening ports, Git status, a service status query, enable host-tool access for newly installed Kali tools, or create an authorized engagement for supported reconnaissance."]
 
     created = now_iso()
     expires = datetime.fromtimestamp(time.time() + 15 * 60, tz=timezone.utc).isoformat(timespec="milliseconds")
@@ -2457,12 +2590,19 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
 
 
 class ExecutionManager:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, reconcile: bool = True):
         self.store = store
         self.threads: dict[str, threading.Thread] = {}
         self.cancel_events: dict[str, threading.Event] = {}
         self.processes: dict[str, subprocess.Popen[bytes]] = {}
         self.lock = threading.Lock()
+        # This process is the only owner of a live operation thread. Any row
+        # still marked running belongs to a previous, now dead sidecar.
+        if reconcile:
+            try:
+                self.store.reconcile_stale_operations()
+            except (OSError, sqlite3.Error):
+                pass
 
     def start(self, plan: dict[str, Any], confirm: bool, approval_token: str | None = None, allow_root: bool = False, offline: bool = False) -> dict[str, Any]:
         if not confirm:
@@ -3035,6 +3175,9 @@ def capabilities_document() -> dict[str, Any]:
             "secret-slots", "sse-operations", "sse-sessions", "stop-all", "audit-chain",
             "episode-observe-act-evaluate",
             "nuclei-ffuf-nikto-amass-gobuster-adapters",
+            "host-tool-discovery",
+            "android-apk-client",
+            "mit-license",
         ],
         "host_probes": {
             "docker": docker.get("state"),
@@ -3055,6 +3198,17 @@ def capabilities_document() -> dict[str, Any]:
             "silent-third-party-install",
             "unrestricted-llm-os-control",
         ],
+        "license": "MIT",
+        "host_tool_access": {
+            "setting": "host_tool_access",
+            "default": False,
+            "notes": "When enabled, the planner may propose typed argv for tools discovered on a safe PATH, including newly installed Kali tools. Guardian, scope, and shell=False still apply.",
+        },
+        "mobile": {
+            "android_apk": "implemented",
+            "sync_before_download": True,
+            "same_api_as_workbench": True,
+        },
     }
 
 
@@ -3153,6 +3307,22 @@ class VortexHandler(BaseHTTPRequestHandler):
         if not isinstance(value, str):
             raise ValueError(f"{key} must be a string")
         return value
+
+    def _sidecar_url_from_request(self, body: dict[str, Any]) -> str:
+        explicit = self._optional_str(body, "sidecar_url")
+        if explicit:
+            url = explicit.strip()
+            if not url.startswith(("http://", "https://")):
+                raise ValueError("sidecar_url must be an http(s) URL")
+            if any(c in url for c in "\x00\n\r"):
+                raise ValueError("sidecar_url contains control characters")
+            return url if url.endswith("/") else url + "/"
+        host = (self.headers.get("Host") or "127.0.0.1:8765").strip()
+        if not host or any(c in host for c in "/ \n\r\x00"):
+            raise ValueError("invalid Host header")
+        if host.startswith("0.0.0.0"):
+            host = "127.0.0.1" + host[len("0.0.0.0"):]
+        return f"http://{host}/"
 
     @staticmethod
     def _report_format(query: dict[str, list[str]], default: str = "json") -> str:
@@ -3427,6 +3597,52 @@ class VortexHandler(BaseHTTPRequestHandler):
                     _invalidate_probe_lookups()
                     _DOCTOR_CACHE.invalidate("context")
                 return self._json(200, {"doctor": _DOCTOR_CACHE.get("context", detect_context)})
+            if path == "/api/tools/host":
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
+                    _HOST_TOOLS_CACHE.invalidate("scan")
+                    try:
+                        _load("tools.hostscan").invalidate_host_scan_cache()
+                    except Exception:
+                        pass
+                def _host_scan() -> dict[str, Any]:
+                    return _load("tools.hostscan").scan_host_tools(persist=False, use_cache=True)
+                scan = _HOST_TOOLS_CACHE.get("scan", _host_scan)
+                try:
+                    access = _load("config").load_settings().get("host_tool_access") is True
+                except Exception:
+                    access = False
+                return self._json(200, {"host_tools": scan, "host_tool_access": access})
+            if path == "/api/mobile/apk":
+                try:
+                    status = _load("mobile.apkbuild").apk_status()
+                except Exception as exc:
+                    status = {"ok": False, "built": False, "message": redact(str(exc))}
+                return self._json(200, {"apk": status, "license": "MIT"})
+            if path == "/api/mobile/apk/download":
+                try:
+                    builder = _load("mobile.apkbuild")
+                    status = builder.apk_status()
+                    apk_path = Path(status["path"]) if status.get("built") else None
+                    if not apk_path or not apk_path.is_file():
+                        return self._json(404, {"error": {"code": "not_found", "message": "APK has not been synced yet. POST /api/mobile/apk first."}})
+                    data = apk_path.read_bytes()
+                except Exception as exc:
+                    return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
+                self.send_response(200)
+                self._headers("application/vnd.android.package-archive")
+                self.send_header("Content-Disposition", 'attachment; filename="vortex.apk"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self._write(data)
+                return
+            if path == "/api/license":
+                license_path = Path(__file__).resolve().parent.parent / "LICENSE"
+                notice_path = Path(__file__).resolve().parent.parent / "NOTICE"
+                text = license_path.read_text(encoding="utf-8") if license_path.is_file() else "MIT License"
+                notice = notice_path.read_text(encoding="utf-8") if notice_path.is_file() else ""
+                return self._json(200, {"spdx": "MIT", "name": "MIT License", "license": text, "notice": notice})
             if path == "/api/tools":
                 query = urllib.parse.parse_qs(parsed.query)
                 if _query_flag(query, "fresh"):
@@ -3777,6 +3993,24 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/benchmark":
                 from benchmark import run_suite
                 return self._json(200, {"benchmark": run_suite(self.store, self.workspace, self.executor, self._optional_str(body, "cwd"))})
+            if path == "/api/tools/host/rescan":
+                _invalidate_probe_lookups()
+                _HOST_TOOLS_CACHE.invalidate("scan")
+                try:
+                    _load("tools.hostscan").invalidate_host_scan_cache()
+                except Exception:
+                    pass
+                scan = _load("tools.hostscan").scan_host_tools(persist=True, use_cache=False)
+                try:
+                    access = _load("config").load_settings().get("host_tool_access") is True
+                except Exception:
+                    access = False
+                return self._json(200, {"host_tools": scan, "host_tool_access": access})
+            if path == "/api/mobile/apk":
+                builder = _load("mobile.apkbuild")
+                url = self._sidecar_url_from_request(body)
+                result = builder.build_apk(sidecar_url=url)
+                return self._json(201, {"apk": result, "license": "MIT"})
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
         except PermissionError as exc:
             return self._json(403, {"error": {"code": "confirmation_or_privilege", "message": str(exc), "exit_code": EXIT_CODES["confirmation_required"]}})
@@ -3800,6 +4034,13 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -
         from workspace import Workspace
     handler = VortexHandler
     handler.store = store; handler.executor = ExecutionManager(store); handler.sessions = SessionManager(store); handler.workspace = Workspace(store); handler.executor.workspace = handler.workspace; handler.frontend = Path(__file__).resolve().parent.parent / "frontend"; handler.token = token
+    # ExecutionManager has already closed operations abandoned by a previous
+    # sidecar; pause the tasks that were waiting on them so the UI shows an
+    # honest unknown state instead of a task stuck in EXECUTING forever.
+    try:
+        handler.workspace.reconcile_orphaned_tasks()
+    except (OSError, sqlite3.Error):
+        pass
     server = ThreadingHTTPServer((host, port), handler)
     def stop_on_term(_signum: int, _frame: Any) -> None:
         raise KeyboardInterrupt

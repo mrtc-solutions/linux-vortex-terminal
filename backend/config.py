@@ -17,6 +17,7 @@ DEFAULTS = {
     "matrix": "medium",
     "ollama_endpoint": "http://127.0.0.1:11434",
     "first_run_complete": False,
+    "host_tool_access": False,
 }
 
 

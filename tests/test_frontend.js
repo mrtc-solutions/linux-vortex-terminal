@@ -53,6 +53,16 @@ assert.ok(workspace.includes('data-agent-install'), 'Agents missing rows include
 assert.ok(workspace.includes("openDependency(`agent:"), 'Agents install opens the dependency proposal surface');
 assert.ok(workspace.includes('btn.disabled = false'), 'Agents install button is restored after the action');
 
+// Host-tool access, APK sync-then-download, and MIT license are operator-facing.
+assert.ok(index.includes('id="download-apk"') && index.includes('id="download-apk-settings"'), 'DOWNLOAD APK buttons exist');
+assert.ok(index.includes('id="host-tools-setting"') && index.includes('id="rescan-host-tools"'), 'host-tool access and PATH rescan exist');
+assert.ok(index.includes('id="license-badge"') && index.includes('MIT'), 'MIT license badge exists');
+assert.ok(app.includes("api('/api/mobile/apk'"), 'APK button posts a live sync before download');
+assert.ok(app.includes("link.href = '/api/mobile/apk/download'"), 'APK download follows a successful sync');
+assert.ok(app.includes("api('/api/tools/host/rescan'"), 'PATH rescan posts to the host-tools endpoint');
+assert.ok(workspace.includes('host_tool_access'), 'host-tool access setting is persisted');
+assert.ok(backend.includes('"/api/mobile/apk/download"') || backend.includes("'/api/mobile/apk/download'") || backend.includes('path == "/api/mobile/apk/download"') || backend.includes("endswith(\"/api/mobile/apk/download\")") || backend.includes('apk/download'), 'APK download route is served');
+
 // Refresh buttons must force a fresh probe rather than silently using the cache.
 assert.ok(app.includes("loadDoctor(true)"), 'Refresh DOCTOR forces a fresh host probe');
 assert.ok(app.includes("loadTools(true)"), 'Refresh TOOLS forces a fresh host probe');

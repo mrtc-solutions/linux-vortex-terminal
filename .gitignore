@@ -26,6 +26,7 @@ coverage/
 *.deb
 *.rpm
 *.AppImage
+*.apk
 
 # Local environment
 .env

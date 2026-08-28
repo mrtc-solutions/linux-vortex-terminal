@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.2.19 — 2026-08-28
+
+- Host PATH scanner discovers Kali/Linux tools that were installed after VORTEX
+  started, including binaries outside the builtin catalog. Newly seen names are
+  marked `new_since_last_scan`. `GET /api/tools/host`, `POST /api/tools/host/rescan`,
+  and `./vortex host-tools` expose the live inventory.
+- Settings gain **host tool access**. When enabled, the planner and agent may
+  propose typed argv for discovered tools. Guardian, engagement scope, denylist,
+  and `shell=False` still apply. Interpreters cannot be passed `-c`/`-e` from
+  natural language. Off by default.
+- **DOWNLOAD APK** rebuilds a signed Android WebView client from the live
+  frontend before the download starts. The phone talks to the same sidecar API
+  as the desktop workbench. `./vortex mobile apk` is the CLI equivalent.
+- MIT License is shown in Settings, `GET /api/license`, `LICENSES.md`, and
+  inside the APK (`assets/LICENSE`).
+
+## 0.2.18 — 2026-08-28
+
+Audit round: four defects found by a full-repository review, each reproduced
+before it was fixed and covered by a regression test. Test suite 141 → 153.
+
+- Guardian resolves the engagement scope module under every supported import
+  context. Previously the exclusion check could raise past its own loop in the
+  package import context, so excluded targets were not checked. If the module
+  still cannot be loaded, Guardian now blocks instead of continuing without an
+  exclusion check.
+- The engagement gate no longer keys off the planner's `kind` label. Guardian
+  recomputes the requirement from typed command specs
+  (`guardian.requires_engagement`), so a network-effecting command under an
+  unrecognised plan kind cannot skip the gate. Local apt/systemd mutations stay
+  outside the engagement gate and keep the root and fresh-preflight gates.
+- Operations abandoned by a killed sidecar are reconciled at startup as
+  `unknown_after_crash`, and the VTX tasks waiting on them move to `PAUSED`
+  with a recovery note. Nothing is promoted to a success state on the basis of
+  an unobserved outcome.
+- Automatic replanning is bounded by a budget persisted on the task result:
+  at most 2 follow-up iterations, and a follow-up that repeats a plan the task
+  already executed is refused. The cap now survives the executor thread
+  boundary and a sidecar restart; the stop reason is recorded as a
+  `replan_stopped` task event.
+
 ## 0.2.17 — 2026-08-27
 
 - Electron now uses a VORTEX-owned Linux title bar with working minimize,

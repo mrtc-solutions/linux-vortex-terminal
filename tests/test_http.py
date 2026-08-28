@@ -41,11 +41,11 @@ class HttpApiTests(unittest.TestCase):
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)
 
-    def _json(self, method, path, body=None, expected=200):
+    def _json(self, method, path, body=None, expected=200, timeout=8):
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(self.base + path, data=data, method=method, headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=8) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 payload = json.loads(response.read())
                 self.assertEqual(response.status, expected)
                 return payload
@@ -336,6 +336,36 @@ class HttpApiTests(unittest.TestCase):
         ok = self._json("GET", "/api/reports/system?format=json")
         self.assertEqual(ok["product"], "VORTEX")
         self.assertEqual(ok["kind"], "system")
+
+    def test_host_tools_and_license_routes(self):
+        data = self._json("GET", "/api/tools/host")
+        self.assertIn("host_tools", data)
+        self.assertIn("counts", data["host_tools"])
+        self.assertGreater(data["host_tools"]["counts"]["path_executables"], 0)
+        self.assertFalse(data["host_tool_access"])
+        license_doc = self._json("GET", "/api/license")
+        self.assertEqual(license_doc["spdx"], "MIT")
+        self.assertIn("MIT License", license_doc["license"])
+        caps = self._json("GET", "/api/capabilities")
+        self.assertIn("host-tool-discovery", caps["implemented"])
+        self.assertIn("android-apk-client", caps["implemented"])
+        self.assertEqual(caps["license"], "MIT")
+        rescanned = self._json("POST", "/api/tools/host/rescan", {}, expected=200, timeout=20)
+        self.assertIn("host_tools", rescanned)
+        self.assertGreaterEqual(rescanned["host_tools"]["counts"]["path_executables"], data["host_tools"]["counts"]["path_executables"])
+
+    def test_mobile_apk_sync_then_download(self):
+        built = self._json("POST", "/api/mobile/apk", {}, expected=201, timeout=30)
+        self.assertTrue(built["apk"]["ok"])
+        self.assertEqual(built["apk"]["license"], "MIT")
+        self.assertIn("classes.dex", built["apk"]["contents"])
+        request = urllib.request.Request(self.base + "/api/mobile/apk/download")
+        with urllib.request.urlopen(request, timeout=20) as response:
+            self.assertEqual(response.status, 200)
+            body = response.read()
+            self.assertGreater(len(body), 1000)
+            self.assertTrue(response.headers.get("Content-Type", "").startswith("application/vnd.android.package-archive"))
+            self.assertEqual(body[:4], b"PK\x03\x04")
 
     def test_complete_task_requires_bound_task(self):
         denied = self._json("POST", "/api/operations/missing/complete-task", {"task_id": "VTX-none"}, expected=404)
