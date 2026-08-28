@@ -6,7 +6,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from security.guardian import policy_defaults
+try:
+    from security.guardian import policy_defaults
+except ImportError:
+    from backend.security.guardian import policy_defaults
 
 DEFAULTS = {
     **policy_defaults("safe"),

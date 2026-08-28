@@ -10,6 +10,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from backend import vortex_backend as vtx_backend
 from backend.vortex_backend import ExecutionManager, SessionManager, Store, VortexHandler
 from backend.workspace import Workspace
 
@@ -64,6 +65,17 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["kind"], "identity")
         self.assertIn(payload["guardian"]["authority"], ("vortex-guardian",))
 
+    def test_conversation_edit_branch_route(self):
+        created = self._json("POST", "/api/conversations", {"title": "branch-source"}, expected=201)
+        conv_id = created["conversation"]["id"]
+        turn = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": self.tmp.name, "conversation_id": conv_id})
+        self.assertEqual(turn["conversation"]["id"], conv_id)
+        messages = self._json("GET", f"/api/conversations/{conv_id}")["messages"]
+        user_msg = next(item for item in messages if item["role"] == "user")
+        branch = self._json("POST", f"/api/conversations/{conv_id}/messages/{user_msg['id']}/edit", {"content": "whoami please"}, expected=201)
+        self.assertEqual(branch["conversation"]["parent_id"], conv_id)
+        self.assertEqual(branch["messages"][0]["content"], "whoami please")
+
     def test_reject_and_pause_routes(self):
         turn = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": self.tmp.name})
         plan_id = turn["plan"]["id"]
@@ -106,6 +118,24 @@ class HttpApiTests(unittest.TestCase):
         }, expected=201)
         closed = self._json("POST", f"/api/engagements/{created['engagement']['id']}/close", {})
         self.assertEqual(closed["engagement"]["status"], "closed")
+
+    def test_refresh_health_and_agents_invalidate_deep_lookup_cache(self):
+        vtx_backend.clear_probe_caches()
+        with patch.object(vtx_backend, "_invalidate_probe_lookups", wraps=vtx_backend._invalidate_probe_lookups) as health_inv:
+            self._json("GET", "/api/system/health?fresh=1")
+        self.assertGreaterEqual(health_inv.call_count, 1, "health refresh must clear low-level probe caches")
+        with patch.object(vtx_backend, "_invalidate_probe_lookups", wraps=vtx_backend._invalidate_probe_lookups) as agents_inv:
+            self._json("GET", "/api/agents?fresh=1")
+        self.assertGreaterEqual(agents_inv.call_count, 1, "agents refresh must clear low-level probe caches")
+        vtx_backend.clear_probe_caches()
+
+    def test_head_static_asset_returns_headers_without_body(self):
+        request = urllib.request.Request(self.base + "/assets/app.js", method="HEAD")
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read(), b"")
+            self.assertGreater(int(response.headers["Content-Length"] or 0), 0)
+            self.assertTrue(response.headers.get("Content-Type", "").startswith("text/javascript"))
 
     def test_static_path_traversal_rejected(self):
         request = urllib.request.Request(self.base + "/assets/../backend/vortex_backend.py")
@@ -217,6 +247,16 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(bad_prune["error"]["code"], "invalid_plan")
         ok_prune = self._json("POST", "/api/store/prune", {"history_days": 30, "output_days": 7})
         self.assertEqual(ok_prune["prune"]["history_days"], 30)
+
+    def test_session_rejects_missing_cwd_as_invalid_plan(self):
+        payload = self._json("POST", "/api/sessions", {
+            "name": "bad-cwd",
+            "cwd": "/definitely/missing/vortex-session-dir",
+            "cols": 80,
+            "rows": 24,
+        }, expected=422)
+        self.assertEqual(payload["error"]["code"], "invalid_plan")
+        self.assertIn("working directory", payload["error"]["message"].lower())
 
     def test_http_artifact_analyze_stays_inside_data_root(self):
         outside = Path("/etc/hosts")

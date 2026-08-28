@@ -37,7 +37,7 @@
         <h1>Welcome to VORTEX</h1>
         <p>These checks use the live host. Missing optional components stay unavailable; nothing is silently installed.</p>
         <div id="setup-steps" class="setup-steps"></div>
-        <div class="form-foot"><button class="secondary-button" id="open-deps-from-setup">MISSING DEPENDENCIES</button><button class="primary-button" id="complete-setup">CONTINUE</button></div>
+        <div class="form-foot"><button class="secondary-button" id="open-deps-from-setup">MISSING DEPENDENCIES</button><button class="secondary-button" id="skip-setup">SKIP</button><button class="primary-button" id="complete-setup">CONTINUE</button></div>
       </div>
     </section>
   </div>
@@ -105,7 +105,7 @@
               <h1>Talk to <em>Linux.</em></h1>
               <p class="hero-copy">Natural language becomes a typed plan, Guardian review, and real commands. Tool output is data, not instructions.</p>
               <div id="chat-thread" class="chat-thread"><div class="chat-empty">Ask VORTEX to inspect this host. You will see the plan, the real terminal evidence, and a natural-language explanation.</div></div>
-              <div class="command-bar" id="command-bar"><span class="prompt-mark">❯</span><input id="request-input" autocomplete="off" placeholder="Check my disk space." /><button id="plan-button"><span class="spark">✦</span> SEND</button></div>
+              <div class="command-bar" id="command-bar"><span class="prompt-mark">❯</span><input id="request-input" autocomplete="off" aria-label="Ask VORTEX" placeholder="Check my disk space." /><button id="plan-button" aria-label="Send"><span class="spark">✦</span> SEND</button></div>
               <div class="quick-actions"><button data-prompt="system health"><span class="qa-icon cyan">⌁</span><span><b>System health</b><small>CPU · memory · disk</small></span><span class="qa-arrow">↗</span></button><button data-prompt="show listening ports"><span class="qa-icon amber">⌁</span><span><b>Listening ports</b><small>Local socket inspection</small></span><span class="qa-arrow">↗</span></button><button data-prompt="whoami"><span class="qa-icon violet">⌘</span><span><b>Who am I</b><small>Current user identity</small></span><span class="qa-arrow">↗</span></button><button data-prompt="find disk space usage"><span class="qa-icon green">◒</span><span><b>Disk usage</b><small>Current scope only</small></span><span class="qa-arrow">↗</span></button></div>
             </div>
             <div class="live-column">

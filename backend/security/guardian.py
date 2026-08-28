@@ -12,15 +12,29 @@ LOW_ADAPTERS = {
     "linux.system.health",
     "linux.system.identity",
     "linux.system.processes",
+    "linux.system.packages",
+    "linux.system.storage",
+    "linux.system.hardware",
     "linux.filesystem.usage",
     "linux.filesystem.list",
+    "linux.filesystem.read",
+    "linux.filesystem.log",
     "linux.network.sockets",
     "linux.network.interfaces",
+    "linux.network.facts",
+    "linux.network.routes",
+    "linux.network.firewall",
+    "linux.network.wifi",
     "linux.system.clock",
     "linux.system.os-release",
     "linux.system.cpu",
+    "linux.system.login",
     "linux.development.git-status",
+    "linux.development.git-log",
+    "linux.development.git-branches",
+    "linux.development.git-diff",
     "linux.systemd.inspect",
+    "linux.systemd.journal",
     "linux.containers.inspect",
     "linux.containers.logs",
     "linux.containers.diagnose",
@@ -38,6 +52,9 @@ HIGH_ADAPTERS = {
     "security.amass.passive",
     "security.ffuf.discovery",
     "security.gobuster.discovery",
+    "linux.network.ping",
+    "linux.network.dns",
+    "linux.network.whois",
     "linux.ssh.connection",
 }
 LOW_NETWORK = {"no-network", "loopback-only"}
@@ -53,18 +70,29 @@ CHMOD_WORLD_RE = re.compile(
 TOKEN_RE = re.compile(r"[A-Za-z0-9._+/-]+")
 
 
+_READONLY_FIREWALL_RE = re.compile(
+    r"(?:^|[\s;|&])(?:iptables|ip6tables|iptables-restore|nft)\s+(?:-[A-Za-z]*[SLnVN][A-Za-z]*\b|\b(?:list|show|status|rule)\b)",
+    re.I,
+)
+
+
 def looks_destructive(display: str) -> bool:
     """Match destructive command words, not accidental substrings like adduser/remove."""
     text = (display or "").lower()
     if CHMOD_WORLD_RE.search(text):
         return True
+    read_only_firewall = bool(_READONLY_FIREWALL_RE.search(text))
     for part in TOKEN_RE.findall(text):
         base = part.rsplit("/", 1)[-1]
         if base in DESTRUCTIVE_WORDS:
+            if base in {"iptables", "ip6tables", "nft"} and read_only_firewall:
+                continue
             return True
         # mkfs.ext4 / mkfs.xfs must match mkfs without treating adduser as dd.
         stem = base.split(".", 1)[0]
         if stem in DESTRUCTIVE_WORDS:
+            if stem in {"iptables", "ip6tables", "nft"} and read_only_firewall:
+                continue
             return True
     return False
 

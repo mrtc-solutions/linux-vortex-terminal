@@ -8,8 +8,8 @@
   "scripts": {
     "start": "electron desktop/main.js",
     "preview": "python3 backend/vortex_backend.py --host 0.0.0.0 --port 4173",
-    "test": "python3 -m unittest discover -s tests -v && node tests/test_terminal.js && node tests/test_windows.js",
-    "lint": "python3 -m compileall -q backend cli && node --check frontend/app.js && node --check frontend/terminal.js && node --check frontend/windows.js && node --check frontend/workspace.js && node --check desktop/main.js && node --check desktop/preload.js && node --check desktop/window-controls.js",
+    "test": "python3 -m unittest discover -s tests -v && node tests/test_terminal.js && node tests/test_windows.js && node tests/test_frontend.js && node tests/test_frontend_runtime.js",
+    "lint": "python3 -m compileall -q backend cli && node --check frontend/app.js && node --check frontend/terminal.js && node --check frontend/windows.js && node --check frontend/workspace.js && node --check tests/test_frontend.js && node --check tests/test_frontend_runtime.js && node --check desktop/main.js && node --check desktop/preload.js && node --check desktop/window-controls.js",
     "format:check": "python3 -m compileall -q backend cli",
     "package:deb": "packaging/deb/build.sh"
   },
