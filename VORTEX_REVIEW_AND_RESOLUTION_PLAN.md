@@ -560,5 +560,16 @@ retrieval all returned coherently.
    directories into `ValueError`, which maps to `422 invalid_plan`. Regression:
    `test_session_rejects_missing_cwd_as_invalid_plan`.
 
-**Final gate:** `npm test` = **137 Python tests + 4 JS suites green**;
+3. **Common natural-language phrasings were not yet routing to reviewed
+   adapters.** `what user am i` and `what host is this` abstained; `show nginx
+   logs` abstained; `show systemd logs`, `show all logs`, and `view logs` fell
+   into the generic file-reader path; and `view <absolute path>` was not handled
+   by the absolute-path branch. Fixed by extending identity parsing, adding the
+   `show|read|view|tail [the] <name> logs|journal` pattern to `parse_service`,
+   routing generic log scopes to `linux.systemd.journal`, keeping bare `view
+   logs` out of the file reader, and accepting `view` in absolute-path handling.
+   Regression:
+   `test_pass7_common_natural_language_phrasings_route_to_reviewed_adapters`.
+
+**Final gate:** `npm test` = **138 Python tests + 4 JS suites green**;
 `npm run lint` clean.

@@ -137,6 +137,31 @@ class WorkspaceTests(unittest.TestCase):
         containers = build_plan(self.store, "docker ps", self.tmp.name)
         self.assertEqual(containers["kind"], "container_inspection")
 
+    def test_pass7_common_natural_language_phrasings_route_to_reviewed_adapters(self):
+        user_phrase = build_plan(self.store, "what user am i", self.tmp.name)
+        self.assertEqual(user_phrase["kind"], "identity", user_phrase["notes"])
+        if user_phrase["status"] == "planned":
+            self.assertEqual(user_phrase["commands"][0]["executable"], "whoami")
+        host_phrase = build_plan(self.store, "what host is this", self.tmp.name)
+        self.assertEqual(host_phrase["kind"], "identity", host_phrase["notes"])
+        if host_phrase["status"] == "planned":
+            self.assertEqual(host_phrase["commands"][0]["executable"], "hostname")
+        service_logs = build_plan(self.store, "show nginx logs", self.tmp.name)
+        self.assertEqual(service_logs["kind"], "plan", service_logs["notes"])
+        if service_logs["status"] == "planned":
+            self.assertEqual(service_logs["commands"][0]["adapter_id"], "linux.systemd.inspect")
+            self.assertIn("nginx.service", service_logs["commands"][0]["argv"])
+        for phrase in ("show system logs", "show systemd logs", "show all logs", "view logs"):
+            generic_logs = build_plan(self.store, phrase, self.tmp.name)
+            self.assertEqual(generic_logs["kind"], "plan", phrase + ": " + "; ".join(generic_logs["notes"]))
+            if generic_logs["status"] == "planned":
+                self.assertEqual(generic_logs["commands"][0]["adapter_id"], "linux.systemd.journal", phrase)
+        ssh_config = build_plan(self.store, "test ssh connectivity to lab.example.test", self.tmp.name)
+        self.assertEqual(ssh_config["kind"], "ssh_diagnostics", ssh_config["notes"])
+        # Connectivity checks are engagement-gated; key assertion is that the
+        # target is recognized rather than falling through as a generic abort.
+        self.assertTrue(any("Provide one SSH host alias" in note for note in ssh_config["notes"]) or ssh_config["status"] in ("clarified", "rejected", "unavailable", "planned"))
+
     def test_ping_requires_engagement_and_plans_bounded_command(self):
         bare = build_plan(self.store, "ping google.com", self.tmp.name)
         self.assertEqual(bare["kind"], "authorized_engagement")

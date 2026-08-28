@@ -1423,6 +1423,15 @@ def parse_service(text: str) -> str | None:
         unit = unit_value(match.group(1))
         if unit and unit.lower() not in {"container", "containers"}:
             return unit
+    # "show|read|view|tail [the] <name> logs|journal" (e.g. "show nginx logs").
+    # Generic scopes such as system/systemd journal are handled by the dedicated
+    # journal branch below; only concrete unit names route to systemd inspect.
+    match = re.search(r"\b(?:show|read|view|tail)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9_.@:-]*)\s+(?:log|logs|journal)\b", lower)
+    if match:
+        unit = unit_value(match.group(1))
+        generic = {"system", "systemd", "container", "containers", "application", "app", "boot", "kernel", "auth", "log", "logs", "journal", "all", "services", "service"}
+        if unit and unit.lower().rsplit(".", 1)[0] not in generic and not re.search(r"\b(?:system|systemd)\s+logs?\b", lower):
+            return unit
     return None
 
 
@@ -2025,7 +2034,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 adapter_command("linux.systemd.inspect", "journalctl", [*journal_prefix, "-u", unit, "-n", "80", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation=f"Read the last bounded {('user ' if user_mode else '')}journal lines for {unit}; no service mutation is requested."),
             ])
             status = "planned"; notes.append("Read-only systemd and journal inspection. Restart/enable/disable require a separate fresh plan and confirmation.")
-    elif any(word in lower for word in ("whoami", "who am i", "who am", "current user", "hostname", "username", "user name", "pwd", "working directory", "current directory", "present working directory", "uid", "gid", "groups", "group id", "user id")) or lower.strip() in {"pwd", "id"}:
+    elif any(word in lower for word in ("whoami", "who am i", "who am", "current user", "hostname", "username", "user name", "pwd", "working directory", "current directory", "present working directory", "uid", "gid", "groups", "group id", "user id")) or any(phrase in lower for phrase in ("what user am i", "which user am i", "what user are you running as", "what host is this", "which host is this", "what machine is this", "which machine is this", "host name of this machine", "host is this")) or lower.strip() in {"pwd", "id", "hostname"}:
         kind = "identity"
         catalog = [
             ("whoami", ["whoami"], "Report the current user name."),
@@ -2037,11 +2046,11 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             wanted = {lower.strip()}
         elif lower.strip() == "id" or re.search(r"\b(?:uid|gid|groups|user id|group id)\b", lower):
             wanted = {"id"}
-        elif "hostname" in lower or "host name" in lower or "host-name" in lower or "computer name" in lower:
+        elif "hostname" in lower or "host name" in lower or "host-name" in lower or "computer name" in lower or any(phrase in lower for phrase in ("what host is this", "which host is this", "what machine is this", "which machine is this", "host name of this machine", "host is this")):
             wanted = {"hostname"}
         elif "pwd" in lower or "working directory" in lower or "current directory" in lower or "present working directory" in lower:
             wanted = {"pwd"}
-        elif any(phrase in lower for phrase in ("who am i", "whoami", "current user", "user name", "username", "my user")):
+        elif any(phrase in lower for phrase in ("who am i", "whoami", "current user", "user name", "username", "my user", "what user am i", "which user am i", "what user are you running as")):
             wanted = {"whoami"}
         else:
             wanted = set()
@@ -2065,7 +2074,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             specs.append(adapter_command("linux.system.login", executable, argv, cwd, required=executable, explanation=text))
             status = "planned"; notes.append("Read-only login session inspection; no session is terminated or altered.")
-    elif lower.strip().startswith(("show file ", "read file ", "cat ", "view ")) or (any(phrase in lower for phrase in ("show file ", "read file ", "open file ", "cat ")) and "/" in lower):
+    elif lower.strip().startswith(("show file ", "read file ", "cat ", "view file ")) or (any(phrase in lower for phrase in ("show file ", "read file ", "open file ", "cat ")) and "/" in lower):
         kind = "filesystem_read"
         raw_match = re.search(r"(?:show|read|open|view|cat)\s+(?:file\s+)?(/[^\s;]+)", lower)
         if not raw_match:
@@ -2086,8 +2095,8 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 kind = "filesystem_list"
                 specs.append(adapter_command("linux.filesystem.list", "ls", ["ls", "-la", str(directory)], cwd, required="ls", explanation=f"List files in {directory} only."))
                 status = "planned"; notes.append("Read-only directory listing; no files are modified.")
-    elif re.search(r"\b(?:show|read|open|display)\s+(/[^\s;]+)", lower):
-        match = re.search(r"\b(?:show|read|open|display)\s+(/[^\s;]+)", lower)
+    elif re.search(r"\b(?:show|read|open|display|view)\s+(/[^\s;]+)", lower):
+        match = re.search(r"\b(?:show|read|open|display|view)\s+(/[^\s;]+)", lower)
         target = match.group(1) if match else ""
         candidate = safe_file_target(target) if target else None
         directory = safe_directory_target(target) if target and candidate is None else None
@@ -2240,7 +2249,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.systemd.inspect", "systemctl", [*prefix, "list-units", *unit_flags, "--all", "--no-pager"], cwd, required="systemctl", explanation="List observed systemd service units without changing their state."))
             status = "planned"
             notes.append("Read-only systemd unit listing. No service is started, stopped, enabled, or disabled.")
-    elif any(phrase in lower for phrase in ("show journal", "systemd journal", "show logs", "all journal", "show journal logs", "journalctl")) or lower.strip() in {"journalctl", "journalctl -n 100"}:
+    elif any(phrase in lower for phrase in ("show journal", "systemd journal", "show logs", "all journal", "show journal logs", "journalctl", "show systemd logs", "systemd logs", "show all logs", "view logs", "recent journal")) or lower.strip() in {"journalctl", "journalctl -n 100"}:
         kind = "plan"
         if probe_executable("journalctl")["state"] != "installed":
             status = "unavailable"; missing.append("journalctl"); notes.append("TOOL MISSING: journalctl; no journal was observed.")
