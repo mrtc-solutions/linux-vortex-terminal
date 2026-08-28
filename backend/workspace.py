@@ -243,6 +243,35 @@ class Workspace:
     def interrupted_tasks(self) -> list[dict[str, Any]]:
         return [item for item in self.list_tasks(200) if item["state"] in {"EXECUTING", "OBSERVING", "WAITING_FOR_APPROVAL", "PLANNING", "PAUSED", "VALIDATING", "REPLANNING"}]
 
+    def reconcile_orphaned_tasks(self) -> list[str]:
+        """Move tasks whose operation died with a previous sidecar to PAUSED.
+
+        A task in EXECUTING/OBSERVING is only advanced by the thread running its
+        operation. Once the store has marked that operation
+        ``unknown_after_crash`` no such thread exists, so the task is paused and
+        the honest unknown outcome is recorded. The task is never marked
+        COMPLETED: VORTEX does not claim an outcome it did not observe.
+        """
+        recovered: list[str] = []
+        for task in self.list_tasks(200):
+            if task["state"] not in {"EXECUTING", "OBSERVING", "VALIDATING", "REPLANNING"}:
+                continue
+            operation_id = task.get("operation_id")
+            operation = self.store.get_operation(operation_id) if operation_id else None
+            if operation_id and operation and operation.get("status") in {"started", "running"}:
+                continue
+            if operation_id and operation and operation.get("status") not in {"unknown_after_crash"}:
+                continue
+            result = dict(task.get("result") or {})
+            result["recovery"] = {
+                "state": "unknown_after_crash",
+                "detail": "The sidecar stopped while this task was in flight. The real host outcome was not observed.",
+            }
+            self.update_task(task["id"], state="PAUSED", result=result)
+            self.add_task_event(task["id"], "recovered_after_restart", {"previous_state": task["state"], "operation_id": operation_id})
+            recovered.append(task["id"])
+        return recovered
+
     def delete_task(self, task_id: str) -> dict[str, Any] | None:
         return self.update_task(task_id, state="CANCELLED")
 

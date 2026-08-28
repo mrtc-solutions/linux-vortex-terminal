@@ -218,3 +218,86 @@ class VortexSecurityTests(unittest.TestCase):
                 os.environ.pop("XDG_CONFIG_HOME", None)
             else:
                 os.environ["XDG_CONFIG_HOME"] = previous
+
+
+class GuardianScopeGateRegressionTests(unittest.TestCase):
+    """Regressions for the Guardian engagement gate and its scope import."""
+
+    @staticmethod
+    def _network_plan(kind, adapter="security.http.headers", targets=None):
+        return {
+            "kind": kind,
+            "status": "planned",
+            "scope": {"targets": list(targets or [])},
+            "commands": [{
+                "adapter_id": adapter, "risk": "low", "privilege": "user",
+                "network_class": "outbound-read", "display": "curl -I http://lab.example.test/",
+            }],
+        }
+
+    def test_engagement_gate_is_recomputed_from_commands_not_plan_kind(self):
+        # Previously only kind in {authorized_engagement, ssh_diagnostics} was
+        # gated, so any other plan kind carrying an outbound command escaped it.
+        for kind in ("authorized_engagement", "ssh_diagnostics", "http_probe", "network_ping", "unlabelled_future_kind"):
+            decision = evaluate(self._network_plan(kind), {"profile": "expert", "auto_low_risk": True}, None)
+            self.assertTrue(decision["blocked"], f"{kind} must require an engagement")
+            self.assertNotEqual(decision["decision"], "auto")
+
+    def test_local_package_mutation_still_does_not_require_an_engagement(self):
+        plan = {
+            "kind": "package_operation", "status": "planned", "scope": {},
+            "commands": [{
+                "adapter_id": "linux.packages.apt", "risk": "high", "privilege": "root-required",
+                "network_class": "outbound-mutation", "display": "apt-get --assume-yes --no-remove install git",
+            }],
+        }
+        decision = evaluate(plan, {"profile": "safe"}, None)
+        self.assertFalse(decision["blocked"])
+        self.assertTrue(decision["requires_approval"])
+
+    def test_requires_engagement_matches_execution_authority_gate(self):
+        from backend.security.guardian import requires_engagement
+        from backend.vortex_backend import plan_requires_engagement
+        cases = [
+            self._network_plan("authorized_engagement", targets=["lab.example.test"]),
+            self._network_plan("http_probe", adapter="security.nmap.discovery"),
+            {"kind": "identity", "status": "planned", "scope": {}, "commands": [
+                {"adapter_id": "linux.system.identity", "risk": "low", "privilege": "user", "network_class": "no-network", "display": "whoami"}]},
+        ]
+        for plan in cases:
+            self.assertEqual(requires_engagement(plan), plan_requires_engagement(plan), plan["kind"])
+
+    def test_exclusion_check_works_in_plain_package_import_context(self):
+        # `from security.scope import excluded` only resolves when backend/ is on
+        # sys.path. A package-context consumer previously hit ModuleNotFoundError
+        # and the exclusion check never ran.
+        import subprocess
+        code = (
+            "import sys;"
+            "sys.path[:] = [p for p in sys.path if not p.endswith('/backend')];"
+            "sys.path.insert(0, '.');"
+            "from backend.security.guardian import evaluate;"
+            "plan={'kind':'authorized_engagement','status':'planned','scope':{'targets':['lab.example.test']},"
+            "'commands':[{'adapter_id':'security.nmap.discovery','risk':'low','privilege':'user',"
+            "'network_class':'outbound-read','display':'nmap lab.example.test'}]};"
+            "eng={'status':'active','expired':False,'expires_at':'2099-01-01T00:00:00+00:00',"
+            "'excluded_targets':['lab.example.test']};"
+            "d=evaluate(plan, {'profile':'safe'}, eng);"
+            "print('BLOCKED' if d['blocked'] else 'ALLOWED');"
+            "print('EXCLUSION' if any('exclusion' in r.lower() for r in d['reasons']) else 'NO-EXCLUSION')"
+        )
+        root = Path(__file__).resolve().parent.parent
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(root))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("BLOCKED", proc.stdout)
+        self.assertIn("EXCLUSION", proc.stdout)
+
+    def test_guardian_fails_closed_when_scope_module_cannot_be_loaded(self):
+        from unittest.mock import patch
+        import backend.security.guardian as guardian
+        plan = self._network_plan("authorized_engagement", targets=["lab.example.test"])
+        engagement = {"status": "active", "expired": False, "expires_at": "2099-01-01T00:00:00+00:00", "excluded_targets": []}
+        with patch.object(guardian, "_load_scope_excluded", return_value=None):
+            decision = guardian.evaluate(plan, {"profile": "expert", "auto_low_risk": True}, engagement)
+        self.assertTrue(decision["blocked"])
+        self.assertTrue(any("fails closed" in reason.lower() for reason in decision["reasons"]))

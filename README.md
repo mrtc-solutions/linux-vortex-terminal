@@ -19,7 +19,7 @@ Requires Linux and Python 3.11+. Core use has no pip dependency.
 
 ```bash
 # Verify
-python3 -m unittest discover -s tests -q
+python3 -m unittest discover -s tests -q   # 153 tests
 
 # User-local launcher (no sudo, no apt)
 ./vortex install --user
@@ -48,6 +48,12 @@ Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 
 ## What is implemented and tested
 
+Statuses below are one of: **Implemented + tested** (verified by the automated
+suite and exercised on this host), **Implemented** (present and exercised, not
+yet covered by a dedicated regression test), **Implemented + unavailable
+dependency** (code path exists; the host lacks the binary/runtime, so it reports
+UNAVAILABLE), or **Not implemented**.
+
 | Capability | Status |
 |---|---|
 | Real `shell=False` argv execution, PTY, cancellation | Implemented + tested |
@@ -58,12 +64,18 @@ Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 | VTX task engine, persistence, resume/restart/delete | Implemented + tested |
 | Conversations, edit-branching, export, search | Implemented + tested |
 | Objective evaluation / replan proposal after observed results | Implemented + tested |
+| Bounded replanning (max 2 follow-ups, duplicate-plan detection) | Implemented + tested |
+| Crash recovery: stale operations/tasks reconciled at startup | Implemented + tested |
 | Kali/Linux tool registry with live probes | Implemented + tested |
 | Agent Council (9 third-party + builtin `vortex-local`) | Implemented + tested; third-party missing stay UNAVAILABLE |
 | Observe → act → host-state reward | Implemented + tested |
 | nuclei / ffuf / nikto / amass / gobuster adapters | Implemented + tested; UNAVAILABLE without the binary, engagement, and (for ffuf/gobuster) a host wordlist |
 | User-local install / `vortex serve` / `vortex turn` | Implemented + tested |
 | Session EventSource with poll fallback | Implemented |
+| Natural-language planning → orchestration → Guardian → executor → verifier | Implemented + tested |
+| Prompt-injection defense (tool output is data, never instructions) | Implemented + tested |
+| MCP server / client | Not implemented |
+| Remote graphical (VNC/RDP/noVNC) sessions | Not implemented |
 | Missing-dependency window / `vortex deps` | Implemented + tested; no silent install |
 | Reports Markdown / HTML / JSON / PDF from observed operations | Implemented + tested |
 | System inventory report from doctor + tool probes | Implemented |
@@ -93,12 +105,65 @@ These are either unimplemented, or implemented only as honest unavailable states
 - Complete xterm compatibility and reconnectable daemon attach
 - Privileged apt/systemd mutation acceptance on a disposable VM
 - Signed `.deb` / 1.0 production release
+- MCP server or client (no MCP layer exists in this build)
+- Remote graphical sessions (VNC / RDP / noVNC / Guacamole). No `Xvfb`,
+  `x11vnc`, `websockify`, or RDP client is present and no session code exists;
+  VORTEX shows no desktop rather than a fake one.
+
+Verified absent on this host at the time of the last audit: `nmap`, `nuclei`,
+`ffuf`, `nikto`, `amass`, `gobuster`, `sqlmap`, `msfconsole`, `docker`,
+`podman`, `ollama`, and all nine third-party agent CLIs. Every one of those
+reports UNAVAILABLE rather than a fabricated result. Present and exercised:
+`git`, `ss`, `ip`, `curl`, `ssh`, `ps`, `df`, `systemctl`, `journalctl`.
 
 ## Trust model
 
-The renderer cannot spawn a process. The Python sidecar is the only execution
-authority. Guardian recomputes risk from command specs and policy; agent text
-cannot authorize execution. Tool output is stored as data, not instructions.
+```text
+Renderer / CLI        no process access; typed preload bridge or direct module call
+      ↓
+Agent / Planner       deterministic adapter routing; agent text is a proposal
+      ↓
+Guardian              independent risk, policy, and engagement scope recomputation
+      ↓
+Execution Authority   one Python owner: shell=False argv, new session, bounded
+      ↓
+Real OS Tool          only a probed, identity-pinned executable
+      ↓
+Observed Evidence     sanitized, redacted, output-capped, digested
+      ↓
+Verifier              objective evaluation from evidence, never from model text
+      ↓
+User
+```
+
+**Why the renderer cannot execute.** The Electron renderer is context-isolated
+with `nodeIntegration: false` and `sandbox: true`. It reaches the sidecar only
+through a typed preload bridge that rejects any route outside `/api/`. The
+capability token is held by the main process, never exposed to page JavaScript.
+
+**Why agent text cannot authorize.** Commands come from reviewed adapters, not
+from model output. The Guardian recomputes risk from the typed command specs
+(`adapter_id`, `network_class`, `privilege`), so a plan cannot raise its own
+authority by relabelling itself. Notes, agent messages, and tool output are
+stored as data and are never parsed back into instructions.
+
+**How scope is enforced.** Guardian derives the engagement requirement from the
+commands themselves — any assessment adapter, SSH connection, or outbound-read
+class needs a live engagement, regardless of how the plan is labelled. That
+mirrors the execution authority's own gate, which re-validates engagement
+status, expiry, target membership, and the exclusion list at execution time.
+If the exclusion module cannot be loaded, Guardian fails closed.
+
+**How evidence and audit integrity work.** Every plan, approval, operation, and
+session lifecycle event is appended to a SHA-256 hash chain. Each entry commits
+to the previous hash, so editing a payload, changing an event type, or deleting
+a row is detected by `./vortex db integrity`. Executables are pinned by
+sha256/device/inode at plan time and re-probed before execution, so a swapped
+binary invalidates the plan instead of running.
+
+**Recovery is honest.** If the sidecar dies mid-operation, the next start marks
+the abandoned operation `unknown_after_crash` and pauses its task. VORTEX
+records that it does not know the host outcome rather than inferring success.
 
 ## Documentation
 
@@ -107,6 +172,7 @@ cannot authorize execution. Tool output is stored as data, not instructions.
 - [`docs/STATUS.md`](docs/STATUS.md) — tested vs remaining gates
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow
 - [`docs/IMPLEMENTATION_REPORT.md`](docs/IMPLEMENTATION_REPORT.md) — current slice
+- [`docs/AUDIT_REPORT_2026-08-28.md`](docs/AUDIT_REPORT_2026-08-28.md) — full audit: defects found/fixed, test results, limitations
 - [`NOTICE`](NOTICE) — third-party agent attribution
 - [`SECURITY.md`](SECURITY.md)
 

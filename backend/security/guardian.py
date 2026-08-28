@@ -97,6 +97,56 @@ def looks_destructive(display: str) -> bool:
     return False
 
 
+def _load_scope_excluded():
+    """Resolve ``scope.excluded`` under every supported import context.
+
+    The Guardian is imported both as ``backend.security.guardian`` (package
+    context: CLI, tests, external consumers) and as ``security.guardian``
+    (sidecar context, where ``backend/`` is on ``sys.path``). Returning ``None``
+    lets the caller fail closed instead of raising past the exclusion check.
+    """
+    try:
+        from .scope import excluded
+        return excluded
+    except ImportError:
+        pass
+    try:
+        from security.scope import excluded  # type: ignore[no-redef]
+        return excluded
+    except ImportError:
+        pass
+    try:
+        from backend.security.scope import excluded  # type: ignore[no-redef]
+        return excluded
+    except ImportError:
+        return None
+
+
+def requires_engagement(plan: dict[str, Any]) -> bool:
+    """Recompute the scope requirement from typed commands and declared scope.
+
+    This mirrors ``vortex_backend.plan_requires_engagement`` so the Guardian and
+    the execution authority cannot drift. Assessment adapters, SSH connections,
+    and outbound-read commands need an engagement regardless of the plan's
+    ``kind`` label. Local package/systemd mutations are operator-administered
+    host changes, not third-party network work, so they keep the root/preflight
+    gate instead of the engagement gate.
+    """
+    if plan.get("scope", {}).get("targets"):
+        return True
+    for spec in plan.get("commands") or []:
+        adapter = str(spec.get("adapter_id") or "")
+        if adapter in MEDIUM_ADAPTERS:
+            continue
+        if adapter.startswith("security.") or adapter == "linux.ssh.connection":
+            return True
+        if adapter in HIGH_ADAPTERS:
+            return True
+        if str(spec.get("network_class") or "") == "outbound-read":
+            return True
+    return False
+
+
 def recompute_risk(commands: list[dict[str, Any]]) -> str:
     level = "low"
     rank = {"low": 0, "medium": 1, "high": 2}
@@ -167,16 +217,20 @@ def evaluate(plan: dict[str, Any], policy: dict[str, Any] | None = None, engagem
                     engagement_ok = False
             except (TypeError, ValueError):
                 engagement_ok = False
-        if not engagement_ok:
-            if plan.get("kind") in {"authorized_engagement", "ssh_diagnostics"} and plan.get("status") == "planned":
-                blocked = True
-                reasons.append("Active network work requires an authorized engagement.")
+        if not engagement_ok and requires_engagement(plan):
+            # Guardian recomputes the scope requirement from the typed command
+            # specs, not from the planner's `kind` label. A model or a future
+            # planner branch cannot avoid the engagement gate by emitting a
+            # network-effecting command under an unrecognised plan kind.
+            blocked = True
+            reasons.append("Active network work requires an authorized engagement.")
         reasons.append("Network-effecting command; scope must remain valid at execution.")
-        try:
-            from security.scope import excluded
-        except ImportError:
-            from scope import excluded
+        excluded = _load_scope_excluded()
         for target in plan.get("scope", {}).get("targets") or []:
+            if excluded is None:
+                blocked = True
+                reasons.append("Engagement exclusion list could not be evaluated; Guardian fails closed.")
+                break
             if excluded(str(target), engagement):
                 blocked = True
                 reasons.append("Target is on the engagement exclusion list: " + str(target))

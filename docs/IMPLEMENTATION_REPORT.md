@@ -13,7 +13,13 @@
 - Missing tools are listed live. INSTALL builds an apt plan or an operator proposal.
 - nuclei/ffuf/nikto/amass/gobuster adapters emit real argv or UNAVAILABLE.
 - `vortex install --user`, `vortex serve`, `vortex turn`, and `docs/USER_GUIDE.md`.
-- 115 Python tests plus the JS terminal emulator.
+- 153 Python tests plus the JS terminal, window-control, and frontend suites.
+- Guardian recomputes the engagement requirement from typed command specs, so a
+  plan cannot escape the scope gate by using an unrecognised `kind`.
+- Startup reconciliation: operations abandoned by a dead sidecar become
+  `unknown_after_crash` and their tasks become `PAUSED`, never `COMPLETED`.
+- Automatic follow-ups are capped at two iterations with duplicate-plan digest
+  detection, persisted on the task so the cap survives thread boundaries.
 
 ## Honest limits
 

@@ -119,6 +119,31 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
     }
 
 
+MAX_REPLAN_ITERATIONS = 2
+REPLANNABLE_KINDS = {"identity", "clock", "os_release", "cpu", "filesystem_list", "processes", "network_interfaces"}
+
+
+def replan_budget(result: dict[str, Any], depth: int = 0) -> dict[str, Any]:
+    """Read the durable replan budget carried on the task result.
+
+    Automatic follow-ups are started from the executor thread, so an in-memory
+    recursion counter is lost between iterations. Persisting the budget on the
+    task keeps the cap effective across those thread boundaries and across a
+    sidecar restart.
+    """
+    stored = result.get("replan_budget") if isinstance(result.get("replan_budget"), dict) else {}
+    try:
+        iterations = max(int(stored.get("iterations", 0)), int(depth))
+    except (TypeError, ValueError):
+        iterations = int(depth)
+    seen = stored.get("seen_digests")
+    return {
+        "iterations": max(0, iterations),
+        "max_iterations": MAX_REPLAN_ITERATIONS,
+        "seen_digests": [str(item) for item in seen][:32] if isinstance(seen, list) else [],
+    }
+
+
 def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: dict[str, Any], executor: Any = None, store: Any = None, depth: int = 0) -> dict[str, Any] | None:
     try:
         from reports.engine import markdown
@@ -180,7 +205,11 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
             "report_id": report.get("id") if report else None,
             "status": status,
         })
-    if depth < 2 and executor is not None and store is not None and objective.get("next_request") and not objective.get("achieved"):
+    budget = replan_budget(result, depth)
+    # The plan that just ran counts as seen, so a follow-up cannot re-propose it.
+    if plan.get("digest") and plan["digest"] not in budget["seen_digests"]:
+        budget["seen_digests"] = budget["seen_digests"] + [plan["digest"]]
+    if executor is not None and store is not None and objective.get("next_request") and not objective.get("achieved"):
         try:
             try:
                 from config import load_settings
@@ -190,16 +219,35 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                 from backend.config import load_settings
                 from backend.security.guardian import evaluate
                 from backend.vortex_backend import build_plan
-            settings = load_settings()
-            nxt = build_plan(store, objective["next_request"], plan.get("cwd"), plan.get("engagement_id"), offline=settings.get("offline") is True)
-            engagement = workspace.enrich_engagement(store.get_engagement(plan.get("engagement_id"))) if plan.get("engagement_id") else None
-            guardian = evaluate(nxt, settings, engagement)
-            if guardian.get("decision") == "auto" and nxt.get("status") == "planned" and nxt.get("kind") in {"identity", "clock", "os_release", "cpu", "filesystem_list", "processes", "network_interfaces"}:
-                workspace.add_task_event(task_id, "replan", {"request": objective["next_request"], "plan_id": nxt["id"]})
-                if task.get("conversation_id"):
-                    workspace.add_message(task["conversation_id"], "vortex", f"Objective not fully met. Starting a reviewed follow-up: {objective['next_request']}")
-                workspace.update_task(task_id, plan_id=nxt["id"], state="EXECUTING")
-                executor.start(nxt, True, nxt["approval_token"], False, settings.get("offline") is True)
+            stop_reason = None
+            if budget["iterations"] >= MAX_REPLAN_ITERATIONS:
+                stop_reason = f"Replan budget exhausted after {budget['iterations']} follow-up(s); VORTEX stops instead of looping."
+            if stop_reason is None:
+                settings = load_settings()
+                nxt = build_plan(store, objective["next_request"], plan.get("cwd"), plan.get("engagement_id"), offline=settings.get("offline") is True)
+                # A follow-up that reproduces a plan this task already ran cannot
+                # produce new evidence. Stop rather than repeat the same command.
+                if nxt.get("digest") and nxt["digest"] in set(budget["seen_digests"]):
+                    stop_reason = "The proposed follow-up repeats a plan this task already executed; VORTEX stops instead of looping."
+                else:
+                    engagement = workspace.enrich_engagement(store.get_engagement(plan.get("engagement_id"))) if plan.get("engagement_id") else None
+                    guardian = evaluate(nxt, settings, engagement)
+                    if guardian.get("decision") == "auto" and nxt.get("status") == "planned" and nxt.get("kind") in REPLANNABLE_KINDS:
+                        result["replan_budget"] = {
+                            "iterations": budget["iterations"] + 1,
+                            "max_iterations": MAX_REPLAN_ITERATIONS,
+                            "seen_digests": (budget["seen_digests"] + [nxt["digest"]])[-MAX_REPLAN_ITERATIONS * 2:],
+                        }
+                        workspace.add_task_event(task_id, "replan", {"request": objective["next_request"], "plan_id": nxt["id"], "iteration": budget["iterations"] + 1})
+                        if task.get("conversation_id"):
+                            workspace.add_message(task["conversation_id"], "vortex", f"Objective not fully met. Starting a reviewed follow-up: {objective['next_request']}")
+                        workspace.update_task(task_id, plan_id=nxt["id"], state="EXECUTING", result=result)
+                        executor.start(nxt, True, nxt["approval_token"], False, settings.get("offline") is True)
+                        return report
+            if stop_reason:
+                result["replan_budget"] = {**budget, "stopped": stop_reason}
+                workspace.add_task_event(task_id, "replan_stopped", {"reason": stop_reason})
+                workspace.update_task(task_id, state=state, result=result)
         except Exception as exc:
             try:
                 workspace.store.append_audit("followup_failed", {"task_id": task_id, "error": str(exc)[:240]})

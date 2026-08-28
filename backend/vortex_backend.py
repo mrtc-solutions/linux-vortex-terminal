@@ -651,6 +651,41 @@ class Store:
         except ImportError:
             from workspace import ensure_schema
         ensure_schema(self)
+
+    def reconcile_stale_operations(self) -> int:
+        """Close operations that a previous sidecar left mid-flight.
+
+        An operation only advances while the thread that owns it is alive. After
+        a crash or restart no such thread exists, so a row left in
+        ``started``/``running`` can never reach a terminal state and its task
+        stays permanently EXECUTING. This is called by the execution authority
+        at startup and marks those rows ``unknown_after_crash`` — an honest
+        unknown state, never a fabricated success.
+        """
+        stale = 0
+        with self.lock, self.connect() as db:
+            rows = db.execute("SELECT id, result_json FROM operations WHERE status IN ('started','running')").fetchall()
+            for row in rows:
+                try:
+                    operation = json.loads(row["result_json"])
+                except (TypeError, ValueError):
+                    operation = {"id": row["id"], "commands": []}
+                operation["status"] = "unknown_after_crash"
+                operation["ended_at"] = operation.get("ended_at") or now_iso()
+                operation["termination_reason"] = "sidecar_restart"
+                operation["error"] = "The sidecar stopped before this operation reached a terminal state. The real outcome on the host is unknown."
+                db.execute(
+                    "UPDATE operations SET ended_at=?, status=?, result_json=? WHERE id=?",
+                    (operation["ended_at"], "unknown_after_crash", canonical(operation), row["id"]),
+                )
+                stale += 1
+        if stale:
+            try:
+                self.append_audit("operations_reconciled_after_restart", {"count": stale})
+            except (OSError, sqlite3.Error):
+                pass
+        return stale
+
     def mark_stale_sessions(self) -> None:
         # A sidecar restart cannot prove that an old PTY is still alive. This is
         # called by the session authority at startup, not by every read-only
@@ -2457,12 +2492,19 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
 
 
 class ExecutionManager:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, reconcile: bool = True):
         self.store = store
         self.threads: dict[str, threading.Thread] = {}
         self.cancel_events: dict[str, threading.Event] = {}
         self.processes: dict[str, subprocess.Popen[bytes]] = {}
         self.lock = threading.Lock()
+        # This process is the only owner of a live operation thread. Any row
+        # still marked running belongs to a previous, now dead sidecar.
+        if reconcile:
+            try:
+                self.store.reconcile_stale_operations()
+            except (OSError, sqlite3.Error):
+                pass
 
     def start(self, plan: dict[str, Any], confirm: bool, approval_token: str | None = None, allow_root: bool = False, offline: bool = False) -> dict[str, Any]:
         if not confirm:
@@ -3800,6 +3842,13 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -
         from workspace import Workspace
     handler = VortexHandler
     handler.store = store; handler.executor = ExecutionManager(store); handler.sessions = SessionManager(store); handler.workspace = Workspace(store); handler.executor.workspace = handler.workspace; handler.frontend = Path(__file__).resolve().parent.parent / "frontend"; handler.token = token
+    # ExecutionManager has already closed operations abandoned by a previous
+    # sidecar; pause the tasks that were waiting on them so the UI shows an
+    # honest unknown state instead of a task stuck in EXECUTING forever.
+    try:
+        handler.workspace.reconcile_orphaned_tasks()
+    except (OSError, sqlite3.Error):
+        pass
     server = ThreadingHTTPServer((host, port), handler)
     def stop_on_term(_signum: int, _frame: Any) -> None:
         raise KeyboardInterrupt

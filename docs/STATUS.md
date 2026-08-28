@@ -3,7 +3,28 @@
 VORTEX 0.2.0 is a real Linux application. Production paths use installed host
 tools and observed output only. Test doubles exist only inside tests.
 
-**118 Python tests + JS terminal and window-control suites: passing.**
+**153 Python tests + JS terminal, window-control, and frontend suites: passing.**
+
+## Audit round (2026-08-28)
+
+A full repository audit was run against the actual source and runtime rather
+than against the README. Four genuine defects were found and fixed, each with a
+regression test. No feature was removed and no subsystem was rewritten.
+
+Full write-up: [`AUDIT_REPORT_2026-08-28.md`](AUDIT_REPORT_2026-08-28.md).
+
+| # | Defect | Severity | Root cause | Fix |
+|---|---|---|---|---|
+| 1 | Exclusion-list check crashed in package import context | High | `from security.scope import excluded` only resolves when `backend/` is on `sys.path`; a `backend.security.guardian` consumer raised `ModuleNotFoundError` before the exclusion loop | `_load_scope_excluded()` resolves under all import contexts and Guardian fails closed if it cannot load |
+| 2 | Guardian's engagement gate could be bypassed | High | The gate only fired for `kind in {authorized_engagement, ssh_diagnostics}`; a network-effecting command under any other plan kind reached `decision=approve` with no engagement | Guardian now recomputes the requirement from the typed command specs (`guardian.requires_engagement`), mirroring `plan_requires_engagement` |
+| 3 | Operations stuck `running` forever after a crash | Medium | Nothing reconciled operation rows at startup, so their tasks stayed `EXECUTING` permanently | `Store.reconcile_stale_operations()` + `Workspace.reconcile_orphaned_tasks()` mark them `unknown_after_crash` / `PAUSED` |
+| 4 | Replan budget was not enforced across iterations | Medium | The `depth` counter was never passed through the executor thread, so every follow-up re-entered at depth 0 | Budget persisted on the task result with duplicate-plan digest detection |
+
+Verified working during the audit and left unchanged: `shell=False` argv
+execution, PTY lifecycle, approval-token single-use and replay rejection,
+executable identity pinning, audit hash-chain tamper detection (payload edit,
+row delete, event-type change all detected), path-traversal rejection, STOP ALL,
+apt/systemd preflight gating, and honest UNAVAILABLE for every missing tool.
 
 ## Directive coverage
 
@@ -33,6 +54,10 @@ tools and observed output only. Test doubles exist only inside tests.
 | nuclei / ffuf / nikto / amass / gobuster execution adapters | Done + tested; host binary + engagement required |
 | User-local install, `vortex serve`, `vortex turn`, USER_GUIDE | Done + tested |
 | Session EventSource | Done (poll fallback remains) |
+| Bounded replanning + duplicate-plan detection | Done + tested |
+| Crash reconciliation of stale operations/tasks | Done + tested |
+| MCP | Not implemented |
+| Remote graphical sessions | Not implemented |
 | Ollama loopback probe | Done; unavailable here |
 | Docker isolation **execution** | Probe only; runtime missing here |
 | Plugin code loading | Deliberately not implemented |

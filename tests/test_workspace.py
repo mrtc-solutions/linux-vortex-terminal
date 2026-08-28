@@ -774,5 +774,122 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(result["status"], "cancelled")
 
 
+class CrashRecoveryTests(unittest.TestCase):
+    """A dead sidecar must never leave an operation or task stuck in flight."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["VORTEX_DATA_DIR"] = self.tmp.name
+        self.store = Store(Path(self.tmp.name) / "vortex.db")
+        self.workspace = Workspace(self.store)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("VORTEX_DATA_DIR", None)
+
+    def _orphan(self, status="running"):
+        operation = {
+            "schema_version": 1, "id": "op-orphan", "plan_id": "plan-orphan", "status": status,
+            "started_at": "2026-01-01T00:00:00.000+00:00", "ended_at": None,
+            "commands": [], "workers": [], "source": "test",
+        }
+        with self.store.lock, self.store.connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO plans VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("plan-orphan", "2026-01-01T00:00:00.000+00:00", "2026-01-01T01:00:00.000+00:00",
+                 "req", self.tmp.name, "approved", "low", "d", "{}", None, "tok", os.getuid()),
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO operations VALUES (?,?,?,?,?,?)",
+                (operation["id"], operation["plan_id"], operation["started_at"], None, status, json.dumps(operation)),
+            )
+        task = self.workspace.create_task("orphaned request")
+        self.workspace.update_task(task["id"], state="EXECUTING", operation_id=operation["id"])
+        return task
+
+    def test_stale_operations_are_closed_as_unknown_not_succeeded(self):
+        task = self._orphan()
+        self.assertEqual(self.store.get_operation("op-orphan")["status"], "running")
+        reconciled = self.store.reconcile_stale_operations()
+        self.assertEqual(reconciled, 1)
+        recovered = self.store.get_operation("op-orphan")
+        self.assertEqual(recovered["status"], "unknown_after_crash")
+        self.assertNotEqual(recovered["status"], "succeeded")
+        self.assertTrue(recovered["ended_at"])
+        self.assertTrue(self.store.verify_audit()["valid"])
+        del task
+
+    def test_orphaned_tasks_are_paused_after_restart(self):
+        task = self._orphan()
+        self.store.reconcile_stale_operations()
+        recovered = self.workspace.reconcile_orphaned_tasks()
+        self.assertIn(task["id"], recovered)
+        after = self.workspace.get_task(task["id"])
+        self.assertEqual(after["state"], "PAUSED")
+        self.assertEqual((after["result"].get("recovery") or {}).get("state"), "unknown_after_crash")
+        self.assertTrue(any(e["kind"] == "recovered_after_restart" for e in self.workspace.list_task_events(task["id"])))
+
+    def test_execution_manager_reconciles_on_construction(self):
+        self._orphan()
+        ExecutionManager(self.store)
+        self.assertEqual(self.store.get_operation("op-orphan")["status"], "unknown_after_crash")
+
+    def test_reconciliation_is_idempotent_and_leaves_finished_rows_alone(self):
+        self._orphan(status="succeeded")
+        self.assertEqual(self.store.reconcile_stale_operations(), 0)
+        self.assertEqual(self.store.get_operation("op-orphan")["status"], "succeeded")
+        self.assertEqual(self.workspace.reconcile_orphaned_tasks(), [])
+
+
+class ReplanBudgetTests(unittest.TestCase):
+    """Automatic follow-ups must be bounded across executor thread boundaries."""
+
+    def test_budget_survives_thread_boundary_via_task_result(self):
+        from backend.orchestrate import MAX_REPLAN_ITERATIONS, replan_budget
+        self.assertEqual(replan_budget({})["iterations"], 0)
+        carried = replan_budget({"replan_budget": {"iterations": 1, "seen_digests": ["a"]}})
+        self.assertEqual(carried["iterations"], 1)
+        self.assertEqual(carried["seen_digests"], ["a"])
+        self.assertEqual(carried["max_iterations"], MAX_REPLAN_ITERATIONS)
+
+    def test_budget_tolerates_corrupt_persisted_values(self):
+        from backend.orchestrate import replan_budget
+        self.assertEqual(replan_budget({"replan_budget": "garbage"}, 1)["iterations"], 1)
+        self.assertEqual(replan_budget({"replan_budget": {"iterations": "x"}})["iterations"], 0)
+        self.assertEqual(replan_budget({"replan_budget": {"seen_digests": "no"}})["seen_digests"], [])
+
+    def test_exhausted_budget_stops_instead_of_replanning(self):
+        from backend.orchestrate import MAX_REPLAN_ITERATIONS, finish_task
+
+        class Recorder:
+            def __init__(self):
+                self.started = 0
+
+            def start(self, *args, **kwargs):
+                self.started += 1
+                return {"id": "should-not-run"}
+
+        tmp = tempfile.TemporaryDirectory()
+        os.environ["VORTEX_DATA_DIR"] = tmp.name
+        try:
+            store = Store(Path(tmp.name) / "vortex.db")
+            workspace = Workspace(store)
+            task = workspace.create_task("looping request")
+            workspace.update_task(task["id"], state="EXECUTING", result={
+                "replan_budget": {"iterations": MAX_REPLAN_ITERATIONS, "seen_digests": []},
+            })
+            plan = {"id": "p1", "digest": "d1", "kind": "identity", "status": "planned",
+                    "request": "whoami", "cwd": tmp.name, "commands": []}
+            operation = {"id": "op1", "status": "failed", "commands": []}
+            recorder = Recorder()
+            finish_task(workspace, task["id"], operation, plan, executor=recorder, store=store)
+            self.assertEqual(recorder.started, 0)
+            events = [e["kind"] for e in workspace.list_task_events(task["id"])]
+            self.assertIn("replan_stopped", events)
+        finally:
+            tmp.cleanup()
+            os.environ.pop("VORTEX_DATA_DIR", None)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,7 @@ renderer or CLI
   -> conversation + VTX task
   -> natural-language deterministic planner
   -> Agent Council discovery (advisory; missing = UNAVAILABLE)
-  -> Guardian (independent risk/policy; not LLM-controlled)
+  -> Guardian (independent risk/policy/scope; not LLM-controlled)
   -> actual host and tool probes
   -> typed CommandSpec / Engagement gate
   -> policy + cwd + executable identity + freshness validation
@@ -39,6 +39,44 @@ outside an explicit loopback/Unix-socket allowlist. The adapter registry applies
 to AI-proposed operations. An operator using the real PTY or explicit
 `vortex run -- ...` retains native Linux access, with the direct path visibly
 attributed and still audited rather than falsely described as adapter-validated.
+
+## Scope gate: two independent computations
+
+The engagement requirement is computed twice from the same evidence and must
+agree. `security.guardian.requires_engagement` runs during evaluation and
+`vortex_backend.plan_requires_engagement` runs inside the execution authority.
+Both derive the answer from the typed command specs — assessment adapters
+(`security.*`), `linux.ssh.connection`, declared scope targets, and the
+`outbound-read` network class require a live engagement. Neither consults the
+planner's `kind` label, so a new or mislabelled plan kind cannot slip a network
+command past the gate. A regression test asserts the two functions agree.
+
+Local package and systemd mutations are deliberately excluded: they are
+operator-administered host changes governed by the root requirement and the
+fresh-preflight gate, not by third-party engagement scope.
+
+If the scope module cannot be imported, Guardian blocks rather than continuing
+without an exclusion check.
+
+## Crash recovery
+
+An operation advances only while the thread that owns it is alive; that thread
+belongs to exactly one sidecar process. On startup the execution authority calls
+`Store.reconcile_stale_operations()`, which closes any row still marked
+`started`/`running` as `unknown_after_crash`, and the server then calls
+`Workspace.reconcile_orphaned_tasks()` to move the waiting tasks to `PAUSED`
+with a recorded recovery note. Sessions are handled by the pre-existing
+`mark_stale_sessions()`. Nothing is ever promoted to a success state on the
+basis of an unobserved outcome.
+
+## Replan budget
+
+Automatic follow-ups are started from the executor thread, so an in-memory
+recursion counter cannot survive between iterations. The budget is persisted on
+the task result (`result.replan_budget`) and carries both the iteration count
+and the digests of plans this task has already run. A follow-up is refused when
+the cap (2) is reached or when the proposed plan repeats a digest already
+executed, and the stop reason is recorded as a `replan_stopped` task event.
 
 ## Data model
 
