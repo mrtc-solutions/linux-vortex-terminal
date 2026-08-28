@@ -248,6 +248,16 @@ class HttpApiTests(unittest.TestCase):
         ok_prune = self._json("POST", "/api/store/prune", {"history_days": 30, "output_days": 7})
         self.assertEqual(ok_prune["prune"]["history_days"], 30)
 
+    def test_session_rejects_missing_cwd_as_invalid_plan(self):
+        payload = self._json("POST", "/api/sessions", {
+            "name": "bad-cwd",
+            "cwd": "/definitely/missing/vortex-session-dir",
+            "cols": 80,
+            "rows": 24,
+        }, expected=422)
+        self.assertEqual(payload["error"]["code"], "invalid_plan")
+        self.assertIn("working directory", payload["error"]["message"].lower())
+
     def test_http_artifact_analyze_stays_inside_data_root(self):
         outside = Path("/etc/hosts")
         if not outside.is_file():

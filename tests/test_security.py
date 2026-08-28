@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,6 +91,18 @@ class VortexSecurityTests(unittest.TestCase):
         with self.assertRaises(ArtifactError) as missing:
             analyze_path(str(missing_outside), "text", allowed_roots=[Path(self.tmp.name)])
         self.assertIn("allowed", str(missing.exception).lower())
+
+    def test_backend_config_imports_as_top_level_package_from_root(self):
+        # `backend.config` must be importable before `backend.vortex_backend`
+        # has placed `backend/` on sys.path. Regression guard for the
+        # `from security.guardian import ...` top-level import in config.py.
+        root = Path(__file__).resolve().parent.parent
+        result = subprocess.run(
+            [sys.executable, "-c", "import backend.config; print(backend.config.load_settings()['profile'])"],
+            cwd=str(root), capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "safe")
 
     def test_plugin_manifests_stay_inside_tree(self):
         from backend.plugins.loader import list_manifests

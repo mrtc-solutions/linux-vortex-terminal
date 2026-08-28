@@ -438,7 +438,7 @@ registry/router expose them.
 
 **Decorative animation (frontend only, no functional change):**
 - Made the Matrix rain clearly visible without affecting interaction:
-  `#matrix` opacity raised from `.14` to `.34`, canvas remains
+  `#matrix` opacity raised to `.58` with `filter: saturate(1.18)`, canvas remains
   `position:fixed; z-index:0; pointer-events:none`.
 - `frontend/app.js` `setupMatrix` now draws a smooth stream with a bright
   glowing head plus a short dimmer tail, a katakana/binary palette, per-column
@@ -508,5 +508,57 @@ persisted history; `/api/workspace/turn` with a conversation → task, plan,
 Guardian approve/requires-approval, message history, and conversation
 retrieval all returned coherently.
 
-**Final gate:** `npm test` = **135 Python tests + 4 JS suites green**;
+**Final gate:** `npm test` = **137 Python tests + 4 JS suites green**;
+`npm run lint` clean.
+
+### 12.2 Final review pass — live HTTP E2E + two robustness fixes
+
+**Live HTTP E2E (sidecar on a fresh data directory, real subprocesses):**
+- All GET endpoints probed returned `200` (health, system/health, capabilities,
+  agents, models, settings, setup, dependencies, sandbox, secrets, findings,
+  learning agents, tools/route, plugins, tools/registry, reports/system,
+  conversations, tasks, memory, learning, reports, doctor, tools, adapters,
+  sessions, artifacts, history, engagements, audit/verify, store/integrity).
+- `POST /api/plan` and `POST /api/workspace/turn` correctly routed natural
+  language to real typed plans: `show my username` → `whoami`,
+  `what time is it` → `date --iso-8601=seconds`, `list files in /tmp` →
+  `ls -la /tmp`, `read /etc/os-release` → `cat /etc/os-release`,
+  `check if nginx is running` → `systemctl show` + `journalctl`,
+  `install nmap` → reviewed `package_operation` (fresh dpkg/apt preflight).
+- Honest rejection confirmed: shell operators, `kill process 1234`,
+  `what is the IP of example.com` (no reviewed DNS adapter) produce
+  `rejected`/`clarified` plans with zero commands.
+- `whoami` executed through the real PTY path: operation status `succeeded`,
+  observed stdout `user`, exit `0`, history entry persisted.
+- `what time is it` was turned into a conversation → task → plan → Guardian
+  approve → recorded approval → execution → `finish_task` → `COMPLETED`,
+  episode reward `1.0`, objective `achieved=True`, report generated, and the
+  assistant message appended to the same persistent conversation.
+- PTY session verified end-to-end (`echo hello-vortex` → real shell output);
+  invalid session cwd now returns `422` instead of `500`.
+- Install buttons verified: `/api/dependencies/proposal` and
+  `/api/dependencies/plan` return an operator-controlled apt plan for missing
+  tools (`nmap`, root-only, no sudo password capture) and a source/license
+  review instruction for third-party agents (`pentestgpt`); they never
+  silently install.
+- Persistence verified across a sidecar restart: history, conversations, and
+  tasks survived in the SQLite store.
+
+**Bugs found in this final pass and fixed:**
+
+1. **`backend.config` was not importable as a top-level package before
+   `backend.vortex_backend` had put `backend/` on `sys.path`.** Its module-level
+   `from security.guardian import policy_defaults` raised `ModuleNotFoundError`
+   if someone imported `backend.config` first. Fixed with a fallback to
+   `backend.security.guardian`. Regression:
+   `test_backend_config_imports_as_top_level_package_from_root`.
+
+2. **Invalid/missing session working directories leaked a 500.** The HTTP
+   handler caught `ValueError`/`PolicyError` but `validate_cwd` let
+   `FileNotFoundError` (from `Path.resolve(strict=True)`) escape, producing
+   `500 internal_error`. Fixed by converting missing and inaccessible working
+   directories into `ValueError`, which maps to `422 invalid_plan`. Regression:
+   `test_session_rejects_missing_cwd_as_invalid_plan`.
+
+**Final gate:** `npm test` = **137 Python tests + 4 JS suites green**;
 `npm run lint` clean.

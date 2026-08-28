@@ -24,7 +24,7 @@ body.electron-shell .app-titlebar { display:flex; }
 .native-window-controls .window-control { width:46px;min-height:var(--native-titlebar-height); }
 .window-control:hover { background:#252731;color:#fff; }.window-control:focus-visible { outline:1px solid var(--cyan);outline-offset:-2px; }
 .window-control-close:hover { background:#b4232e;color:#fff; }.window-control:disabled { opacity:.35;cursor:default; }
-#matrix { position: fixed; inset: 0; z-index: 0; opacity: .34; pointer-events: none; filter: saturate(1.12); }
+#matrix { position: fixed; inset: 0; z-index: 0; opacity: .58; pointer-events: none; filter: saturate(1.18); }
 .noise { position: fixed; inset: 0; z-index: 1; pointer-events: none; opacity: .025; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.34'/%3E%3C/svg%3E"); }
 .app-shell { display: flex; min-height: 100vh; position: relative; z-index: 2; }
 .sidebar { width: 238px; flex: 0 0 238px; min-height: 100vh; border-right: 1px solid var(--border-soft); background: rgba(12,12,16,.88); padding: 26px 14px 18px; display:flex; flex-direction:column; backdrop-filter: blur(14px); }

@@ -501,7 +501,12 @@ def validate_cwd(raw: str | None) -> Path:
     if raw is not None and not isinstance(raw, str):
         raise ValueError("working directory must be a string")
     candidate = Path(raw or os.getcwd()).expanduser()
-    resolved = candidate.resolve(strict=True)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError("working directory does not exist") from exc
+    except OSError as exc:
+        raise ValueError("working directory is not accessible") from exc
     if not resolved.is_dir():
         raise ValueError("working directory is not a directory")
     return resolved
