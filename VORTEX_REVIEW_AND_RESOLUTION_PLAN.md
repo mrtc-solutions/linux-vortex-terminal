@@ -574,7 +574,7 @@ retrieval all returned coherently.
 **Final gate:** `npm test` = **138 Python tests + 4 JS suites green**;
 `npm run lint` clean.
 
-### 12.3 Operator feedback: suggestion hints + rendered next steps
+### 12.3 Operator feedback: suggestion hints + local retrieval + rendered next steps
 
 **Request.** When natural language is not understood, provide operator suggestions
 before execution, and render next-step guidance after each execution.
@@ -588,22 +588,32 @@ before execution, and render next-step guidance after each execution.
    network/socket, health/storage, packages, containers, git, ssh). Planned
    plans carry an empty list so there is no "try this" noise on an executable
    card. `suggestion_hints()` is the deterministic generator; nothing auto-runs.
-2. The renderer displays suggestions as clickable `TRY ONE OF THESE` chips on a
+2. The plan payload also includes `knowledge` from the new
+   `backend/knowledge.py` local capability retriever. It is bounded, deterministic,
+   adapter-derived, and never makes an outbound request. The renderer shows it as
+   `LOCAL CAPABILITIES` on clarified/blocked plans.
+3. The renderer displays suggestions as clickable `TRY ONE OF THESE` chips on a
    clarified/blocked plan. Each chip submits the example through the normal
    `makePlan` path, so it still creates a reviewed plan and never executes
    automatically.
-3. Completed operations now write concrete `analysis.next_steps` derived from
+4. Completed operations now write concrete `analysis.next_steps` derived from
    the adapters that actually ran (`analysis_next_steps()`), and both the
    frontend analysis card and the Markdown report render that section.
    Follow-ups are read-only suggestions only; mutations never get a one-click
-   re-run.
+   re-run. Failed/timed-out operations additionally receive `diagnose` and
+   `fresh plan` guidance instead of a silent retry.
+5. Every completed operation now carries `analysis.verification` — observed
+   command count, total command count, and an honest state (`all_commands_observed`,
+   `empty_output`, or `partial`) with the note that evidence never upgrades to a
+   security guarantee. The renderer displays it in a Verification block.
 
-**Live verification.** `/api/plan` for an unspecified phrase returned
-`abstain/clarified` with six useful hints. `what user am i` executed through the
-real sidecar and the finished operation carried concrete next steps
-(`whoami`, `host`, `plan only`).
+**Live verification.** `/api/plan` for an unspecified network phrase returned
+`abstain/clarified` with useful hints and matched `LOCAL CAPABILITIES`
+("Network, interfaces, sockets & routes"). `show processes` executed through the
+real sidecar and the finished operation carried `verification`
+(`all_commands_observed`, 1/1) plus concrete next steps.
 
-**Gate:** `npm test` = **140 Python tests + 4 JS suites green**;
+**Gate:** `npm test` = **141 Python tests + 4 JS suites green**;
 `npm run lint` clean.
 
 ### 12.4 Assessment of the shared ChatGPT discussion
@@ -628,8 +638,13 @@ actual codebase:
   plus catalog agents (CAI, Nebula, PentestGPT, HexStrike, PentAGI, etc.) and
   a critic. "Terry"/"Bradley" are not code components; they are product-facing
   model labels and should not be copied blindly.
-- **Useful but not yet needed:** RAG/retrieval over external documentation,
-  wider external-agent collaboration, and a multi-role orchestrator with more
+- **Useful features adopted this turn:** bounded local retrieval
+  (`backend/knowledge.py`, no external RAG/API) and explicit observable
+  verification/failure guidance (`analysis.verification`, failure-aware
+  `next_steps`). These align with the two highest-value priorities from the
+  discussion without adding autonomous model cycling.
+- **Still not warranted now:** RAG over external documentation, wider
+  external-agent collaboration, and a multi-role orchestrator with many
   autonomous agents. The discussion's own recommendation — invest in
   verification, permissions, sandboxing, and observability before many agents —
-  matches the current architecture, so no immediate feature change is warranted.
+  matches the current architecture.

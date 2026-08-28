@@ -8,7 +8,7 @@ from unittest.mock import patch
 from backend.agents.council import critic, discover, consult
 from backend.reports.engine import render, to_pdf
 from backend.security.guardian import evaluate, recompute_risk
-from backend.vortex_backend import ExecutionManager, Store, analysis_next_steps, build_plan, cancel_task_operation, command_spec, plan_digest, safe_file_target, suggestion_hints
+from backend.vortex_backend import ExecutionManager, Store, analysis_next_steps, build_plan, cancel_task_operation, command_spec, make_analysis, plan_digest, safe_file_target, suggestion_hints
 from backend.workspace import Workspace
 
 ALLOW_ROOT = os.geteuid() == 0
@@ -153,6 +153,21 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn(token_hits["status"], ("clarified", "rejected", "unavailable"))
         self.assertIn("show listening ports", token_hits["suggestions"])
 
+    def test_local_knowledge_is_deterministic_and_bounded(self):
+        help_plan = build_plan(self.store, "help", self.tmp.name)
+        self.assertTrue(help_plan["knowledge"])
+        self.assertLessEqual(len(help_plan["knowledge"]), 4)
+        for item in help_plan["knowledge"]:
+            self.assertTrue(item["label"])
+            self.assertTrue(item["examples"])
+            self.assertTrue(item["adapters"])
+            self.assertTrue(item["limit"])
+        # A typed executable plan does not carry retrieval noise alongside the
+        # reviewed command plan.
+        planned = build_plan(self.store, "what user am i", self.tmp.name)
+        if planned["status"] == "planned":
+            self.assertEqual(planned["knowledge"], [])
+
     def test_analysis_next_steps_are_concrete_and_read_only(self):
         spec = command_spec("ps", ["ps", "-eo", "pid,user,pcpu,pmem,comm", "--no-headers"], Path(self.tmp.name), required="ps")
         spec["adapter_id"] = "linux.system.processes"
@@ -167,12 +182,20 @@ class WorkspaceTests(unittest.TestCase):
             "approval_token": "next-token",
         }
         plan["digest"] = plan_digest(plan)
-        op = {"status": "succeeded", "commands": [{"status": "succeeded", "display": "ps ..."}], "cwd": self.tmp.name}
+        op = {"status": "succeeded", "commands": [{"status": "succeeded", "display": "ps ...", "stdout": " 1 root ..."}], "cwd": self.tmp.name, "workers": []}
+        analysis = make_analysis(plan, op)
+        self.assertEqual(analysis["verification"]["observed_commands"], 1)
+        self.assertEqual(analysis["verification"]["total_commands"], 1)
         steps = analysis_next_steps(plan, op)
         self.assertTrue(steps)
         self.assertTrue(any(step["label"] == "process" for step in steps))
         # Follow-ups stay advisory only; no step represents a mutation.
         self.assertFalse(any(step["label"] in ("install", "remove", "restart", "stop", "start") for step in steps))
+        failed = dict(op, status="failed")
+        failed_steps = analysis_next_steps(plan, failed)
+        self.assertTrue(any(step["label"] == "diagnose" for step in failed_steps))
+        self.assertTrue(any(step["label"] == "fresh plan" for step in failed_steps))
+        self.assertFalse(any(step["label"] in ("restart", "install", "remove") for step in failed_steps))
 
     def test_pass7_common_natural_language_phrasings_route_to_reviewed_adapters(self):
         user_phrase = build_plan(self.store, "what user am i", self.tmp.name)

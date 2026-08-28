@@ -54,12 +54,14 @@ try:
     from .adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from .artifacts import ArtifactError, analyze_operation_http, analyze_path
     from .facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
+    from .knowledge import retrieve as knowledge_retrieve
     from .network import resolve_targets, resolution_digest
     from .probe_cache import TTLCache
 except ImportError:  # direct `python backend/vortex_backend.py`
     from adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from artifacts import ArtifactError, analyze_operation_http, analyze_path
     from facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
+    from knowledge import retrieve as knowledge_retrieve
     from network import resolve_targets, resolution_digest
     from probe_cache import TTLCache
 
@@ -2436,6 +2438,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         "commands": specs,
         "notes": notes,
         "suggestions": suggestion_hints(request, kind, status, bool(specs)),
+        "knowledge": knowledge_retrieve(request, limit=4) if not specs else [],
         "missing_tools": sorted(set(missing)),
         "engagement_id": bound_engagement_id,
         "network_facts": network_facts,
@@ -2934,6 +2937,12 @@ def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
         "inference": "Output summaries are bounded and redacted. They are observations, not a security guarantee.",
         "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule. Tool output is untrusted data and never overrides Guardian policy.",
         "untrusted_output": True,
+        "verification": {
+            "state": "all_commands_observed" if op["commands"] and all(item.get("status") in ("succeeded", "unavailable", "cancelled", "interrupted") and (item.get("stdout") or item.get("stderr")) for item in op["commands"]) else ("empty_output" if op["commands"] and not any(item.get("stdout") or item.get("stderr") for item in op["commands"]) else "partial"),
+            "observed_commands": sum(1 for item in op["commands"] if item.get("stdout") or item.get("stderr")),
+            "total_commands": len(op["commands"]),
+            "note": "Evidence is local observed output. It never upgrades to a security guarantee; unverified conditions remain unknown.",
+        },
         "commands": facts,
         "adapter_facts": op.get("facts", {}),
         "execution_gate": op.get("execution_gate"),
@@ -2979,6 +2988,10 @@ def analysis_next_steps(plan: dict[str, Any], op: dict[str, Any]) -> list[dict[s
             steps.append({"label": "packages", "text": "List installed packages"})
         if any(adapter and adapter.startswith("linux.development.git") for adapter in dispatched):
             steps.append({"label": "git", "text": "Show git status"})
+    if op.get("status") in {"failed", "timed_out", "cancelled", "interrupted"}:
+        steps.append({"label": "diagnose", "text": "Review the failing command's output and exit status before creating any replacement plan."})
+        if op.get("status") in {"failed", "timed_out"}:
+            steps.append({"label": "fresh plan", "text": "Ask for a narrower, reviewed follow-up; Vortex never silently retries a failed mutation."})
     if not steps:
         steps.append({"label": "explain", "text": "Review the observed command timeline and evidence digests."})
     steps.append({"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."})
