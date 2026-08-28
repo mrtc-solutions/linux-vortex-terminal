@@ -1,6 +1,6 @@
 # Current implementation status
 
-VORTEX 0.2.0 is a real Linux application. Production paths use installed host
+VORTEX 0.2.19 is a real Linux application. Production paths use installed host
 tools and observed output only. Test doubles exist only inside tests.
 
 **Python tests + JS terminal, window-control, and frontend suites: passing.**
