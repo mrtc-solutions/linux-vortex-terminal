@@ -51,6 +51,11 @@
     const doc = root.document;
     const surface = typeof surfaceOrId === 'string' ? doc?.getElementById(surfaceOrId) : surfaceOrId;
     if (!surface) return false;
+    // Close every other surface window before opening this one so they
+    // never stack on top of each other and block interaction.
+    doc?.querySelectorAll('[data-surface-window]').forEach(other => {
+      if (other !== surface && !other.hidden) closeSurface(other);
+    });
     if (surface.hidden) surface._vortexReturnFocus = doc.activeElement;
     applySurfaceState(surface, NORMAL);
     surface.hidden = false;
