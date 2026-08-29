@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.20 — 2026-08-29
+
+Fix round for the mobile packaging flow: the DOWNLOAD APK control was
+unreachable or silently dead in embedded previews. Both defects reproduced
+before the fix and are covered by frontend regression tests.
+
+- **DOWNLOAD APK now downloads in embedded previews.** The old trigger relied
+  on a synthetic `link.click()`, which sandboxed iframes (web previews of the
+  workbench) silently block — the sync toast appeared but no file arrived.
+  The button now opens the download in a top-level tab first, keeps the
+  classic anchor download for Electron and popup-blocked contexts, and the
+  completion toast carries a real manual `vortex.apk` link as a last resort.
+- **Topbar controls can no longer be clipped off-screen.** HELP and ABOUT
+  moved from the topbar into the sidebar navigation (same windows, same
+  wiring), and the topbar now wraps responsively instead of overflowing on
+  narrow viewports. Previously DOWNLOAD APK and its neighbours were pushed
+  past the right edge on screens below ~1300 px and could not be clicked.
+- The APK packager already re-syncs the live `frontend/` on every build;
+  version bumped to 0.2.20 / code 220 so freshly synced APKs are identifiable.
+
 ## 0.2.19 — 2026-08-28
 
 - Host PATH scanner discovers Kali/Linux tools that were installed after VORTEX

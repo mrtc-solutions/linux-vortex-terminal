@@ -22,7 +22,7 @@ class ApkBuildTests(unittest.TestCase):
         os.environ.pop("VORTEX_DATA_DIR", None)
 
     def test_axml_magic_and_package(self):
-        raw = encode_manifest(version_name="0.2.19")
+        raw = encode_manifest(version_name="0.2.20")
         self.assertEqual(raw[:4], b"\x03\x00\x08\x00")
         self.assertIn("io.vortex.mobile".encode("utf-16le"), raw)
         self.assertIn("VORTEX".encode("utf-16le"), raw)

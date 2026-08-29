@@ -51,14 +51,40 @@ async function downloadApk() {
   try {
     const data = await api('/api/mobile/apk', { method: 'POST', body: {} });
     if (!data.apk || !data.apk.ok) { toast((data.apk && data.apk.message) || 'APK build failed.', true); return; }
-    toast(`APK synced (${data.apk.size_bytes} bytes, MIT). Download starting…`);
-    const link = document.createElement('a');
-    link.href = '/api/mobile/apk/download';
-    link.download = 'vortex.apk';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    triggerApkDownload();
+    showApkToast(data.apk.size_bytes);
   } catch (e) { toast(e.message, true); }
+}
+function triggerApkDownload() {
+  const url = '/api/mobile/apk/download';
+  // Sandboxed iframe previews (embedded workbench) silently block synthetic
+  // anchor downloads; a user-initiated new tab is served the file top-level.
+  // Electron keeps the classic anchor download via the preload bridge.
+  if (!window.vortexApi?.request) {
+    try { if (window.open(url, '_blank')) return; } catch (_) { /* popup blocked — fall through */ }
+  }
+  const link = document.createElement('a');
+  link.href = '/api/mobile/apk/download';
+  link.download = 'vortex.apk';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+function showApkToast(sizeBytes) {
+  const el = $('toast');
+  el.textContent = `APK synced from the live workbench (${sizeBytes} bytes, MIT) — `;
+  const manual = document.createElement('a');
+  manual.href = '/api/mobile/apk/download';
+  manual.download = 'vortex.apk';
+  manual.target = '_blank';
+  manual.rel = 'noopener';
+  manual.className = 'report-dl';
+  manual.textContent = 'DOWNLOAD vortex.apk';
+  el.appendChild(manual);
+  el.style.borderColor = 'var(--cyan)';
+  el.classList.add('show');
+  clearTimeout(window.toastTimer);
+  window.toastTimer = setTimeout(() => el.classList.remove('show'), 10000);
 }
 window.downloadApk = downloadApk;
 function engagementLive(item) {

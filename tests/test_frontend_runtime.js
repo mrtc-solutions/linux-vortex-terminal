@@ -40,7 +40,10 @@ function makeEl(id) {
     getAttribute() { return null; },
     getContext() { return ctxStub; },
     addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
+    children,
     appendChild(child) { children.push(child); return child; },
+    remove() {},
+    click() {},
     querySelector() { return null; },
     querySelectorAll() { return []; },
     focus() {},
@@ -70,6 +73,8 @@ global.innerHeight = 900;
 global.matchMedia = () => ({ matches: false });
 global.requestAnimationFrame = () => 1;
 global.addEventListener = (type, fn) => { (windowListeners[type] ||= []).push(fn); };
+const opened = [];
+global.open = (url, target) => { opened.push({ url, target }); return { closed: false }; };
 global.EventSource = function () { return { close() {}, onmessage: null, onerror: null }; };
 global.VortexTerminal = class { constructor() {} feed() {} render() {} resize() {} };
 const fetched = [];
@@ -83,6 +88,7 @@ global.fetch = async (url) => {
       if (path.includes('/api/doctor')) return { doctor: null };
       if (path.includes('/api/setup')) return { setup: { first_run_complete: false, ready: true, steps: [] } };
       if (path.includes('/api/health')) return { health: { interrupted_tasks: [] } };
+      if (path.includes('/api/mobile/apk')) return { apk: { ok: true, size_bytes: 4096 } };
       if (path.includes('/api/dependencies/proposal')) {
         if (path.includes('tool:podman')) {
           return { install: { id: 'tool:podman', title: 'podman', method: 'apt', installed: false, plan_request: 'install package podman', commands: ['sudo apt-get install podman'] } };
@@ -138,6 +144,17 @@ for (const [view, endpoint] of Object.entries(expectLoad)) {
 
   await global.openDependency('tool:podman');
   assert.ok(String(elements['dep-detail'].innerHTML).includes('CREATE APT PLAN'), 'apt tool proposal offers a reviewed plan path');
+
+  // APK download: embedded contexts must trigger a top-level tab instead of a
+  // synthetic anchor click, and the completion toast must expose a real
+  // manual download link even if every automatic trigger is blocked.
+  await global.downloadApk();
+  assert.ok(fetched.some(url => url.includes('/api/mobile/apk')), 'APK download syncs the live workbench first');
+  assert.strictEqual(opened[opened.length - 1]?.url, '/api/mobile/apk/download', 'APK download opens a top-level tab');
+  assert.strictEqual(opened[opened.length - 1]?.target, '_blank', 'APK download tab opens in the background');
+  const toastEl = elements['toast'];
+  assert.ok(String(toastEl.textContent).includes('APK synced'), 'APK toast reports the synced build');
+  assert.ok(toastEl.children.some((c) => c.href === '/api/mobile/apk/download' && c.download === 'vortex.apk'), 'APK toast carries the manual download link');
 
   console.log('frontend runtime smoke: PASS');
 })().catch((error) => { console.error(error); process.exit(1); });

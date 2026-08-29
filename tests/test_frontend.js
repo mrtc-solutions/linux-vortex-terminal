@@ -8,6 +8,7 @@ const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const index = read('frontend/index.html');
 const workspace = read('frontend/workspace.js');
 const app = read('frontend/app.js');
+const styles = read('frontend/styles.css');
 const backend = read('backend/vortex_backend.py');
 const probeCache = read('backend/probe_cache.py');
 
@@ -59,6 +60,18 @@ assert.ok(index.includes('id="host-tools-setting"') && index.includes('id="resca
 assert.ok(index.includes('id="license-badge"') && index.includes('MIT'), 'MIT license badge exists');
 assert.ok(app.includes("api('/api/mobile/apk'"), 'APK button posts a live sync before download');
 assert.ok(app.includes("link.href = '/api/mobile/apk/download'"), 'APK download follows a successful sync');
+// The APK download must survive sandboxed iframe previews: a top-level tab
+// trigger first, the classic anchor click as fallback, and a real manual
+// download link in the completion toast for contexts that block both.
+assert.ok(app.includes("window.open(url, '_blank')"), 'APK download opens a top-level tab when embedded');
+assert.ok(app.includes('window.vortexApi?.request'), 'APK download keeps the Electron anchor path');
+assert.ok(app.includes("manual.href = '/api/mobile/apk/download'"), 'APK toast offers a manual download link');
+// Topbar overflow fix: HELP/ABOUT launch from the sidebar nav, the topbar
+// wraps instead of clipping controls, and DOWNLOAD APK stays in the topbar.
+assert.ok(index.includes('class="nav-item" id="open-help"') && index.includes('class="nav-item" id="open-about"'), 'HELP and ABOUT launchers live in the sidebar nav');
+assert.ok(!index.includes('class="secondary-button" id="open-help"') && !index.includes('class="secondary-button" id="open-about"'), 'topbar no longer carries HELP/ABOUT');
+assert.ok(/\.topbar ?\{[^}]*flex-wrap:wrap/.test(styles), 'topbar wraps instead of clipping its controls');
+assert.ok(/\.top-actions ?\{[^}]*flex-wrap:wrap/.test(styles), 'top actions wrap instead of overflowing');
 assert.ok(app.includes("api('/api/tools/host/rescan'"), 'PATH rescan posts to the host-tools endpoint');
 assert.ok(workspace.includes('host_tool_access'), 'host-tool access setting is persisted');
 assert.ok(backend.includes('"/api/mobile/apk/download"') || backend.includes("'/api/mobile/apk/download'") || backend.includes('path == "/api/mobile/apk/download"') || backend.includes("endswith(\"/api/mobile/apk/download\")") || backend.includes('apk/download'), 'APK download route is served');
