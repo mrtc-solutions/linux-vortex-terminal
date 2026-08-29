@@ -93,7 +93,7 @@
     <main class="main-content">
       <header class="topbar">
         <div class="breadcrumb"><span class="crumb-dim">WORKSPACE</span><span class="slash">/</span><span id="view-title">OVERVIEW</span></div>
-        <div class="top-actions"><div class="backend-status" id="backend-status"><span class="status-dot"></span><span id="backend-label">BACKEND ONLINE</span></div><button class="secondary-button" id="open-deps" title="Show missing host dependencies">DEPENDENCIES</button><button class="secondary-button" id="download-apk" title="Sync latest VORTEX into an Android APK and download it">DOWNLOAD APK</button><button class="secondary-button danger-btn" id="stop-all" title="Stop all VORTEX-controlled activity">STOP ALL</button><button class="icon-button" id="theme-toggle" title="Toggle matrix rain" aria-label="Toggle matrix rain">◌</button><div class="avatar">OP</div></div>
+        <div class="top-actions"><div class="backend-status" id="backend-status"><span class="status-dot"></span><span id="backend-label">BACKEND ONLINE</span></div><button class="secondary-button" id="open-deps" title="Show missing host dependencies">DEPENDENCIES</button><button class="secondary-button" id="download-apk" title="Sync latest VORTEX into an Android APK and download it">DOWNLOAD APK</button><button class="secondary-button" id="open-help" title="VORTEX Help" aria-label="Open Help">HELP</button><button class="secondary-button" id="open-about" title="About VORTEX" aria-label="Open About">ABOUT</button><button class="secondary-button danger-btn" id="stop-all" title="Stop all VORTEX-controlled activity">STOP ALL</button><button class="icon-button" id="theme-toggle" title="Toggle matrix rain" aria-label="Toggle matrix rain">◌</button><div class="avatar">OP</div></div>
       </header>
 
       <div class="content" id="content">
@@ -159,6 +159,555 @@
       </div>
     </main>
   </div>
+  <!-- HELP SURFACE WINDOW -->
+  <div id="help-window" class="help-window surface-window" data-surface-window data-window-state="normal" hidden>
+    <section class="help-card surface-card" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <div class="surface-titlebar">
+        <div><span class="panel-kicker">DOCUMENTATION</span><strong id="help-title">VORTEX Help</strong></div>
+        <div class="window-controls">
+          <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
+          <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
+          <button type="button" class="window-control window-control-close" data-surface-action="close" aria-label="Close Help window" title="Close"><span aria-hidden="true">×</span></button>
+        </div>
+      </div>
+      <div class="surface-body help-body">
+        <nav class="help-nav" aria-label="Help sections">
+          <button class="help-nav-item active" data-help-section="getting-started">Getting Started</button>
+          <button class="help-nav-item" data-help-section="natural-language">Natural Language</button>
+          <button class="help-nav-item" data-help-section="real-execution">Real Execution</button>
+          <button class="help-nav-item" data-help-section="safety">Safety Architecture</button>
+          <button class="help-nav-item" data-help-section="tools">Tool Availability</button>
+          <button class="help-nav-item" data-help-section="troubleshooting">Troubleshooting</button>
+          <button class="help-nav-item" data-help-section="cli-reference">CLI Reference</button>
+          <button class="help-nav-item" data-help-section="terminology">Terminology</button>
+          <button class="help-nav-item" data-help-section="security-warning">⚠ Authorized Use</button>
+        </nav>
+        <div class="help-content" id="help-content-area">
+
+          <!-- GETTING STARTED -->
+          <article class="help-section active" id="help-section-getting-started">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>OVERVIEW</div>
+              <h2>Getting Started with VORTEX</h2>
+            </div>
+            <div class="help-prose">
+              <h3>Understanding what VORTEX is</h3>
+              <p>VORTEX (Verified Orchestration, Reasoning, Testing, Execution &amp; eXperience) is a Linux-native, AI-assisted authorized cybersecurity and Linux operations workbench. It is designed for cybersecurity professionals, Linux administrators, researchers, and educators who work with real systems in controlled, authorized environments.</p>
+              <p>VORTEX is <strong>not a simulation</strong>. When authorized and permitted by its security architecture, it executes real commands on the real Linux host it is running on. Results reflect actual observed system state, not invented responses.</p>
+
+              <h3>What is VORTEX designed to do?</h3>
+              <ul>
+                <li>Accept natural-language requests and translate them into typed, reviewed command plans.</li>
+                <li>Execute approved plans against the local Linux host through a Guardian-gated execution architecture.</li>
+                <li>Assist with Linux system administration, health checks, diagnostics, and authorized security assessments.</li>
+                <li>Maintain an append-only audit trail of every observed operation.</li>
+                <li>Provide honest reporting: unavailable tools, agents, or capabilities are reported as such — never fabricated.</li>
+              </ul>
+
+              <h3>How to start using VORTEX</h3>
+              <ol>
+                <li><strong>Open the New Task view</strong> (the ✦ nav item, selected by default).</li>
+                <li><strong>Type a natural-language request</strong> in the command bar at the bottom of the chat column, or click one of the quick-action buttons.</li>
+                <li><strong>Review the plan</strong> that appears in the Plan / Terminal Evidence panel. VORTEX shows you exactly what it intends to run before anything executes.</li>
+                <li><strong>Approve or reject</strong> the plan. Low-risk local diagnostics may auto-run under the Standard or Expert policy; all others wait for explicit approval.</li>
+                <li><strong>Observe real output</strong> streaming in the Live Output panel — this is actual stdout from the host.</li>
+              </ol>
+
+              <h3>How the main interface works</h3>
+              <div class="help-grid">
+                <div class="help-card-item">
+                  <strong>Chat Column</strong>
+                  <p>Where you type requests and see the conversational record. Editing a past message branches the conversation rather than rewriting history.</p>
+                </div>
+                <div class="help-card-item">
+                  <strong>Plan / Evidence Panel</strong>
+                  <p>Shows the typed command plan with risk level, required tool, timeout, privilege, and Guardian decision. Commands only run after you approve them (unless policy permits auto-run for very low-risk diagnostics).</p>
+                </div>
+                <div class="help-card-item">
+                  <strong>Live Output</strong>
+                  <p>Real stdout/stderr from executed commands, streamed from the Python sidecar. This is not simulated output.</p>
+                </div>
+                <div class="help-card-item">
+                  <strong>Context &amp; Host Panel</strong>
+                  <p>Displays the current task state, Guardian decision, agent participation, risk level, and live host environment details (distribution, kernel, privilege).</p>
+                </div>
+              </div>
+
+              <h3>Quick-action buttons</h3>
+              <p>The four quick-action buttons on the overview page send pre-written prompts: <em>System health</em>, <em>Listening ports</em>, <em>Who am I</em>, and <em>Disk usage</em>. These are safe, local-only diagnostic commands that demonstrate VORTEX's capabilities without requiring an engagement scope.</p>
+            </div>
+          </article>
+
+          <!-- NATURAL LANGUAGE -->
+          <article class="help-section" id="help-section-natural-language">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>INTERACTION</div>
+              <h2>Natural-Language Interaction</h2>
+            </div>
+            <div class="help-prose">
+              <p>VORTEX understands ordinary English. You do not need to know exact command syntax. Describe what you want to know or do, and VORTEX will build a typed plan from your description.</p>
+
+              <h3>Example requests</h3>
+              <div class="help-example-list">
+                <div class="help-example"><span class="help-example-mark">❯</span><span>"Check my system health."</span></div>
+                <div class="help-example"><span class="help-example-mark">❯</span><span>"Find what is consuming CPU."</span></div>
+                <div class="help-example"><span class="help-example-mark">❯</span><span>"Check whether nginx is running."</span></div>
+                <div class="help-example"><span class="help-example-mark">❯</span><span>"Show me open network connections."</span></div>
+                <div class="help-example"><span class="help-example-mark">❯</span><span>"Analyze this authorized target."</span></div>
+                <div class="help-example"><span class="help-example-mark">❯</span><span>"Find large files in my home directory."</span></div>
+                <div class="help-example"><span class="help-example-mark">❯</span><span>"Show me who is logged in."</span></div>
+                <div class="help-example"><span class="help-example-mark">❯</span><span>"Check disk space usage."</span></div>
+              </div>
+
+              <h3>Information vs. execution</h3>
+              <p>Some requests produce <strong>information only</strong> (a clarification or explanation) — no commands are executed. Others produce a <strong>command plan</strong> that requires your approval before any execution takes place.</p>
+              <div class="help-notice">
+                <span>i</span>
+                <div>VORTEX always shows you what it intends to run before executing anything. The plan card shows the exact command, required tool, risk level, network class, privilege requirement, and timeout. You remain in control at every step.</div>
+              </div>
+
+              <h3>Conversations and branching</h3>
+              <p>Every interaction is part of a persistent conversation. You can continue a thread across sessions. If you edit a previous message, VORTEX creates a new conversation branch rather than rewriting history, so the original record is always preserved.</p>
+
+              <h3>Suggestion hints</h3>
+              <p>When your request is ambiguous, VORTEX may offer suggestion chips — clickable hints for clarifying what you meant. These help narrow down the intent without requiring you to rephrase from scratch.</p>
+            </div>
+          </article>
+
+          <!-- REAL EXECUTION -->
+          <article class="help-section" id="help-section-real-execution">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>IMPORTANT</div>
+              <h2>Real Command Execution</h2>
+            </div>
+            <div class="help-prose">
+              <div class="help-warning">
+                <strong>⚠ VORTEX executes real commands.</strong>
+                <p>This is not a chatbot that generates hypothetical terminal output. When a plan is approved and authorized, VORTEX runs actual system commands through its Python sidecar on the real Linux host. The output you see is genuine observed stdout — not a simulation.</p>
+              </div>
+
+              <h3>How execution works</h3>
+              <ol>
+                <li><strong>You submit a natural-language request.</strong></li>
+                <li><strong>The Planner</strong> translates the request into a typed command specification: exact argv, required tool, risk level, privilege, network class, and timeout.</li>
+                <li><strong>The Guardian</strong> evaluates the plan against your configured risk policy, scope, and engagement. It can approve, require confirmation, or block the operation.</li>
+                <li><strong>If approval is required</strong>, the plan is displayed to you with a prominent APPROVE &amp; EXECUTE button. Nothing runs until you click it.</li>
+                <li><strong>Approved commands</strong> are dispatched to the Python sidecar, which executes them with <code>shell=False</code> (no shell injection risk), streams stdout/stderr back to the UI, and records the observed output to the audit log.</li>
+                <li><strong>The analysis</strong> is based entirely on observed output. VORTEX reports what actually happened, including failures, errors, and missing tools.</li>
+              </ol>
+
+              <h3>What VORTEX will not do</h3>
+              <ul>
+                <li>VORTEX will not fabricate successful output for a command that failed or was never run.</li>
+                <li>VORTEX will not report a tool as available when it is not installed.</li>
+                <li>VORTEX will not bypass Guardian's risk controls or scope enforcement.</li>
+                <li>VORTEX will not modify its own source code based on AI outputs.</li>
+                <li>VORTEX will not silently install software without operator approval.</li>
+                <li>VORTEX will not send terminal output to external networks unless you explicitly configure a cloud provider and the privacy mode permits it.</li>
+              </ul>
+
+              <h3>Terminal (Real PTY)</h3>
+              <p>The <strong>Terminal</strong> view provides a real Linux PTY (pseudo-terminal) on the host — a genuine interactive shell session. This is completely separate from the AI planning system. Keystrokes go directly to the host shell. AI-generated plans never enter the PTY unless you type them yourself.</p>
+            </div>
+          </article>
+
+          <!-- SAFETY ARCHITECTURE -->
+          <article class="help-section" id="help-section-safety">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>PROTECTION</div>
+              <h2>VORTEX Safety Architecture</h2>
+            </div>
+            <div class="help-prose">
+              <p>VORTEX is built around a layered safety architecture. These mechanisms are not optional — they operate on every plan and execution request.</p>
+
+              <div class="help-arch-grid">
+                <div class="help-arch-item">
+                  <h4>Planner</h4>
+                  <p>Translates natural-language requests into typed command specifications with explicit argv, tool, risk level, privilege, network class, and timeout. The Planner never executes commands — it only produces a plan for Guardian review.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Guardian</h4>
+                  <p>The single authority for execution decisions. Guardian evaluates every plan against the configured risk policy, engagement scope, and execution authority before any command runs. It can approve, require operator confirmation, or block an operation entirely.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Orchestration</h4>
+                  <p>Coordinates the overall workflow from request to analysis. Orchestration routes requests through the Planner, Agent Council, Guardian, and execution layers, maintaining task state throughout.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Agent Council</h4>
+                  <p>A set of AI agent adapters that provide advisory input (reconnaissance suggestions, analysis hints) to the Planner. Agents never execute commands directly — they are advisory only and never bypass Guardian. Missing agents are reported as UNAVAILABLE, not silently skipped.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Risk Policy</h4>
+                  <p>Three configurable profiles: <strong>Safe</strong> (always confirms), <strong>Standard</strong> (may auto-run very low-risk local diagnostics), <strong>Expert</strong> (broader auto-run, never bypasses Guardian or audit). Set in Settings.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Engagements &amp; Scope</h4>
+                  <p>Active tools such as nmap require a declared engagement with an explicit target, authorization reference, and expiry. Scope is revalidated at execution — a plan cannot execute against a target outside the declared scope.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Tool Registry</h4>
+                  <p>VORTEX maintains a catalog of known security and administration tools. Each tool is probed on the real host. If a tool is not installed, it is reported as ABSENT or UNAVAILABLE — plans requiring that tool are blocked until it is installed by the operator.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Observed Evidence</h4>
+                  <p>Execution output is captured as observed evidence. The audit trail records what actually happened, not what was expected. Evidence digests are included in reports; raw output is not retained by default.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Verification</h4>
+                  <p>After execution, VORTEX reports the number of commands that produced observed output vs. the total planned. This makes partial failures visible rather than hidden.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Task Engine</h4>
+                  <p>Every request becomes a durable VTX task. Tasks persist through restarts; interrupted work can be inspected, resumed, or deleted from the Tasks view.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>STOP ALL</h4>
+                  <p>The red STOP ALL button in the topbar immediately cancels all active VORTEX-controlled operations and kills all open PTY sessions. It does not affect processes you started independently on the host.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Audit Logging</h4>
+                  <p>An append-only local audit log records every operation with timestamps and outcome digests. The VERIFY AUDIT CHAIN button in the Activity view checks the integrity of the chain. Logs are local-only by default.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Offline Mode</h4>
+                  <p>Blocks outbound network plans and external model calls. Local tools and memory remain available. Toggle in Settings → Offline mode, or start VORTEX with the offline flag.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Privacy Mode</h4>
+                  <p>Three levels: <strong>Local-only</strong> (default — nothing leaves the host), <strong>Hybrid</strong>, <strong>Cloud</strong>. Terminal output is never sent externally unless you explicitly configure a provider and set privacy mode to Hybrid or Cloud.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Lab Mode</h4>
+                  <p>Marks the workspace as an authorized laboratory environment. External targets still require an engagement scope — Lab Mode does not bypass scope enforcement.</p>
+                </div>
+                <div class="help-arch-item">
+                  <h4>Sandbox</h4>
+                  <p>VORTEX includes sandbox capabilities for isolated execution. Sandbox status is visible in <code>./vortex sandbox --json</code>.</p>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- TOOL AVAILABILITY -->
+          <article class="help-section" id="help-section-tools">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>HONEST TOOLING</div>
+              <h2>Tool Availability</h2>
+            </div>
+            <div class="help-prose">
+              <p>VORTEX does not pretend that tools are installed when they are not. Every tool in the catalog is probed on the real host at startup and on demand. If a required tool is missing, the plan that depends on it will be blocked and the tool's status will be reported accurately.</p>
+
+              <h3>Tool status meanings</h3>
+              <div class="help-status-list">
+                <div class="help-status-row">
+                  <span class="badge badge-green">INSTALLED</span>
+                  <span>The tool was found on the host PATH and probed successfully. It may be used in approved plans.</span>
+                </div>
+                <div class="help-status-row">
+                  <span class="badge badge-muted">ABSENT</span>
+                  <span>The tool is not installed on this host. Plans requiring it will be blocked. Install it through your system package manager or the DEPENDENCIES panel.</span>
+                </div>
+                <div class="help-status-row">
+                  <span class="badge badge-muted">UNAVAILABLE</span>
+                  <span>The tool exists in the catalog but cannot be used in the current context (e.g., missing dependency, policy restriction, or no active engagement).</span>
+                </div>
+                <div class="help-status-row">
+                  <span class="badge badge-red">BLOCKED</span>
+                  <span>The tool is explicitly blocked by policy or scope — for example, active offensive tools require an engagement scope with an explicit authorization reference and expiry.</span>
+                </div>
+                <div class="help-status-row">
+                  <span class="badge badge-muted">REQUIRES AUTHORIZATION</span>
+                  <span>The tool requires an active engagement scope before it can be planned. Create an engagement in the Engagements view first.</span>
+                </div>
+                <div class="help-status-row">
+                  <span class="badge badge-muted">NOT IMPLEMENTED</span>
+                  <span>The adapter for this tool exists in the catalog but is not yet fully implemented. It will be available in a future version.</span>
+                </div>
+              </div>
+
+              <h3>Checking tool status</h3>
+              <p>Open the <strong>Tools</strong> view from the sidebar to see all catalog tools and their current host status. Click <strong>REFRESH PROBES ↻</strong> to force a fresh probe. Click <strong>RESCAN PATH</strong> to discover any new tools you have installed since VORTEX started. Click <strong>MISSING</strong> to open the Dependencies panel with install proposals for absent tools.</p>
+
+              <h3>Host PATH tools</h3>
+              <p>When Host tool access is enabled in Settings, VORTEX can also plan commands for tools discovered on your system PATH (including tools installed on Kali Linux) that are not in the built-in catalog. Guardian, scope enforcement, and <code>shell=False</code> still apply to these tools.</p>
+            </div>
+          </article>
+
+          <!-- TROUBLESHOOTING -->
+          <article class="help-section" id="help-section-troubleshooting">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>SUPPORT</div>
+              <h2>Troubleshooting</h2>
+            </div>
+            <div class="help-prose">
+              <div class="help-trouble-item">
+                <h3>"A tool says UNAVAILABLE"</h3>
+                <p>Open the <strong>Tools</strong> view and click <strong>REFRESH PROBES ↻</strong>. Check whether the tool is installed on the host (<code>which &lt;tool&gt;</code> in the Terminal view). If it is missing, click <strong>MISSING</strong> to open an install proposal. If it requires an engagement, create one in the Engagements view.</p>
+              </div>
+              <div class="help-trouble-item">
+                <h3>"A command did not execute"</h3>
+                <p>Review the error message shown in the plan card or toast notification. Common causes: the required tool is absent, the plan was rejected by Guardian due to policy or scope, the timeout was exceeded, or the command produced a non-zero exit code. Check the Activity view for the full operation record.</p>
+              </div>
+              <div class="help-trouble-item">
+                <h3>"An AI agent is unavailable"</h3>
+                <p>Open the <strong>Agents</strong> view. VORTEX honestly reports which agents are installed and available on this host. An UNAVAILABLE agent means its CLI executable was not found. VORTEX never pretends an agent responded when it did not. Click the install proposal button for operator-controlled installation instructions.</p>
+              </div>
+              <div class="help-trouble-item">
+                <h3>"A task is still running"</h3>
+                <p>Open the <strong>Tasks</strong> view to see running and interrupted tasks. You can pause the current task using the PAUSE button in the plan card, or use <strong>STOP ALL</strong> in the topbar to immediately cancel all active operations and sessions.</p>
+              </div>
+              <div class="help-trouble-item">
+                <h3>"I need to stop everything immediately"</h3>
+                <p>Click the red <strong>STOP ALL</strong> button in the top-right toolbar. This cancels all VORTEX-controlled operations and kills all open PTY sessions. It calls <code>/api/control/stop-all</code> and reports how many operations were cancelled and sessions killed. Use this if a plan is executing and you want to halt it immediately.</p>
+              </div>
+              <div class="help-trouble-item">
+                <h3>"The application reports an error"</h3>
+                <p>Toast notifications at the bottom right show immediate errors. The <strong>Activity</strong> view contains the append-only operation history with status and command records. The <strong>System</strong> view shows live health probes for backend components. For deep diagnostics, run <code>./vortex doctor --json</code> from the command line.</p>
+              </div>
+              <div class="help-trouble-item">
+                <h3>"The backend appears offline"</h3>
+                <p>The top-right status indicator shows BACKEND ONLINE or OFFLINE. If offline, the Python sidecar may not be running. Start it with <code>python3 backend/vortex_backend.py</code> or <code>npm run preview</code>. In Electron mode, the sidecar is managed automatically.</p>
+              </div>
+              <div class="help-trouble-item">
+                <h3>"First-run checks failed"</h3>
+                <p>The first-run setup window appears when required components are missing. You can skip it and still use VORTEX — optional components simply remain unavailable. Use the <strong>DEPENDENCIES</strong> button in the topbar or Tools view to review and install missing items.</p>
+              </div>
+            </div>
+          </article>
+
+          <!-- CLI REFERENCE -->
+          <article class="help-section" id="help-section-cli-reference">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>COMMAND LINE</div>
+              <h2>CLI Reference</h2>
+            </div>
+            <div class="help-prose">
+              <p>VORTEX provides a CLI entry point (<code>vortex</code> / <code>./vortex</code>) for diagnostics and administration outside the GUI. The following commands have been verified against the current codebase.</p>
+              <div class="help-cli-list">
+                <div class="help-cli-row">
+                  <code>./vortex --help</code>
+                  <span>Show the CLI help message and available subcommands.</span>
+                </div>
+                <div class="help-cli-row">
+                  <code>./vortex doctor --json</code>
+                  <span>Display host environment information: distribution, kernel, architecture, privilege level, container context, and more. JSON output for scripting.</span>
+                </div>
+                <div class="help-cli-row">
+                  <code>./vortex health --json</code>
+                  <span>Run live health probes on all backend components and report their status. JSON output for scripting.</span>
+                </div>
+                <div class="help-cli-row">
+                  <code>./vortex tools</code>
+                  <span>List the tool catalog with current host probe status (installed / absent / blocked).</span>
+                </div>
+                <div class="help-cli-row">
+                  <code>./vortex agents --json</code>
+                  <span>List configured AI agent adapters and their availability on this host.</span>
+                </div>
+                <div class="help-cli-row">
+                  <code>./vortex deps --json</code>
+                  <span>Show missing dependencies from the catalog with installation proposals.</span>
+                </div>
+                <div class="help-cli-row">
+                  <code>./vortex sandbox --json</code>
+                  <span>Report sandbox capability status for this host.</span>
+                </div>
+                <div class="help-cli-row">
+                  <code>./vortex db integrity</code>
+                  <span>Verify the integrity of the local VORTEX database.</span>
+                </div>
+              </div>
+              <div class="help-notice">
+                <span>i</span>
+                <div>Only use CLI subcommands that appear in <code>./vortex --help</code>. Do not rely on subcommands not listed there — they may not be implemented in your installed version.</div>
+              </div>
+            </div>
+          </article>
+
+          <!-- TERMINOLOGY -->
+          <article class="help-section" id="help-section-terminology">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>GLOSSARY</div>
+              <h2>VORTEX Terminology</h2>
+            </div>
+            <div class="help-prose">
+              <div class="help-term-grid">
+                <div class="help-term"><dt>Agent</dt><dd>An AI adapter that provides advisory input to the Planner. Agents are consulted but never directly execute commands. They are part of the Agent Council.</dd></div>
+                <div class="help-term"><dt>Agent Council</dt><dd>The collection of configured AI agent adapters. The Council advises the Planner; Guardian makes all execution decisions independently of Council output.</dd></div>
+                <div class="help-term"><dt>Orchestration</dt><dd>The workflow layer that coordinates requests through the Planner, Agent Council, Guardian, and execution engine, maintaining task state throughout.</dd></div>
+                <div class="help-term"><dt>Planner</dt><dd>The component that translates natural-language requests into typed command specifications with explicit argv, tool, risk level, privilege, network class, and timeout.</dd></div>
+                <div class="help-term"><dt>Guardian</dt><dd>The single authority for execution decisions. Evaluates every plan against risk policy, scope, and engagement before any command is dispatched.</dd></div>
+                <div class="help-term"><dt>Risk Policy</dt><dd>A configurable profile (Safe / Standard / Expert) that determines which operations Guardian auto-approves vs. requires operator confirmation.</dd></div>
+                <div class="help-term"><dt>Engagement</dt><dd>A declared authorization scope for active security operations. Contains the target, authorization reference, owner, expiry, and excluded targets. Active offensive tools require an engagement.</dd></div>
+                <div class="help-term"><dt>Scope</dt><dd>The set of targets permitted within an engagement. Scope is revalidated at execution — commands cannot run against out-of-scope targets.</dd></div>
+                <div class="help-term"><dt>Tool</dt><dd>A system binary or command that VORTEX can include in a plan (e.g., nmap, ps, df, ss). Tools are probed on the host and reported honestly as installed, absent, or blocked.</dd></div>
+                <div class="help-term"><dt>Execution</dt><dd>The act of dispatching an approved plan's commands to the Python sidecar, which runs them with shell=False and captures observed stdout/stderr.</dd></div>
+                <div class="help-term"><dt>Evidence</dt><dd>The observed output from executed commands. Evidence is captured in the audit log with a digest. Raw output is not retained by default.</dd></div>
+                <div class="help-term"><dt>Verification</dt><dd>Post-execution summary of how many commands produced observed output vs. the total planned. Makes partial failures visible.</dd></div>
+                <div class="help-term"><dt>Task</dt><dd>A durable unit of work created for every request. Tasks persist through restarts and can be inspected, paused, resumed, or deleted.</dd></div>
+                <div class="help-term"><dt>Session</dt><dd>A real PTY (pseudo-terminal) session on the Linux host, managed through the Terminal view. Independent of the AI planning system.</dd></div>
+                <div class="help-term"><dt>Sandbox</dt><dd>An isolated execution environment for running commands in a controlled context. Sandbox capabilities depend on the host configuration.</dd></div>
+                <div class="help-term"><dt>Audit</dt><dd>The append-only local log of all operations and their observed outcomes. Verifiable with VERIFY AUDIT CHAIN in the Activity view.</dd></div>
+                <div class="help-term"><dt>Offline Mode</dt><dd>A setting that blocks outbound network plans and external model calls while keeping local tools and memory available.</dd></div>
+                <div class="help-term"><dt>Privacy Mode</dt><dd>Controls whether data leaves the host: Local-only (default), Hybrid, or Cloud. Terminal output never leaves without explicit configuration.</dd></div>
+                <div class="help-term"><dt>Lab Mode</dt><dd>Marks the workspace as an authorized laboratory. External targets still require an engagement scope.</dd></div>
+              </div>
+            </div>
+          </article>
+
+          <!-- SECURITY WARNING -->
+          <article class="help-section" id="help-section-security-warning">
+            <div class="help-section-header">
+              <div class="eyebrow"><span class="eyebrow-line"></span>LEGAL &amp; ETHICAL USE</div>
+              <h2>⚠ Authorized Use Warning</h2>
+            </div>
+            <div class="help-prose">
+              <div class="help-warning prominent">
+                <strong>AUTHORIZED USE ONLY</strong>
+                <p>VORTEX is intended for authorized cybersecurity testing, Linux administration, research, education, and controlled laboratory environments.</p>
+              </div>
+              <h3>What you must do</h3>
+              <ul>
+                <li>Only test systems, networks, applications, accounts, files, and infrastructure that you <strong>own</strong> or have <strong>explicit written permission</strong> to assess.</li>
+                <li>Obtain and maintain proper authorization before any reconnaissance, scanning, or exploitation activity.</li>
+                <li>Respect the scope and limitations of any authorization you receive.</li>
+                <li>Use VORTEX's engagement system to declare and enforce your authorized scope before running active tools.</li>
+              </ul>
+              <h3>What is prohibited</h3>
+              <ul>
+                <li>Unauthorized access, scanning, exploitation, credential attacks, or interference with third-party systems.</li>
+                <li>Using VORTEX against targets you do not own or have no authorization to test.</li>
+                <li>Attempting to bypass VORTEX's Guardian, scope enforcement, or authorization mechanisms.</li>
+                <li>Using VORTEX for any activity that violates applicable laws, regulations, or the rights of others.</li>
+              </ul>
+              <div class="help-notice warn">
+                <span>!</span>
+                <div><strong>Unauthorized access, scanning, exploitation, credential attacks, or disruption of systems may violate computer crime laws, civil laws, or organizational policies and may result in criminal prosecution, civil liability, or other consequences.</strong> VORTEX's safety architecture is a tool to help you stay within authorized boundaries — it does not make unauthorized activity legal or acceptable.</div>
+              </div>
+            </div>
+          </article>
+
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ABOUT SURFACE WINDOW -->
+  <div id="about-window" class="about-window surface-window" data-surface-window data-window-state="normal" hidden>
+    <section class="about-card surface-card" role="dialog" aria-modal="true" aria-labelledby="about-title">
+      <div class="surface-titlebar">
+        <div><span class="panel-kicker">APPLICATION INFO</span><strong id="about-title">About VORTEX</strong></div>
+        <div class="window-controls">
+          <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
+          <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
+          <button type="button" class="window-control window-control-close" data-surface-action="close" aria-label="Close About window" title="Close"><span aria-hidden="true">×</span></button>
+        </div>
+      </div>
+      <div class="surface-body about-body">
+
+        <div class="about-hero">
+          <div class="about-brand-mark"><span>V</span></div>
+          <div class="about-brand-text">
+            <div class="about-name">VORTEX</div>
+            <div class="about-full-name">Verified Orchestration, Reasoning, Testing, Execution &amp; eXperience</div>
+            <div class="about-tagline">Linux-native, AI-assisted authorized cybersecurity and Linux operations workbench</div>
+          </div>
+          <div class="about-version-chip">
+            <div class="about-version-label">VERSION</div>
+            <div class="about-version-value" id="about-version">0.2.19</div>
+          </div>
+        </div>
+
+        <div class="about-warning">
+          <strong>⚠ IMPORTANT: VORTEX is a real application.</strong>
+          <p>VORTEX can execute real commands and interact with real systems when authorized and permitted by its security architecture. It is not a simulation, demonstration, or toy hacking application.</p>
+          <p>Only use VORTEX against systems, networks, applications, accounts, and data that you <strong>own or have explicit authorization to test or operate</strong>. Unauthorized access, scanning, exploitation, credential attacks, or disruption of systems may violate laws, policies, or the rights of others.</p>
+        </div>
+
+        <div class="about-grid">
+          <section class="about-section">
+            <div class="eyebrow"><span class="eyebrow-line"></span>DEVELOPER</div>
+            <h3>Francis Fweta</h3>
+            <p>Cybersecurity Specialist and technology professional.</p>
+            <p>Professional IT training and certifications include:</p>
+            <ul class="about-cert-list">
+              <li>CCNA (Cisco Certified Network Associate)</li>
+              <li>CompTIA Security+</li>
+              <li>Additional IT training and certifications including programs delivered through eSkills Academy in collaboration with CompTIA</li>
+            </ul>
+            <p class="about-note">Certification details are not further specified here to avoid inaccuracy.</p>
+          </section>
+
+          <section class="about-section">
+            <div class="eyebrow"><span class="eyebrow-line"></span>SYSTEM INFORMATION</div>
+            <h3>Runtime</h3>
+            <div class="about-sysinfo" id="about-sysinfo">
+              <div class="context-row"><label>VERSION</label><span>0.2.19</span></div>
+              <div class="context-row"><label>LICENSE</label><span>MIT</span></div>
+              <div class="context-row"><label>PLATFORM</label><span id="about-platform">Linux</span></div>
+              <div class="context-row"><label>DISTRIBUTION</label><span id="about-distro">—</span></div>
+              <div class="context-row"><label>KERNEL</label><span id="about-kernel">—</span></div>
+              <div class="context-row"><label>ARCHITECTURE</label><span id="about-arch">—</span></div>
+              <div class="context-row"><label>PRIVILEGE</label><span id="about-priv">—</span></div>
+              <div class="context-row"><label>RUNTIME</label><span id="about-runtime">Python 3 sidecar + browser frontend</span></div>
+            </div>
+          </section>
+
+          <section class="about-section about-section-full">
+            <div class="eyebrow"><span class="eyebrow-line"></span>LICENSE</div>
+            <h3>Software License</h3>
+            <div class="about-license-box">
+              <strong>MIT License</strong>
+              <p>Copyright (c) 2026 mrtc-solutions</p>
+              <p>VORTEX is released under the MIT License. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject to the following condition: the above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.</p>
+              <p>THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.</p>
+            </div>
+          </section>
+
+          <section class="about-section about-section-full">
+            <div class="eyebrow"><span class="eyebrow-line"></span>THIRD-PARTY COMPONENTS</div>
+            <h3>Open Source &amp; Free Software</h3>
+            <p>VORTEX itself is released under the MIT License and is free and open-source software. It is committed to using free and open-source tooling where possible.</p>
+            <p><strong>Important distinctions:</strong></p>
+            <ul>
+              <li><strong>VORTEX core</strong> — MIT License (this repository).</li>
+              <li><strong>Optional AI agents</strong> — Third-party projects with their own licenses (see NOTICE). VORTEX does not vendor these; adapters only probe for a local executable. Verify each project's license before installation.</li>
+              <li><strong>Optional system tools</strong> — Tools such as nmap, Metasploit, and others have their own licenses. VORTEX does not install or bundle them.</li>
+              <li><strong>External AI models</strong> — Commercial cloud providers (OpenAI, Anthropic, etc.) are optional and not free/open-source. They are disabled by default and never used without explicit configuration.</li>
+              <li><strong>System packages</strong> — Standard Linux system utilities retain their upstream licenses.</li>
+            </ul>
+            <p>Verified third-party agent attributions (from NOTICE):</p>
+            <div class="about-attr-list">
+              <div class="about-attr-row"><span>CAI</span><span class="about-attr-license">MIT</span><a class="report-dl" href="https://github.com/aliasrobotics/cai" target="_blank" rel="noopener noreferrer">github.com/aliasrobotics/cai</a></div>
+              <div class="about-attr-row"><span>Nebula</span><span class="about-attr-license">BSD-2-Clause</span><a class="report-dl" href="https://github.com/BerylliumSec/nebula" target="_blank" rel="noopener noreferrer">github.com/BerylliumSec/nebula</a></div>
+              <div class="about-attr-row"><span>PentestGPT</span><span class="about-attr-license">MIT</span><a class="report-dl" href="https://github.com/GreyDGL/PentestGPT" target="_blank" rel="noopener noreferrer">github.com/GreyDGL/PentestGPT</a></div>
+              <div class="about-attr-row"><span>HexStrike</span><span class="about-attr-license">MIT (verify upstream)</span><a class="report-dl" href="https://github.com/0x4m4/hexstrike-ai" target="_blank" rel="noopener noreferrer">github.com/0x4m4/hexstrike-ai</a></div>
+              <div class="about-attr-row"><span>Strix</span><span class="about-attr-license">Apache-2.0</span><a class="report-dl" href="https://github.com/usestrix/strix" target="_blank" rel="noopener noreferrer">github.com/usestrix/strix</a></div>
+              <div class="about-attr-row"><span>PentAGI</span><span class="about-attr-license">MIT</span><a class="report-dl" href="https://github.com/vxcontrol/pentagi" target="_blank" rel="noopener noreferrer">github.com/vxcontrol/pentagi</a></div>
+            </div>
+            <p class="about-note">HackerAI, HALO, and DarkMoon have no uniquely verified public local CLI currently configured. Do not copy proprietary code into VORTEX. Install agents only with operator approval and respect each project's license and trademark terms.</p>
+          </section>
+
+          <section class="about-section about-section-full">
+            <div class="eyebrow"><span class="eyebrow-line"></span>AUTHORIZED USE</div>
+            <h3>Intended Use</h3>
+            <p>VORTEX is intended for:</p>
+            <ul>
+              <li>Authorized cybersecurity testing and penetration testing</li>
+              <li>Linux system administration and operations</li>
+              <li>Security research in controlled environments</li>
+              <li>Education and training in cybersecurity and Linux administration</li>
+              <li>Authorized laboratory environments</li>
+            </ul>
+            <p>See <a class="report-dl" href="#" id="about-open-help-warning">Help → Authorized Use Warning</a> for the full legal notice.</p>
+          </section>
+        </div>
+
+      </div>
+    </section>
+  </div>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/assets/terminal.js"></script>
   <script src="/assets/windows.js"></script>
