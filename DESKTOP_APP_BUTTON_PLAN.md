@@ -1,6 +1,14 @@
 # Desktop Application Button — Implementation Plan
 
-Status: planned (no code changed yet) · Target version: 0.2.21 · Branch: `arena/01a04d85-linux-vortex-terminal`
+Status: **implemented and audited** (commit `386d866`, 2026-08-29) · Shipped version: 0.2.21 · Branch: `arena/01a04d85-linux-vortex-terminal`
+
+Audit result: every plan item shipped with no deviation; the change is purely
+additive (no existing route, window, terminal, or policy behavior touched —
+verified by full-suite run 176/176 + 4 JS suites + lint, and a 15-route live
+battery of pre-existing endpoints returning identical statuses). Both download
+flows re-verified from a wiped artifact state: honest 404 before build, byte-
+identical downloads after, valid v1-signed APK (AXML/DEX verified) and valid
+unsigned .deb (dpkg-deb, zero maintainer scripts).
 
 ## Goal
 
