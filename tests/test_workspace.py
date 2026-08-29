@@ -58,6 +58,38 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertTrue(plan["commands"][0]["privilege"] in ("user", "unknown"))
                 self.assertLessEqual(plan["risk"], "low")
 
+    def test_pass7_open_ports_adjective_is_read_only_not_mutation(self):
+        # "open" is an adjective in scanning queries; only a bare mutation
+        # verb + ports ("open port 8080") is a system mutation.
+        for request in ("scan for open ports", "check for open ports", "show open ports",
+                        "list open ports", "find open ports", "how many open ports are there",
+                        "scan open ports on this host"):
+            plan = build_plan(self.store, request, self.cwd)
+            self.assertNotEqual(plan["kind"], "unsupported_system_mutation", request)
+            self.assertNotEqual(plan["status"], "rejected", request)
+            if plan["status"] == "planned":
+                self.assertEqual(plan["commands"][0]["executable"], "ss", request)
+        for request in ("open port 8080", "close ports 80 and 443", "block port 22"):
+            plan = build_plan(self.store, request, self.cwd)
+            self.assertEqual(plan["kind"], "unsupported_system_mutation", request)
+            self.assertEqual(plan["status"], "rejected", request)
+            self.assertEqual(plan["commands"], [], request)
+
+    def test_rename_conversation_cascades_to_reports(self):
+        from backend.workspace import Workspace
+        workspace = Workspace(self.store)
+        conversation = workspace.create_conversation("Old title")
+        task = workspace.create_task("show listening ports", conversation_id=conversation["id"])
+        report = workspace.save_report({"task_id": task["id"], "title": "VTX plan"})
+        self.assertEqual(workspace.get_report(report["id"])["title"], "VTX plan")
+        workspace.rename_conversation(conversation["id"], "Renamed engagement")
+        self.assertEqual(workspace.get_report(report["id"])["title"], "Renamed engagement")
+        # Deleting the derived report never touches history or the task.
+        self.assertTrue(workspace.delete_report(report["id"]))
+        self.assertIsNone(workspace.get_report(report["id"]))
+        self.assertFalse(workspace.delete_report(report["id"]))
+        self.assertIsNotNone(workspace.get_task(task["id"]))
+
     def tearDown(self):
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)
@@ -196,6 +228,48 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(any(step["label"] == "diagnose" for step in failed_steps))
         self.assertTrue(any(step["label"] == "fresh plan" for step in failed_steps))
         self.assertFalse(any(step["label"] in ("restart", "install", "remove") for step in failed_steps))
+
+    def test_analysis_carries_verdict_and_quantitative_figures(self):
+        plan = {"kind": "plan", "request": "mixed", "commands": [], "notes": [], "workers": []}
+        op = {
+            "status": "succeeded",
+            "commands": [
+                {"status": "succeeded", "display": "ss -lntup", "stdout": "a\nb\nc\n", "exit_code": 0, "duration_ms": 40},
+                {"status": "succeeded", "display": "false", "stdout": "", "exit_code": 1, "duration_ms": 5},
+            ],
+            "cwd": self.tmp.name,
+            "workers": [],
+        }
+        analysis = make_analysis(plan, op)
+        self.assertEqual(analysis["verdict"]["outcome"], "PARTIAL")
+        self.assertEqual(analysis["verdict"]["passed"], 1)
+        self.assertEqual(analysis["verdict"]["failed"], 1)
+        self.assertEqual(analysis["verdict"]["total_commands"], 2)
+        self.assertEqual(analysis["verdict"]["total_duration_ms"], 45)
+        self.assertEqual(analysis["verdict"]["total_observed_lines"], 3)
+        self.assertIn("VERDICT PARTIAL", analysis["fact"])
+        self.assertIn("1/2", analysis["fact"])
+        by_command = {item["command"]: item for item in analysis["commands"]}
+        self.assertEqual(by_command["ss -lntup"]["verdict"], "PASS")
+        self.assertEqual(by_command["ss -lntup"]["exit_code"], 0)
+        self.assertEqual(by_command["ss -lntup"]["observed_lines"], 3)
+        self.assertEqual(by_command["ss -lntup"]["output_bytes"], 6)  # "a\nb\nc\n"
+        self.assertEqual(by_command["false"]["verdict"], "FAIL")
+        self.assertEqual(by_command["false"]["exit_code"], 1)
+        clean = make_analysis(plan, {"status": "succeeded", "commands": [{"status": "succeeded", "display": "id", "stdout": "uid=0", "exit_code": 0, "duration_ms": 9}], "cwd": self.tmp.name, "workers": []})
+        self.assertEqual(clean["verdict"]["outcome"], "PASS")
+        broken = make_analysis(plan, {"status": "failed", "commands": [{"status": "failed", "display": "x", "stdout": "", "exit_code": 2, "duration_ms": 3}], "cwd": self.tmp.name, "workers": []})
+        self.assertEqual(broken["verdict"]["outcome"], "FAIL")
+
+    def test_report_title_follows_conversation(self):
+        from backend.workspace import Workspace
+        workspace = Workspace(self.store)
+        conversation = workspace.create_conversation("Weekly lab sweep")
+        task = workspace.create_task("show listening ports", conversation_id=conversation["id"])
+        self.assertEqual(workspace.report_title(task["id"], "fallback"), f"Weekly lab sweep · {task['id']}")
+        orphan = workspace.create_task("standalone request")
+        self.assertEqual(workspace.report_title(orphan["id"], "fallback"), "fallback")
+        self.assertEqual(workspace.report_title(None, "fallback"), "fallback")
 
     def test_pass7_common_natural_language_phrasings_route_to_reviewed_adapters(self):
         user_phrase = build_plan(self.store, "what user am i", self.tmp.name)

@@ -5,7 +5,12 @@
   const origRenderAnalysis = (typeof renderAnalysis === 'function') ? renderAnalysis : null;
   const origRenderPlan = (typeof renderPlan === 'function') ? renderPlan : null;
 
+  // One continuous conversation per operator unless they explicitly start a
+  // new one: the active thread survives page reloads via localStorage.
+  function persistConversationId(id) { try { if (id) localStorage.setItem('vortex.conversationId', id); else localStorage.removeItem('vortex.conversationId'); } catch (_) { /* storage unavailable; continuity degrades to per-session */ } }
+  function restoreConversationId() { try { const saved = localStorage.getItem('vortex.conversationId'); if (saved && !state.conversationId) state.conversationId = saved; } catch (_) {} }
   state.conversationId = null;
+  restoreConversationId();
   state.settings = { profile: 'safe', privacy_mode: 'local', developer_mode: false, offline: false, lab_mode: false };
   let planning = false;
 
@@ -29,16 +34,35 @@
       return `<article class="chat-msg ${esc(m.role)}"><span class="role">${esc((m.role || '').toUpperCase())}</span><p>${esc(m.content)}</p>${links}${edit}</article>`;
     }).join('');
     el.scrollTop = el.scrollHeight;
-    el.querySelectorAll('[data-edit-message]').forEach(btn => btn.addEventListener('click', async () => {
-      const content = prompt('Edit this instruction (creates a conversation branch)');
-      if (!content || !state.conversationId) return;
-      try {
-        const data = await api(`/api/conversations/${encodeURIComponent(state.conversationId)}/messages/${encodeURIComponent(btn.dataset.editMessage)}/edit`, { method: 'POST', body: { content } });
-        state.conversationId = data.conversation.id;
-        renderChat(data.messages || []);
-        toast('Branched conversation. Original history is preserved.');
-        await window.makePlan(content);
-      } catch (e) { toast(e.message, true); }
+    el.querySelectorAll('[data-edit-message]').forEach(btn => btn.addEventListener('click', () => {
+      // Inline editor: native prompt() is silently blocked in sandboxed
+      // iframe previews and would read as a dead button.
+      const msg = btn.closest('.chat-msg');
+      const contentEl = msg ? msg.querySelector('p') : null;
+      if (!contentEl || msg.querySelector('.edit-input')) return;
+      const original = contentEl.textContent;
+      contentEl.innerHTML = `<textarea class="edit-input" aria-label="Edit instruction" style="width:100%;min-height:64px;background:#0c0c10;border:1px solid var(--cyan);color:var(--text);padding:8px;font:12px/1.5 inherit;resize:vertical">${esc(original)}</textarea><div style="margin-top:6px"><button class="text-button" data-edit-save>SAVE &amp; BRANCH</button> <button class="text-button" data-edit-cancel>CANCEL</button></div>`;
+      const area = contentEl.querySelector('.edit-input');
+      area.focus();
+      const restore = () => { contentEl.textContent = original; };
+      const save = async () => {
+        const content = area.value.trim();
+        if (!content || !state.conversationId) return;
+        try {
+          const data = await api(`/api/conversations/${encodeURIComponent(state.conversationId)}/messages/${encodeURIComponent(btn.dataset.editMessage)}/edit`, { method: 'POST', body: { content } });
+          state.conversationId = data.conversation.id;
+          persistConversationId(state.conversationId);
+          renderChat(data.messages || []);
+          toast('Branched conversation. Original history is preserved.');
+          await window.makePlan(content);
+        } catch (e) { toast(e.message, true); restore(); }
+      };
+      contentEl.querySelector('[data-edit-save]').addEventListener('click', save);
+      contentEl.querySelector('[data-edit-cancel]').addEventListener('click', restore);
+      area.addEventListener('keydown', (e2) => {
+        if (e2.key === 'Enter' && (e2.ctrlKey || e2.metaKey)) { e2.preventDefault(); save(); }
+        if (e2.key === 'Escape') { e2.preventDefault(); restore(); }
+      });
     }));
   }
 
@@ -185,12 +209,31 @@
       const data = await api('/api/conversations' + (q ? `?q=${encodeURIComponent(q)}` : ''));
       renderList('conversation-list', data.conversations || [], 'No conversations yet.', c => `<article class="engagement-card"><header><div><h3 data-open-conversation="${esc(c.id)}">${esc(c.title)}</h3><p>v${esc(c.version)} · ${esc(c.status)}</p></div><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-muted'}">${esc(c.status.toUpperCase())}</span></header><div class="engagement-details"><span>ID ${esc(c.id.slice(0,12))}…</span><span>${esc(fmtDate(c.updated_at))}</span><a class="report-dl" href="/api/conversations/${encodeURIComponent(c.id)}/export">EXPORT</a> <button class="text-button" data-rename-conversation="${esc(c.id)}">RENAME</button> <button class="text-button" data-archive-conversation="${esc(c.id)}">ARCHIVE</button> <button class="text-button" data-delete-conversation="${esc(c.id)}">DELETE</button></div></article>`);
       document.querySelectorAll('[data-open-conversation]').forEach(el => el.addEventListener('click', () => openConversation(el.dataset.openConversation).catch(err => toast(err.message, true))));
-      document.querySelectorAll('[data-rename-conversation]').forEach(btn => btn.addEventListener('click', async (ev) => {
+      document.querySelectorAll('[data-rename-conversation]').forEach(btn => btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const title = prompt('Rename conversation');
-        if (!title) return;
-        try { await api(`/api/conversations/${encodeURIComponent(btn.dataset.renameConversation)}/rename`, { method: 'POST', body: { title } }); loadConversations(); }
-        catch (e) { toast(e.message, true); }
+        // Inline editor, not a native prompt(): sandboxed iframe previews block
+        // modal dialogs silently, which would read as a dead button.
+        const card = btn.closest('.engagement-card');
+        const heading = card ? card.querySelector('h3') : null;
+        if (!heading || heading.querySelector('.rename-input')) return;
+        const id = btn.dataset.renameConversation;
+        const current = heading.textContent;
+        heading.innerHTML = `<input class="rename-input" aria-label="Conversation title" value="${esc(current)}" style="background:#0c0c10;border:1px solid var(--cyan);color:var(--text);padding:7px 9px;font:inherit;font-size:12px;width:60%"> <button class="text-button" data-rename-save>SAVE</button> <button class="text-button" data-rename-cancel>CANCEL</button>`;
+        const input = heading.querySelector('.rename-input');
+        input.addEventListener('click', (e2) => e2.stopPropagation());
+        const save = async () => {
+          const title = input.value.trim();
+          if (!title) { toast('Title is required.', true); return; }
+          try { await api(`/api/conversations/${encodeURIComponent(id)}/rename`, { method: 'POST', body: { title } }); toast('Conversation renamed. Reports follow the new name.'); loadConversations(); }
+          catch (e) { toast(e.message, true); loadConversations(); }
+        };
+        heading.querySelector('[data-rename-save]').addEventListener('click', (e2) => { e2.stopPropagation(); save(); });
+        heading.querySelector('[data-rename-cancel]').addEventListener('click', (e2) => { e2.stopPropagation(); loadConversations(); });
+        input.addEventListener('keydown', (e2) => {
+          if (e2.key === 'Enter') { e2.preventDefault(); save(); }
+          if (e2.key === 'Escape') { e2.preventDefault(); loadConversations(); }
+        });
+        input.focus(); input.select();
       }));
       document.querySelectorAll('[data-archive-conversation]').forEach(btn => btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
@@ -246,11 +289,40 @@
     if (!el) return;
     const reports = state.reports;
     if (reports && reports.length) {
-      el.innerHTML = reports.map(r => `<article class="report-card"><div class="panel-kicker">${esc((r.kind || 'task').toUpperCase())}</div><h3>${esc(r.title)}</h3><p>${esc(fmtDate(r.created_at))}<br>${esc(r.task_id || r.operation_id || '')}</p><p>${(r.formats || []).map(fmt => `<a class="report-dl" href="/api/reports/${encodeURIComponent(r.id)}/download?format=${encodeURIComponent(fmt)}">${esc(fmt.toUpperCase())}</a>`).join(' ')}</p></article>`).join('');
+      el.innerHTML = reports.map(r => `<article class="report-card"><div class="panel-kicker">${esc((r.kind || 'task').toUpperCase())}</div><h3>${esc(r.title)}</h3><p>${esc(fmtDate(r.created_at))}<br>${esc(r.task_id || r.operation_id || '')}</p><p>${(r.formats || []).map(fmt => `<a class="report-dl" href="/api/reports/${encodeURIComponent(r.id)}/download?format=${encodeURIComponent(fmt)}">${esc(fmt.toUpperCase())}</a>`).join(' ')} <button class="text-button" data-report-preview="${esc(r.id)}">PREVIEW</button> <button class="text-button" data-report-delete="${esc(r.id)}">DELETE</button></p></article>`).join('');
+      document.querySelectorAll('[data-report-preview]').forEach(btn => btn.addEventListener('click', () => previewReport(btn.dataset.reportPreview).catch(err => toast(err.message, true))));
+      document.querySelectorAll('[data-report-delete]').forEach(btn => btn.addEventListener('click', async () => {
+        try {
+          await api(`/api/reports/${encodeURIComponent(btn.dataset.reportDelete)}/delete`, { method: 'POST', body: {} });
+          toast('Report deleted. History and audit records are untouched.');
+          loadReportsWorkspace();
+        } catch (e) { toast(e.message, true); }
+      }));
       return;
     }
     if (origRenderReports) origRenderReports();
   };
+
+  async function previewReport(reportId) {
+    const host = $('report-window');
+    const body = $('report-preview-body');
+    const title = $('report-preview-title');
+    if (!host || !body) return;
+    const record = (state.reports || []).find(r => r.id === reportId);
+    if (title) title.textContent = (record && record.title) || 'Report';
+    body.textContent = 'Loading report…';
+    if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
+    else host.hidden = false;
+    const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}/download?format=md`);
+    if (!response.ok) throw new Error(`Preview failed (${response.status})`);
+    body.textContent = await response.text();
+  }
+  $('close-report-preview')?.addEventListener('click', () => {
+    const host = $('report-window');
+    if (!host) return;
+    if (window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(host);
+    else host.hidden = true;
+  });
 
   async function loadReportsWorkspace() {
     try {
@@ -307,6 +379,7 @@
       if (state.activeEngagementId) payload.engagement_id = state.activeEngagementId;
       const data = await api('/api/workspace/turn', { method: 'POST', body: payload });
       state.conversationId = data.conversation?.id || state.conversationId;
+      persistConversationId(state.conversationId);
       state.task = data.task;
       state.plan = data.plan;
       let findings = [];
@@ -362,6 +435,7 @@
       try {
         const data = await api('/api/conversations', { method: 'POST', body: { title: 'New conversation' } });
         state.conversationId = data.conversation.id;
+        persistConversationId(state.conversationId);
         renderChat([]);
         toast('Conversation created.');
         loadConversations();
@@ -447,7 +521,7 @@
           list.innerHTML = '<div class="empty-inline">No missing catalog items on this host.</div>';
           return;
         }
-        list.innerHTML = missing.map(item => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')}</small></div><span class="badge ${item.required ? 'badge-red' : 'badge-muted'}">${item.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="text-button" data-dep-install="${esc(item.id)}">INSTALL</button></div>`).join('');
+        list.innerHTML = missing.map(item => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')}</small></div><span class="badge ${item.required ? 'badge-red' : 'badge-muted'}">${item.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="text-button" data-dep-install="${esc(item.id)}" title="${item.method === 'apt' ? 'Open the reviewed install proposal' : 'No reviewed installer is mapped for this item; VORTEX shows operator instructions only and never auto-installs'}">${item.method === 'apt' ? 'INSTALL' : 'REVIEW'}</button></div>`).join('');
         list.querySelectorAll('[data-dep-install]').forEach(btn => btn.addEventListener('click', () => window.openDependency(btn.dataset.depInstall)));
       } catch (e) { toast(e.message, true); }
     }

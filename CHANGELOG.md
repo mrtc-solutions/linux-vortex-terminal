@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.2.21 — 2026-08-29
+
+Desktop twin of the mobile packaging flow: **DOWNLOAD .DEB** (Settings →
+Desktop app) packages the live workbench as a real Linux `.deb` and downloads
+it. Mirrors the verified APK flow end to end.
+
+- New `backend/debbuild.py` orchestrates the reviewed
+  `packaging/deb/build.sh` as the single source of truth. Every download
+  rebuilds from the live tree first, so the package cannot lag behind the
+  running workbench; a frontend digest is reported alongside size/sha256.
+- Routes `GET/POST /api/desktop/deb` and `GET /api/desktop/deb/download`
+  mirror `/api/mobile/apk*` and inherit the sidecar capability token gate.
+- The layered download trigger (top-level tab → anchor fallback → manual
+  toast link) is generalized into `triggerDownload()` and shared by the APK
+  and `.deb` buttons, so both work in sandboxed iframe previews.
+- The package gains a menu entry (`vortex serve`, `Terminal=true`) and an
+  icon while shipping **no maintainer scripts, no daemon, no user data** —
+  unchanged policy, now asserted by tests.
+- `./vortex desktop deb [--output DIR]` is the CLI equivalent of the button.
+- Honesty-first scope: the `.deb` is **unsigned** (signing stays a
+  release-VM gate) and the Electron shell is still not bundled.
+- Dependencies window rows no longer promise **INSTALL** for items with no
+  reviewed installer mapping (lsusb, nft, third-party agents…). Those rows now
+  say **REVIEW** and open the operator instructions; INSTALL is reserved for
+  apt-mapped tools that produce a real typed plan. Found during live manual
+  testing — policy unchanged, only the label stopped overpromising.
+- Planner no longer misreads adjective phrases: "scan for open ports" is a
+  read-only socket query (reviewed `ss -lntup` adapter), while "open port
+  8080" remains a rejected firewall mutation. Also found during live manual
+  testing.
+- **Reports are fully interactive**: each card carries MD/HTML/JSON/PDF
+  downloads, a **PREVIEW** modal showing the real markdown, and **DELETE**
+  (`POST /api/reports/{id}/delete`) that removes only the derived report —
+  history and the audit chain are untouched. **Renaming a conversation now
+  renames its reports** so the two views stay identifiable together.
+- **Next steps are one-click**: after execution the analysis card renders
+  follow-ups as chips that start a new reviewed plan, instead of dead text.
+- **Boot resilience**: a canvas failure (matrix rain) can no longer abort
+  `init()` and kill every button on the page.
+- Verified by an automated click-through audit (jsdom against the live
+  sidecar): 15/15 checks — reports (links, preview, delete), tasks
+  (restart/resume/delete firing real routes), conversations
+  (rename/archive/delete/open), and dependency rows.
+- **Analysis is verdict-first and quantitative.** Every finished operation now
+  reports `VERDICT PASS/PARTIAL/FAIL` with passed/failed command counts, wall
+  execution time, observed output lines and evidence bytes; each command in
+  the timeline shows its exit code, duration, line and byte counts. The
+  verdict block states plainly that PASS is an execution fact, not a security
+  guarantee. Follow-up suggestions remain one click away in the same card.
+- **One conversation, one report set.** The active conversation survives page
+  reloads (localStorage); turns, follow-up chips, and edits continue the same
+  thread until the operator taps NEW CONVERSATION. Reports are titled after
+  their conversation (`"<conversation> · <task>"`) so one thread maps to one
+  identifiable report set.
+
+## 0.2.20 — 2026-08-29
+
+Fix round for the mobile packaging flow: the DOWNLOAD APK control was
+unreachable or silently dead in embedded previews. Both defects reproduced
+before the fix and are covered by frontend regression tests.
+
+- **DOWNLOAD APK now downloads in embedded previews.** The old trigger relied
+  on a synthetic `link.click()`, which sandboxed iframes (web previews of the
+  workbench) silently block — the sync toast appeared but no file arrived.
+  The button now opens the download in a top-level tab first, keeps the
+  classic anchor download for Electron and popup-blocked contexts, and the
+  completion toast carries a real manual `vortex.apk` link as a last resort.
+- **Topbar controls can no longer be clipped off-screen.** HELP and ABOUT
+  moved from the topbar into the sidebar navigation (same windows, same
+  wiring), and the topbar now wraps responsively instead of overflowing on
+  narrow viewports. Previously DOWNLOAD APK and its neighbours were pushed
+  past the right edge on screens below ~1300 px and could not be clicked.
+- The APK packager already re-syncs the live `frontend/` on every build;
+  version bumped to 0.2.20 / code 220 so freshly synced APKs are identifiable.
+
 ## 0.2.19 — 2026-08-28
 
 - Host PATH scanner discovers Kali/Linux tools that were installed after VORTEX
@@ -196,3 +271,11 @@ before it was fixed and covered by a regression test. Test suite 141 → 153.
 
 - Foundation: sidecar, deterministic planner, typed plans, approval tokens,
   real shell-free execution, redaction, audit chain, CLI, Electron-ready UI.
+
+## 0.2.21 (continued) — rename hardening
+
+- Conversation **RENAME** and chat **EDIT & BRANCH** no longer use the native
+  `prompt()` dialog, which sandboxed iframe previews block silently — they now
+  open inline editors (SAVE/CANCEL, Enter/Esc, Ctrl+Enter for the branch box).
+  Found while verifying rename during live manual testing; the API route and
+  the report-title cascade were already correct.

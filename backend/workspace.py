@@ -125,6 +125,12 @@ class Workspace:
             raise ValueError("title is required")
         with self.store.lock, self.store.connect() as db:
             db.execute("UPDATE conversations SET title=?, updated_at=? WHERE id=?", (title, now_iso(), conversation_id))
+            # Reports of this conversation's tasks follow the new name so the
+            # Reports view stays identifiable with its history conversation.
+            db.execute(
+                "UPDATE reports SET title=? WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?)",
+                (title, conversation_id),
+            )
         return self.get_conversation(conversation_id)
 
     def archive_conversation(self, conversation_id: str) -> None:
@@ -395,6 +401,17 @@ class Workspace:
             result.append(item)
         return result
 
+    def report_title(self, task_id: str | None, fallback: str) -> str:
+        """Name reports after their conversation so one thread = one named report set."""
+        if not task_id:
+            return fallback
+        task = self.get_task(task_id)
+        conversation_id = task.get("conversation_id") if task else None
+        conversation = self.get_conversation(conversation_id) if conversation_id else None
+        if conversation and conversation.get("title"):
+            return f"{conversation['title']} · {task_id}"
+        return fallback
+
     def save_report(self, record: dict[str, Any]) -> dict[str, Any]:
         item = {
             "id": record.get("id") or secrets.token_hex(16),
@@ -423,6 +440,12 @@ class Workspace:
 
     def get_report(self, report_id: str) -> dict[str, Any] | None:
         return next((item for item in self.list_reports() if item["id"] == report_id), None)
+
+    def delete_report(self, report_id: str) -> bool:
+        """Remove a derived report. History, operations, and the audit chain are untouched."""
+        with self.store.lock, self.store.connect() as db:
+            cursor = db.execute("DELETE FROM reports WHERE id=?", (report_id,))
+            return cursor.rowcount > 0
 
     def find_task_by_plan(self, plan_id: str) -> dict[str, Any] | None:
         with self.store.connect() as db:

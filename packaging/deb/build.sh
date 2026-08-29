@@ -5,7 +5,7 @@ set -euo pipefail
 # emits a placeholder artifact. Run this on a Linux builder with dpkg-deb.
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out="${1:-$root/dist/deb}"
-version="${VORTEX_VERSION:-0.2.0}"
+version="${VORTEX_VERSION:-0.2.21}"
 package="linux-vortex-terminal"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -16,7 +16,8 @@ if ! command -v dpkg-deb >/dev/null 2>&1; then
 fi
 mkdir -p "$out" "$stage/DEBIAN" "$stage/usr/share/vortex" "$stage/usr/share/man/man1" \
   "$stage/usr/share/bash-completion/completions" "$stage/usr/share/zsh/vendor-completions" \
-  "$stage/usr/share/fish/vendor_completions.d" "$stage/usr/bin" "$stage/usr/share/doc/$package"
+  "$stage/usr/share/fish/vendor_completions.d" "$stage/usr/bin" "$stage/usr/share/doc/$package" \
+  "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/scalable/apps"
 
 # Ship the source modules needed by the dependency-free CLI. Electron remains
 # optional and is deliberately not auto-installed by the OS package.
@@ -27,6 +28,10 @@ gzip -n -f "$stage/usr/share/man/man1/vortex.1"
 cp "$root/assets/completions/vortex.bash" "$stage/usr/share/bash-completion/completions/vortex"
 cp "$root/assets/completions/vortex.zsh" "$stage/usr/share/zsh/vendor-completions/_vortex"
 cp "$root/assets/completions/vortex.fish" "$stage/usr/share/fish/vendor_completions.d/vortex.fish"
+# Desktop integration: menu entry + icon. Operator-started only (vortex serve
+# binds loopback); no maintainer scripts, no autostart, no user data.
+cp "$root/packaging/deb/vortex.desktop" "$stage/usr/share/applications/vortex.desktop"
+cp "$root/assets/hooded-researcher.svg" "$stage/usr/share/icons/hicolor/scalable/apps/vortex.svg"
 
 cat > "$stage/usr/bin/vortex" <<'WRAPPER'
 #!/bin/sh

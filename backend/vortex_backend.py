@@ -66,7 +66,7 @@ except ImportError:  # direct `python backend/vortex_backend.py`
     from probe_cache import TTLCache
 
 SCHEMA_VERSION = 1
-APP_VERSION = "0.2.19"
+APP_VERSION = "0.2.21"
 REDACTION_RE = re.compile(
     r"(?i)(bearer\s+|password\s*[=:]\s*|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*|secret\s*[=:]\s*)([^\s,;]+)"
 )
@@ -1605,9 +1605,17 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             engagement = attach_engagement_scope(store, engagement)
     bound_engagement_id = engagement["id"] if engagement else None
 
+    # "open ports" is an adjective phrase ("scan for open ports", "show open
+    # ports") in read-only queries; only a bare mutation verb + ports
+    # ("open port 8080", "block ports") is a system mutation.
+    _read_only_open_ports_query = re.search(
+        r"\b(?:scan|check|show|list|find|detect|see|view|display|identify|enumerate|which|what|how many|any|are\s+there)\b[^.;\n]*\b(?:open|listening|active)\s+(?:port|ports)\b",
+        lower,
+    )
+
     _unsupported_mutation = (
         re.search(r"\b(?:reboot|poweroff|halt|suspend|hibernate|shut\s*down)\b", lower)
-        or re.search(r"\b(?:block|open|close|allow|deny|drop)\s+(?:port|ports)\b", lower)
+        or (re.search(r"\b(?:block|open|close|allow|deny|drop)\s+(?:port|ports)\b", lower) and not _read_only_open_ports_query)
         or re.search(r"\b(?:add|delete|remove|drop|allow|deny|block|open|close)\s+(?:a\s+)?(?:firewall|iptables|nftables)\s*(?:rule)?\b", lower)
         or re.search(r"\biptables\s+-\w*[ADICRFJW]\w*\b", lower)
         or re.search(r"\bnft\s+(?:add|delete|insert|replace|create)\b", lower)
@@ -3068,12 +3076,66 @@ def report_markdown(operation: dict[str, Any]) -> str:
 
 def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
     facts = []
+    passed = 0
+    failed = 0
+    total_duration_ms = 0
+    total_lines = 0
+    total_bytes = 0
     for command in op["commands"]:
-        lines = [line for line in (command.get("stdout", "") + command.get("stderr", "")).splitlines() if line.strip()]
-        facts.append({"command": command["display"], "status": command["status"], "observed_lines": len(lines), "evidence_digest": command.get("evidence_digest"), "summary": (lines[0][:220] if lines else "No output was observed; this is not evidence of a clean result.")})
+        raw = command.get("stdout", "") + command.get("stderr", "")
+        lines = [line for line in raw.splitlines() if line.strip()]
+        exit_code = command.get("exit_code")
+        succeeded = command.get("status") == "succeeded" and exit_code in (0, None)
+        if succeeded:
+            passed += 1
+        elif command.get("status") in ("succeeded", "failed", "timed_out"):
+            failed += 1
+        duration = command.get("duration_ms")
+        total_duration_ms += duration or 0
+        total_lines += len(lines)
+        raw_bytes = len(raw.encode("utf-8", "replace"))
+        total_bytes += raw_bytes
+        verdict = "PASS" if succeeded else ("FAIL" if command.get("status") in ("failed", "timed_out") or exit_code not in (0, None) else str(command.get("status") or "not run").upper())
+        facts.append({
+            "command": command["display"],
+            "status": command["status"],
+            "verdict": verdict,
+            "exit_code": exit_code,
+            "signal": command.get("signal"),
+            "duration_ms": duration,
+            "observed_lines": len(lines),
+            "output_bytes": raw_bytes,
+            "evidence_digest": command.get("evidence_digest"),
+            "summary": (lines[0][:220] if lines else "No output was observed; this is not evidence of a clean result."),
+        })
+    total_commands = len(op["commands"])
+    if total_commands and passed == total_commands:
+        outcome = "PASS"
+    elif passed == 0 and total_commands:
+        outcome = "FAIL"
+    elif total_commands:
+        outcome = "PARTIAL"
+    else:
+        outcome = "NOT RUN"
+    verdict = {
+        "outcome": outcome,
+        "passed": passed,
+        "failed": failed,
+        "total_commands": total_commands,
+        "total_duration_ms": total_duration_ms,
+        "total_observed_lines": total_lines,
+        "total_output_bytes": total_bytes,
+        "note": "PASS means every dispatched command exited 0 with observed output. It is an execution fact, never a security guarantee.",
+    }
+    fact = (
+        f"VERDICT {outcome}: {passed}/{total_commands} command(s) passed, {failed} failed · "
+        f"{total_duration_ms} ms wall execution · {total_lines} output line(s) · {total_bytes} byte(s) of evidence."
+        if total_commands else "No command was run."
+    )
     return {
         "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "cancelled": "CANCELLED", "awaiting_confirmation": "PREFLIGHT COMPLETE", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
-        "fact": f"{len(op['commands'])} real command(s) reached an observed terminal outcome." if op["commands"] else "No command was run.",
+        "verdict": verdict,
+        "fact": fact,
         "inference": "Output summaries are bounded and redacted. They are observations, not a security guarantee.",
         "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule. Tool output is untrusted data and never overrides Guardian policy.",
         "untrusted_output": True,
@@ -3637,6 +3699,29 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self._write(data)
                 return
+            if path == "/api/desktop/deb":
+                try:
+                    status = _load("debbuild").deb_status()
+                except Exception as exc:
+                    status = {"ok": False, "built": False, "message": redact(str(exc))}
+                return self._json(200, {"deb": status, "license": "MIT"})
+            if path == "/api/desktop/deb/download":
+                try:
+                    builder = _load("debbuild")
+                    status = builder.deb_status()
+                    deb_path = Path(status["path"]) if status.get("built") else None
+                    if not deb_path or not deb_path.is_file():
+                        return self._json(404, {"error": {"code": "not_found", "message": "Desktop package has not been built yet. POST /api/desktop/deb first."}})
+                    data = deb_path.read_bytes()
+                except Exception as exc:
+                    return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
+                self.send_response(200)
+                self._headers("application/vnd.debian.binary-package")
+                self.send_header("Content-Disposition", f'attachment; filename="{deb_path.name}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self._write(data)
+                return
             if path == "/api/license":
                 license_path = Path(__file__).resolve().parent.parent / "LICENSE"
                 notice_path = Path(__file__).resolve().parent.parent / "NOTICE"
@@ -3971,6 +4056,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
                 return self._json(200, {"task": task})
+            if path.startswith("/api/reports/") and path.endswith("/delete"):
+                report_id = path.split("/")[-2]
+                if not self.workspace.delete_report(report_id):
+                    return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
+                return self._json(200, {"deleted": True, "license": "MIT"})
             if path.startswith("/api/operations/") and path.endswith("/complete-task"):
                 finish_task = _load("orchestrate").finish_task
                 operation_id = path.split("/")[-2]
@@ -4011,6 +4101,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 url = self._sidecar_url_from_request(body)
                 result = builder.build_apk(sidecar_url=url)
                 return self._json(201, {"apk": result, "license": "MIT"})
+            if path == "/api/desktop/deb":
+                builder = _load("debbuild")
+                result = builder.build_deb()
+                return self._json(201, {"deb": result, "license": "MIT"})
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
         except PermissionError as exc:
             return self._json(403, {"error": {"code": "confirmation_or_privilege", "message": str(exc), "exit_code": EXIT_CODES["confirmation_required"]}})

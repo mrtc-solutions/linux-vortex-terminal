@@ -72,7 +72,7 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn', 'host-tools', 'mobile'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn', 'host-tools', 'mobile', 'desktop'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
@@ -239,13 +239,14 @@ def main(argv=None):
     parser.add_argument('--yes', action='store_true', help='skip the interactive prompt only for a policy-valid plan')
     parser.add_argument('--format', choices=('text', 'json', 'md'), default='text', help='output format')
     parser.add_argument('--profile', choices=('safe', 'standard', 'expert'), default='safe', help='policy friction profile')
-    parser.add_argument('--version', action='version', version='vortex 0.2.19')
+    parser.add_argument('--version', action='version', version='vortex 0.2.21')
     sub = parser.add_subparsers(dest='subcommand')
     for name in ('ask', 'plan'):
         p = sub.add_parser(name); p.add_argument('request')
     sub.add_parser('doctor')
     ht = sub.add_parser('host-tools'); ht.add_argument('action', choices=['list', 'rescan'], nargs='?', default='list')
     mob = sub.add_parser('mobile'); mob.add_argument('action', choices=['apk'], nargs='?', default='apk'); mob.add_argument('--sidecar-url')
+    desk = sub.add_parser('desktop'); desk.add_argument('action', choices=['deb'], nargs='?', default='deb'); desk.add_argument('--output', help='output directory for the .deb (default: VORTEX data dir)')
     sub.add_parser('tools')
     sub.add_parser('adapters')
     sub.add_parser('health')
@@ -373,6 +374,12 @@ def main(argv=None):
             url = getattr(args, 'sidecar_url', None) or 'http://127.0.0.1:8765/'
             result = build_apk(sidecar_url=url)
             emit({'apk': result}, args.as_json)
+            return 0 if result.get('ok') else EXIT_CODES['failure']
+        if args.subcommand == 'desktop':
+            from backend.debbuild import build_deb
+            out = getattr(args, 'output', None)
+            result = build_deb(output_dir=out)
+            emit({'deb': result}, args.as_json)
             return 0 if result.get('ok') else EXIT_CODES['failure']
         if args.subcommand == 'tools': emit({'tools': [{**probe_executable(n), 'family': m['family'], 'role': m['role']} for n,m in __import__('backend.vortex_backend', fromlist=['TOOL_CATALOG']).TOOL_CATALOG.items()]}, args.as_json); return 0
         if args.subcommand == 'adapters':

@@ -51,16 +51,54 @@ async function downloadApk() {
   try {
     const data = await api('/api/mobile/apk', { method: 'POST', body: {} });
     if (!data.apk || !data.apk.ok) { toast((data.apk && data.apk.message) || 'APK build failed.', true); return; }
-    toast(`APK synced (${data.apk.size_bytes} bytes, MIT). Download starting…`);
-    const link = document.createElement('a');
-    link.href = '/api/mobile/apk/download';
-    link.download = 'vortex.apk';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    const url = '/api/mobile/apk/download';
+    triggerDownload(url, 'vortex.apk');
+    showDownloadToast(`APK synced from the live workbench (${data.apk.size_bytes} bytes, MIT) — `, url, 'vortex.apk', 'DOWNLOAD vortex.apk');
   } catch (e) { toast(e.message, true); }
 }
+async function downloadDeb() {
+  toast('Building the live workbench into a Linux desktop package…');
+  try {
+    const data = await api('/api/desktop/deb', { method: 'POST', body: {} });
+    if (!data.deb || !data.deb.ok) { toast((data.deb && data.deb.message) || 'Desktop package build failed.', true); return; }
+    const url = '/api/desktop/deb/download';
+    const filename = data.deb.filename || 'vortex.deb';
+    triggerDownload(url, filename);
+    showDownloadToast(`Desktop .deb built from the live workbench (${data.deb.size_bytes} bytes, unsigned — review before install) — `, url, filename, `DOWNLOAD ${filename}`);
+  } catch (e) { toast(e.message, true); }
+}
+function triggerDownload(url, filename) {
+  // Sandboxed iframe previews (embedded workbench) silently block synthetic
+  // anchor downloads; a user-initiated new tab is served the file top-level.
+  // Electron keeps the classic anchor download via the preload bridge.
+  if (!window.vortexApi?.request) {
+    try { if (window.open(url, '_blank')) return; } catch (_) { /* popup blocked — fall through */ }
+  }
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+function showDownloadToast(prefix, url, filename, label) {
+  const el = $('toast');
+  el.textContent = prefix;
+  const manual = document.createElement('a');
+  manual.href = url;
+  manual.download = filename;
+  manual.target = '_blank';
+  manual.rel = 'noopener';
+  manual.className = 'report-dl';
+  manual.textContent = label;
+  el.appendChild(manual);
+  el.style.borderColor = 'var(--cyan)';
+  el.classList.add('show');
+  clearTimeout(window.toastTimer);
+  window.toastTimer = setTimeout(() => el.classList.remove('show'), 10000);
+}
 window.downloadApk = downloadApk;
+window.downloadDeb = downloadDeb;
 function engagementLive(item) {
   if (!item || item.status !== 'active' || item.expired || item.effective_status === 'expired') return false;
   const expires = Date.parse(item.expires_at);
@@ -160,15 +198,18 @@ async function approveMutation(op) {
 }
 function renderAnalysis(op) {
   const a = op.analysis || {};
-  const timeline = (a.commands || op.commands || []).map(c => `<div class="timeline-command"><code>${esc(c.command || c.display || c.argv?.join(' '))}</code><small>${esc(statusLabel(c.status))} · ${esc(c.summary || `${c.observed_lines || 0} observed line(s)`)}</small></div>`).join('');
+  const verdict = a.verdict || {};
+  const verdictColor = verdict.outcome === 'PASS' ? 'var(--green)' : verdict.outcome === 'FAIL' ? 'var(--red)' : 'var(--amber)';
+  const timeline = (a.commands || op.commands || []).map(c => `<div class="timeline-command"><code>${esc(c.command || c.display || c.argv?.join(' '))}</code><small><b style="color:${c.verdict === 'PASS' ? 'var(--green)' : c.verdict === 'FAIL' ? 'var(--red)' : 'var(--amber)'}">${esc(c.verdict || statusLabel(c.status))}</b> · exit ${esc(c.exit_code ?? '—')} · ${esc(c.duration_ms ?? '—')} ms · ${esc(c.observed_lines || 0)} line(s) · ${esc(c.output_bytes || 0)} B · ${esc(c.summary || `${c.observed_lines || 0} observed line(s)`)}</small></div>`).join('');
   const awaiting = op.status === 'awaiting_confirmation';
   const confirmation = awaiting ? `<div class="approval"><small>Fresh facts are complete. Review the adapter facts and approve only this exact mutation.</small><button class="approve-button" id="approve-mutation">APPROVE MUTATION</button></div>` : '';
-  const steps = (a.next_steps || []).map(step => `<div class="next-step"><code>${esc(step.label)}</code><span>${esc(step.text)}</span></div>`).join('');
+  const steps = (a.next_steps || []).map(step => `<button class="suggestion-chip" data-next-step="${esc(step.text)}"><code>${esc(step.label)}</code>&nbsp; ${esc(step.text)}</button>`).join('');
   const verification = a.verification ? `<div class="analysis-block"><h3>Verification</h3><p><b style="color:var(--text)">${esc(a.verification.state)}</b> · ${esc(a.verification.observed_commands || 0)}/${esc(a.verification.total_commands || 0)} command(s) produced observed output</p><p style="color:var(--dim);font-size:10px">${esc(a.verification.note || '')}</p></div>` : '';
   $('plan-badge').textContent = a.lifecycle || statusLabel(op.status);
   $('plan-badge').className = `badge ${statusClass(op.status)}`;
   $('plan-content').className = 'plan-card';
-  $('plan-content').innerHTML = `<div class="analysis-block"><h3>${esc(a.lifecycle || statusLabel(op.status))} · verified outcome</h3><p>${esc(a.fact || 'Observed execution record.')}</p></div><div class="analysis-block"><h3>Command timeline</h3>${timeline || '<p>No command was run.</p>'}</div><div class="analysis-block"><h3>Interpretation boundaries</h3><p><b style="color:var(--text)">Fact:</b> ${esc(a.fact || 'Observed output only.')}<br><b style="color:var(--text)">Inference:</b> ${esc(a.inference || '')}<br><b style="color:var(--text)">Unknown:</b> ${esc(a.unknown || '')}</p></div>${verification}${steps ? `<div class="analysis-block"><h3>Next steps</h3>${steps}</div>` : ''}<div class="analysis-block"><h3>Adapter facts</h3><pre class="analysis-json">${esc(JSON.stringify(a.adapter_facts || {}, null, 2))}</pre></div>${confirmation}<div class="worker-row">WORKER PARTICIPATION · ${(a.workers || []).map(w => `${esc(w.id)}: <strong>${esc(w.state)}</strong>`).join(' · ')}</div>`;
+  $('plan-content').innerHTML = `<div class="analysis-block"><h3>${esc(a.lifecycle || statusLabel(op.status))} · verified outcome</h3><p>${esc(a.fact || 'Observed execution record.')}</p></div><div class="analysis-block" style="border:1px solid ${verdictColor};background:rgba(0,0,0,.25)"><h3 style="color:${verdictColor}">VERDICT · ${esc(verdict.outcome || 'NOT RUN')}</h3><p><b style="color:${verdictColor}">${esc(verdict.passed ?? 0)}/${esc(verdict.total_commands ?? 0)} commands passed</b> · ${esc(verdict.failed ?? 0)} failed · ${esc(verdict.total_duration_ms ?? 0)} ms wall execution · ${esc(verdict.total_observed_lines ?? 0)} output line(s) · ${esc(verdict.total_output_bytes ?? 0)} bytes of evidence</p><p style="color:var(--dim);font-size:10px;margin-top:7px">${esc(verdict.note || '')}</p></div><div class="analysis-block"><h3>Command timeline</h3>${timeline || '<p>No command was run.</p>'}</div><div class="analysis-block"><h3>Interpretation boundaries</h3><p><b style="color:var(--text)">Fact:</b> ${esc(a.fact || 'Observed output only.')}<br><b style="color:var(--text)">Inference:</b> ${esc(a.inference || '')}<br><b style="color:var(--text)">Unknown:</b> ${esc(a.unknown || '')}</p></div>${verification}${steps ? `<div class="analysis-block"><h3>Next steps — click to run the reviewed follow-up</h3>${steps}</div>` : ''}<div class="analysis-block"><h3>Adapter facts</h3><pre class="analysis-json">${esc(JSON.stringify(a.adapter_facts || {}, null, 2))}</pre></div>${confirmation}<div class="worker-row">WORKER PARTICIPATION · ${(a.workers || []).map(w => `${esc(w.id)}: <strong>${esc(w.state)}</strong>`).join(' · ')}</div>`;
+  document.querySelectorAll('[data-next-step]').forEach(btn => btn.addEventListener('click', () => { if (typeof window.makePlan === 'function') window.makePlan(btn.dataset.nextStep); }));
   $('approve-mutation')?.addEventListener('click', () => approveMutation(op));
 }
 
@@ -407,5 +448,5 @@ async function resizeSession() {
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
-function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; try { setupMatrix(); } catch (_) { /* matrix rain is decorative; a canvas failure must never block app wiring */ } document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('download-deb')?.addEventListener('click', downloadDeb); $('download-deb-settings')?.addEventListener('click', downloadDeb); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);
