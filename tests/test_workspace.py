@@ -75,6 +75,21 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(plan["status"], "rejected", request)
             self.assertEqual(plan["commands"], [], request)
 
+    def test_rename_conversation_cascades_to_reports(self):
+        from backend.workspace import Workspace
+        workspace = Workspace(self.store)
+        conversation = workspace.create_conversation("Old title")
+        task = workspace.create_task("show listening ports", conversation_id=conversation["id"])
+        report = workspace.save_report({"task_id": task["id"], "title": "VTX plan"})
+        self.assertEqual(workspace.get_report(report["id"])["title"], "VTX plan")
+        workspace.rename_conversation(conversation["id"], "Renamed engagement")
+        self.assertEqual(workspace.get_report(report["id"])["title"], "Renamed engagement")
+        # Deleting the derived report never touches history or the task.
+        self.assertTrue(workspace.delete_report(report["id"]))
+        self.assertIsNone(workspace.get_report(report["id"]))
+        self.assertFalse(workspace.delete_report(report["id"]))
+        self.assertIsNotNone(workspace.get_task(task["id"]))
+
     def tearDown(self):
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)

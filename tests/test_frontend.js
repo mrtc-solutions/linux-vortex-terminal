@@ -28,6 +28,18 @@ assert.ok(workspace.includes('local-echo'), 'chat submit local-echoes the user m
 assert.ok(workspace.includes("api('/api/workspace/turn'"), 'chat submit uses the workspace turn endpoint');
 assert.ok(workspace.includes('auto_install=${deps.auto_install ? \'yes\' : \'no\'}'), 'dependency summary reports auto_install truthfully');
 assert.ok(workspace.includes("item.method === 'apt' ? 'INSTALL' : 'REVIEW'"), 'dep rows promise INSTALL only where a reviewed installer exists; unmapped items say REVIEW');
+
+// Reports view is fully interactive: downloads, PREVIEW, DELETE; renaming a
+// conversation renames its reports; next steps are one-click follow-ups; a
+// canvas failure can never kill app wiring.
+assert.ok(workspace.includes('data-report-preview') && workspace.includes('data-report-delete'), 'report cards carry PREVIEW and DELETE actions');
+assert.ok(workspace.includes("api(`/api/reports/${encodeURIComponent(btn.dataset.reportDelete)}/delete`"), 'report DELETE posts to the real route');
+assert.ok(workspace.includes('async function previewReport') && workspace.includes("download?format=md"), 'report preview loads the real markdown');
+assert.ok(backend.includes('delete_report'), 'report delete route is served');
+const workspacePy = read('backend/workspace.py');
+assert.ok(workspacePy.includes('UPDATE reports SET title=? WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?)'), 'renaming a conversation renames its reports');
+assert.ok(app.includes('data-next-step'), 'analysis next steps render as clickable chips');
+assert.ok(app.includes('try { setupMatrix(); } catch'), 'matrix canvas failure never blocks app wiring');
 assert.ok(workspace.includes("input.focus({ preventScroll: true })") || workspace.includes('input.focus()'), 'chat submit refocuses the input');
 assert.ok(app.includes("$('request-input').addEventListener('keydown'"), 'request input Enter is wired');
 assert.ok(workspace.includes('sendButton.disabled = false'), 'SEND button is re-enabled on failure');

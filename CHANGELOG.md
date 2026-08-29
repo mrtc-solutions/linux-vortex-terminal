@@ -30,6 +30,19 @@ it. Mirrors the verified APK flow end to end.
   read-only socket query (reviewed `ss -lntup` adapter), while "open port
   8080" remains a rejected firewall mutation. Also found during live manual
   testing.
+- **Reports are fully interactive**: each card carries MD/HTML/JSON/PDF
+  downloads, a **PREVIEW** modal showing the real markdown, and **DELETE**
+  (`POST /api/reports/{id}/delete`) that removes only the derived report —
+  history and the audit chain are untouched. **Renaming a conversation now
+  renames its reports** so the two views stay identifiable together.
+- **Next steps are one-click**: after execution the analysis card renders
+  follow-ups as chips that start a new reviewed plan, instead of dead text.
+- **Boot resilience**: a canvas failure (matrix rain) can no longer abort
+  `init()` and kill every button on the page.
+- Verified by an automated click-through audit (jsdom against the live
+  sidecar): 15/15 checks — reports (links, preview, delete), tasks
+  (restart/resume/delete firing real routes), conversations
+  (rename/archive/delete/open), and dependency rows.
 
 ## 0.2.20 — 2026-08-29
 

@@ -246,11 +246,40 @@
     if (!el) return;
     const reports = state.reports;
     if (reports && reports.length) {
-      el.innerHTML = reports.map(r => `<article class="report-card"><div class="panel-kicker">${esc((r.kind || 'task').toUpperCase())}</div><h3>${esc(r.title)}</h3><p>${esc(fmtDate(r.created_at))}<br>${esc(r.task_id || r.operation_id || '')}</p><p>${(r.formats || []).map(fmt => `<a class="report-dl" href="/api/reports/${encodeURIComponent(r.id)}/download?format=${encodeURIComponent(fmt)}">${esc(fmt.toUpperCase())}</a>`).join(' ')}</p></article>`).join('');
+      el.innerHTML = reports.map(r => `<article class="report-card"><div class="panel-kicker">${esc((r.kind || 'task').toUpperCase())}</div><h3>${esc(r.title)}</h3><p>${esc(fmtDate(r.created_at))}<br>${esc(r.task_id || r.operation_id || '')}</p><p>${(r.formats || []).map(fmt => `<a class="report-dl" href="/api/reports/${encodeURIComponent(r.id)}/download?format=${encodeURIComponent(fmt)}">${esc(fmt.toUpperCase())}</a>`).join(' ')} <button class="text-button" data-report-preview="${esc(r.id)}">PREVIEW</button> <button class="text-button" data-report-delete="${esc(r.id)}">DELETE</button></p></article>`).join('');
+      document.querySelectorAll('[data-report-preview]').forEach(btn => btn.addEventListener('click', () => previewReport(btn.dataset.reportPreview).catch(err => toast(err.message, true))));
+      document.querySelectorAll('[data-report-delete]').forEach(btn => btn.addEventListener('click', async () => {
+        try {
+          await api(`/api/reports/${encodeURIComponent(btn.dataset.reportDelete)}/delete`, { method: 'POST', body: {} });
+          toast('Report deleted. History and audit records are untouched.');
+          loadReportsWorkspace();
+        } catch (e) { toast(e.message, true); }
+      }));
       return;
     }
     if (origRenderReports) origRenderReports();
   };
+
+  async function previewReport(reportId) {
+    const host = $('report-window');
+    const body = $('report-preview-body');
+    const title = $('report-preview-title');
+    if (!host || !body) return;
+    const record = (state.reports || []).find(r => r.id === reportId);
+    if (title) title.textContent = (record && record.title) || 'Report';
+    body.textContent = 'Loading report…';
+    if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
+    else host.hidden = false;
+    const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}/download?format=md`);
+    if (!response.ok) throw new Error(`Preview failed (${response.status})`);
+    body.textContent = await response.text();
+  }
+  $('close-report-preview')?.addEventListener('click', () => {
+    const host = $('report-window');
+    if (!host) return;
+    if (window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(host);
+    else host.hidden = true;
+  });
 
   async function loadReportsWorkspace() {
     try {

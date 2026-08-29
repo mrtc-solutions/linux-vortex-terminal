@@ -306,6 +306,15 @@ class HttpApiTests(unittest.TestCase):
         self.assertTrue(saved["settings"]["offline"])
         self.assertFalse(saved["settings"]["auto_low_risk"])
 
+    def test_http_report_delete_route(self):
+        report = self.handler.workspace.save_report({"title": "route test"})
+        listed = self._json("GET", "/api/reports")
+        self.assertTrue(any(item["id"] == report["id"] for item in listed["reports"]))
+        deleted = self._json("POST", f"/api/reports/{report['id']}/delete", {})
+        self.assertTrue(deleted["deleted"])
+        missing = self._json("POST", "/api/reports/does-not-exist/delete", {}, expected=404)
+        self.assertEqual(missing["error"]["code"], "not_found")
+
     def test_http_rejects_coerced_plan_id_targets_and_artifact_path(self):
         planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})
         bad_plan = self._json("POST", "/api/execute", {"plan_id": 1, "confirm": True, "approval_token": planned["plan"]["approval_token"]}, expected=422)
