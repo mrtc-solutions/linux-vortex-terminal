@@ -58,6 +58,23 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertTrue(plan["commands"][0]["privilege"] in ("user", "unknown"))
                 self.assertLessEqual(plan["risk"], "low")
 
+    def test_pass7_open_ports_adjective_is_read_only_not_mutation(self):
+        # "open" is an adjective in scanning queries; only a bare mutation
+        # verb + ports ("open port 8080") is a system mutation.
+        for request in ("scan for open ports", "check for open ports", "show open ports",
+                        "list open ports", "find open ports", "how many open ports are there",
+                        "scan open ports on this host"):
+            plan = build_plan(self.store, request, self.cwd)
+            self.assertNotEqual(plan["kind"], "unsupported_system_mutation", request)
+            self.assertNotEqual(plan["status"], "rejected", request)
+            if plan["status"] == "planned":
+                self.assertEqual(plan["commands"][0]["executable"], "ss", request)
+        for request in ("open port 8080", "close ports 80 and 443", "block port 22"):
+            plan = build_plan(self.store, request, self.cwd)
+            self.assertEqual(plan["kind"], "unsupported_system_mutation", request)
+            self.assertEqual(plan["status"], "rejected", request)
+            self.assertEqual(plan["commands"], [], request)
+
     def tearDown(self):
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)

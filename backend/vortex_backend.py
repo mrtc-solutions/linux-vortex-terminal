@@ -1605,9 +1605,17 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             engagement = attach_engagement_scope(store, engagement)
     bound_engagement_id = engagement["id"] if engagement else None
 
+    # "open ports" is an adjective phrase ("scan for open ports", "show open
+    # ports") in read-only queries; only a bare mutation verb + ports
+    # ("open port 8080", "block ports") is a system mutation.
+    _read_only_open_ports_query = re.search(
+        r"\b(?:scan|check|show|list|find|detect|see|view|display|identify|enumerate|which|what|how many|any|are\s+there)\b[^.;\n]*\b(?:open|listening|active)\s+(?:port|ports)\b",
+        lower,
+    )
+
     _unsupported_mutation = (
         re.search(r"\b(?:reboot|poweroff|halt|suspend|hibernate|shut\s*down)\b", lower)
-        or re.search(r"\b(?:block|open|close|allow|deny|drop)\s+(?:port|ports)\b", lower)
+        or (re.search(r"\b(?:block|open|close|allow|deny|drop)\s+(?:port|ports)\b", lower) and not _read_only_open_ports_query)
         or re.search(r"\b(?:add|delete|remove|drop|allow|deny|block|open|close)\s+(?:a\s+)?(?:firewall|iptables|nftables)\s*(?:rule)?\b", lower)
         or re.search(r"\biptables\s+-\w*[ADICRFJW]\w*\b", lower)
         or re.search(r"\bnft\s+(?:add|delete|insert|replace|create)\b", lower)
