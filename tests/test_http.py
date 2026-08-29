@@ -19,6 +19,13 @@ class HttpApiTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["VORTEX_DATA_DIR"] = self.tmp.name
+        # Settings live under XDG_CONFIG_HOME, not the data dir; isolate them
+        # too so an operator's real toggles (e.g. host_tool_access) can never
+        # change test outcomes.
+        self._previous_config_home = os.environ.get("XDG_CONFIG_HOME")
+        config_home = Path(self.tmp.name) / "config"
+        config_home.mkdir(parents=True, exist_ok=True)
+        os.environ["XDG_CONFIG_HOME"] = str(config_home)
         self.store = Store(Path(self.tmp.name) / "vortex.db")
         handler = VortexHandler
         handler.store = self.store
@@ -40,6 +47,10 @@ class HttpApiTests(unittest.TestCase):
         self.handler.sessions.shutdown()
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)
+        if self._previous_config_home is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = self._previous_config_home
 
     def _json(self, method, path, body=None, expected=200, timeout=8):
         data = None if body is None else json.dumps(body).encode()
@@ -286,21 +297,14 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(bad_slot["error"]["code"], "invalid_plan")
 
     def test_http_settings_reject_string_booleans(self):
-        config_home = Path(self.tmp.name) / "config"
-        config_home.mkdir()
-        previous = os.environ.get("XDG_CONFIG_HOME")
-        os.environ["XDG_CONFIG_HOME"] = str(config_home)
-        try:
-            denied = self._json("POST", "/api/settings", {"offline": "false"}, expected=422)
-            self.assertEqual(denied["error"]["code"], "invalid_plan")
-            saved = self._json("POST", "/api/settings", {"offline": True, "profile": "safe"})
-            self.assertTrue(saved["settings"]["offline"])
-            self.assertFalse(saved["settings"]["auto_low_risk"])
-        finally:
-            if previous is None:
-                os.environ.pop("XDG_CONFIG_HOME", None)
-            else:
-                os.environ["XDG_CONFIG_HOME"] = previous
+        # Config home is already isolated per-test in setUp; settings writes
+        # land in the temp XDG_CONFIG_HOME and can never touch the operator's
+        # real ~/.config/vortex/settings.json.
+        denied = self._json("POST", "/api/settings", {"offline": "false"}, expected=422)
+        self.assertEqual(denied["error"]["code"], "invalid_plan")
+        saved = self._json("POST", "/api/settings", {"offline": True, "profile": "safe"})
+        self.assertTrue(saved["settings"]["offline"])
+        self.assertFalse(saved["settings"]["auto_low_risk"])
 
     def test_http_rejects_coerced_plan_id_targets_and_artifact_path(self):
         planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})
