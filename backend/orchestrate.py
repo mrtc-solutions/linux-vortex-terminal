@@ -191,7 +191,7 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                 "task_id": task_id,
                 "operation_id": operation.get("id"),
                 "kind": "task" if plan.get("kind") not in {"authorized_engagement"} else "security",
-                "title": f"{task_id} {plan.get('kind') or 'task'}",
+                "title": workspace.report_title(task_id, f"{task_id} {plan.get('kind') or 'task'}"),
                 "body": {"markdown": markdown(operation, plan, workspace.get_task(task_id)), "status": status, "request": plan.get("request")},
             })
             workspace.add_memory("task", task_id, explanation, {"operation_id": operation.get("id")})

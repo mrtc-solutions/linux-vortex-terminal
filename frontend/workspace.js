@@ -5,7 +5,12 @@
   const origRenderAnalysis = (typeof renderAnalysis === 'function') ? renderAnalysis : null;
   const origRenderPlan = (typeof renderPlan === 'function') ? renderPlan : null;
 
+  // One continuous conversation per operator unless they explicitly start a
+  // new one: the active thread survives page reloads via localStorage.
+  function persistConversationId(id) { try { if (id) localStorage.setItem('vortex.conversationId', id); else localStorage.removeItem('vortex.conversationId'); } catch (_) { /* storage unavailable; continuity degrades to per-session */ } }
+  function restoreConversationId() { try { const saved = localStorage.getItem('vortex.conversationId'); if (saved && !state.conversationId) state.conversationId = saved; } catch (_) {} }
   state.conversationId = null;
+  restoreConversationId();
   state.settings = { profile: 'safe', privacy_mode: 'local', developer_mode: false, offline: false, lab_mode: false };
   let planning = false;
 
@@ -35,6 +40,7 @@
       try {
         const data = await api(`/api/conversations/${encodeURIComponent(state.conversationId)}/messages/${encodeURIComponent(btn.dataset.editMessage)}/edit`, { method: 'POST', body: { content } });
         state.conversationId = data.conversation.id;
+        persistConversationId(state.conversationId);
         renderChat(data.messages || []);
         toast('Branched conversation. Original history is preserved.');
         await window.makePlan(content);
@@ -336,6 +342,7 @@
       if (state.activeEngagementId) payload.engagement_id = state.activeEngagementId;
       const data = await api('/api/workspace/turn', { method: 'POST', body: payload });
       state.conversationId = data.conversation?.id || state.conversationId;
+      persistConversationId(state.conversationId);
       state.task = data.task;
       state.plan = data.plan;
       let findings = [];
@@ -391,6 +398,7 @@
       try {
         const data = await api('/api/conversations', { method: 'POST', body: { title: 'New conversation' } });
         state.conversationId = data.conversation.id;
+        persistConversationId(state.conversationId);
         renderChat([]);
         toast('Conversation created.');
         loadConversations();

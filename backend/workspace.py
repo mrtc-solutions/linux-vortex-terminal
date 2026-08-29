@@ -401,6 +401,17 @@ class Workspace:
             result.append(item)
         return result
 
+    def report_title(self, task_id: str | None, fallback: str) -> str:
+        """Name reports after their conversation so one thread = one named report set."""
+        if not task_id:
+            return fallback
+        task = self.get_task(task_id)
+        conversation_id = task.get("conversation_id") if task else None
+        conversation = self.get_conversation(conversation_id) if conversation_id else None
+        if conversation and conversation.get("title"):
+            return f"{conversation['title']} · {task_id}"
+        return fallback
+
     def save_report(self, record: dict[str, Any]) -> dict[str, Any]:
         item = {
             "id": record.get("id") or secrets.token_hex(16),

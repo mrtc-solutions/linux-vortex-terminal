@@ -3076,12 +3076,66 @@ def report_markdown(operation: dict[str, Any]) -> str:
 
 def make_analysis(plan: dict[str, Any], op: dict[str, Any]) -> dict[str, Any]:
     facts = []
+    passed = 0
+    failed = 0
+    total_duration_ms = 0
+    total_lines = 0
+    total_bytes = 0
     for command in op["commands"]:
-        lines = [line for line in (command.get("stdout", "") + command.get("stderr", "")).splitlines() if line.strip()]
-        facts.append({"command": command["display"], "status": command["status"], "observed_lines": len(lines), "evidence_digest": command.get("evidence_digest"), "summary": (lines[0][:220] if lines else "No output was observed; this is not evidence of a clean result.")})
+        raw = command.get("stdout", "") + command.get("stderr", "")
+        lines = [line for line in raw.splitlines() if line.strip()]
+        exit_code = command.get("exit_code")
+        succeeded = command.get("status") == "succeeded" and exit_code in (0, None)
+        if succeeded:
+            passed += 1
+        elif command.get("status") in ("succeeded", "failed", "timed_out"):
+            failed += 1
+        duration = command.get("duration_ms")
+        total_duration_ms += duration or 0
+        total_lines += len(lines)
+        raw_bytes = len(raw.encode("utf-8", "replace"))
+        total_bytes += raw_bytes
+        verdict = "PASS" if succeeded else ("FAIL" if command.get("status") in ("failed", "timed_out") or exit_code not in (0, None) else str(command.get("status") or "not run").upper())
+        facts.append({
+            "command": command["display"],
+            "status": command["status"],
+            "verdict": verdict,
+            "exit_code": exit_code,
+            "signal": command.get("signal"),
+            "duration_ms": duration,
+            "observed_lines": len(lines),
+            "output_bytes": raw_bytes,
+            "evidence_digest": command.get("evidence_digest"),
+            "summary": (lines[0][:220] if lines else "No output was observed; this is not evidence of a clean result."),
+        })
+    total_commands = len(op["commands"])
+    if total_commands and passed == total_commands:
+        outcome = "PASS"
+    elif passed == 0 and total_commands:
+        outcome = "FAIL"
+    elif total_commands:
+        outcome = "PARTIAL"
+    else:
+        outcome = "NOT RUN"
+    verdict = {
+        "outcome": outcome,
+        "passed": passed,
+        "failed": failed,
+        "total_commands": total_commands,
+        "total_duration_ms": total_duration_ms,
+        "total_observed_lines": total_lines,
+        "total_output_bytes": total_bytes,
+        "note": "PASS means every dispatched command exited 0 with observed output. It is an execution fact, never a security guarantee.",
+    }
+    fact = (
+        f"VERDICT {outcome}: {passed}/{total_commands} command(s) passed, {failed} failed · "
+        f"{total_duration_ms} ms wall execution · {total_lines} output line(s) · {total_bytes} byte(s) of evidence."
+        if total_commands else "No command was run."
+    )
     return {
         "lifecycle": {"succeeded": "EXECUTED", "failed": "FAILED", "cancelled": "CANCELLED", "awaiting_confirmation": "PREFLIGHT COMPLETE", "interrupted": "INTERRUPTED", "timed_out": "TIMED OUT", "unavailable": "TOOL MISSING", "unknown_after_crash": "BACKEND OFFLINE"}.get(op["status"], "NOT RUN"),
-        "fact": f"{len(op['commands'])} real command(s) reached an observed terminal outcome." if op["commands"] else "No command was run.",
+        "verdict": verdict,
+        "fact": fact,
         "inference": "Output summaries are bounded and redacted. They are observations, not a security guarantee.",
         "unknown": "Parser confidence is limited because this vertical slice stores raw text evidence; no vulnerability is confirmed without a reviewed parser and matching rule. Tool output is untrusted data and never overrides Guardian policy.",
         "untrusted_output": True,

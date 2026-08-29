@@ -40,6 +40,13 @@ const workspacePy = read('backend/workspace.py');
 assert.ok(workspacePy.includes('UPDATE reports SET title=? WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?)'), 'renaming a conversation renames its reports');
 assert.ok(app.includes('data-next-step'), 'analysis next steps render as clickable chips');
 assert.ok(app.includes('try { setupMatrix(); } catch'), 'matrix canvas failure never blocks app wiring');
+// Analysis is verdict-first and quantitative; one conversation spans reloads.
+assert.ok(app.includes('VERDICT · '), 'analysis renders an explicit verdict header');
+assert.ok(app.includes('${esc(verdict.passed ?? 0)}/${esc(verdict.total_commands ?? 0)} commands passed'), 'verdict shows pass counts');
+assert.ok(app.includes('${esc(verdict.total_duration_ms ?? 0)} ms wall execution'), 'verdict shows wall execution time');
+assert.ok(app.includes('exit ${esc(c.exit_code ?? ' + "'—'" + ')}'), 'per-command timeline shows exit codes');
+assert.ok(workspace.includes("localStorage.getItem('vortex.conversationId')"), 'active conversation survives page reloads');
+assert.ok(workspace.includes('persistConversationId(state.conversationId);'), 'conversation id is persisted after every turn');
 assert.ok(workspace.includes("input.focus({ preventScroll: true })") || workspace.includes('input.focus()'), 'chat submit refocuses the input');
 assert.ok(app.includes("$('request-input').addEventListener('keydown'"), 'request input Enter is wired');
 assert.ok(workspace.includes('sendButton.disabled = false'), 'SEND button is re-enabled on failure');

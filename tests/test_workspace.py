@@ -229,6 +229,48 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(any(step["label"] == "fresh plan" for step in failed_steps))
         self.assertFalse(any(step["label"] in ("restart", "install", "remove") for step in failed_steps))
 
+    def test_analysis_carries_verdict_and_quantitative_figures(self):
+        plan = {"kind": "plan", "request": "mixed", "commands": [], "notes": [], "workers": []}
+        op = {
+            "status": "succeeded",
+            "commands": [
+                {"status": "succeeded", "display": "ss -lntup", "stdout": "a\nb\nc\n", "exit_code": 0, "duration_ms": 40},
+                {"status": "succeeded", "display": "false", "stdout": "", "exit_code": 1, "duration_ms": 5},
+            ],
+            "cwd": self.tmp.name,
+            "workers": [],
+        }
+        analysis = make_analysis(plan, op)
+        self.assertEqual(analysis["verdict"]["outcome"], "PARTIAL")
+        self.assertEqual(analysis["verdict"]["passed"], 1)
+        self.assertEqual(analysis["verdict"]["failed"], 1)
+        self.assertEqual(analysis["verdict"]["total_commands"], 2)
+        self.assertEqual(analysis["verdict"]["total_duration_ms"], 45)
+        self.assertEqual(analysis["verdict"]["total_observed_lines"], 3)
+        self.assertIn("VERDICT PARTIAL", analysis["fact"])
+        self.assertIn("1/2", analysis["fact"])
+        by_command = {item["command"]: item for item in analysis["commands"]}
+        self.assertEqual(by_command["ss -lntup"]["verdict"], "PASS")
+        self.assertEqual(by_command["ss -lntup"]["exit_code"], 0)
+        self.assertEqual(by_command["ss -lntup"]["observed_lines"], 3)
+        self.assertEqual(by_command["ss -lntup"]["output_bytes"], 6)  # "a\nb\nc\n"
+        self.assertEqual(by_command["false"]["verdict"], "FAIL")
+        self.assertEqual(by_command["false"]["exit_code"], 1)
+        clean = make_analysis(plan, {"status": "succeeded", "commands": [{"status": "succeeded", "display": "id", "stdout": "uid=0", "exit_code": 0, "duration_ms": 9}], "cwd": self.tmp.name, "workers": []})
+        self.assertEqual(clean["verdict"]["outcome"], "PASS")
+        broken = make_analysis(plan, {"status": "failed", "commands": [{"status": "failed", "display": "x", "stdout": "", "exit_code": 2, "duration_ms": 3}], "cwd": self.tmp.name, "workers": []})
+        self.assertEqual(broken["verdict"]["outcome"], "FAIL")
+
+    def test_report_title_follows_conversation(self):
+        from backend.workspace import Workspace
+        workspace = Workspace(self.store)
+        conversation = workspace.create_conversation("Weekly lab sweep")
+        task = workspace.create_task("show listening ports", conversation_id=conversation["id"])
+        self.assertEqual(workspace.report_title(task["id"], "fallback"), f"Weekly lab sweep · {task['id']}")
+        orphan = workspace.create_task("standalone request")
+        self.assertEqual(workspace.report_title(orphan["id"], "fallback"), "fallback")
+        self.assertEqual(workspace.report_title(None, "fallback"), "fallback")
+
     def test_pass7_common_natural_language_phrasings_route_to_reviewed_adapters(self):
         user_phrase = build_plan(self.store, "what user am i", self.tmp.name)
         self.assertEqual(user_phrase["kind"], "identity", user_phrase["notes"])

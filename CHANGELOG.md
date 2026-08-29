@@ -43,6 +43,17 @@ it. Mirrors the verified APK flow end to end.
   sidecar): 15/15 checks — reports (links, preview, delete), tasks
   (restart/resume/delete firing real routes), conversations
   (rename/archive/delete/open), and dependency rows.
+- **Analysis is verdict-first and quantitative.** Every finished operation now
+  reports `VERDICT PASS/PARTIAL/FAIL` with passed/failed command counts, wall
+  execution time, observed output lines and evidence bytes; each command in
+  the timeline shows its exit code, duration, line and byte counts. The
+  verdict block states plainly that PASS is an execution fact, not a security
+  guarantee. Follow-up suggestions remain one click away in the same card.
+- **One conversation, one report set.** The active conversation survives page
+  reloads (localStorage); turns, follow-up chips, and edits continue the same
+  thread until the operator taps NEW CONVERSATION. Reports are titled after
+  their conversation (`"<conversation> · <task>"`) so one thread maps to one
+  identifiable report set.
 
 ## 0.2.20 — 2026-08-29
 
