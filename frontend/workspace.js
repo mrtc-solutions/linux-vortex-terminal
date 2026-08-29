@@ -487,6 +487,66 @@
       } catch (e) { toast(e.message, true); }
     };
 
+    // ---- HELP WINDOW ----
+    function openHelp(section) {
+      const host = $('help-window');
+      if (!host) return;
+      if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
+      else host.hidden = false;
+      if (section) switchHelpSection(section);
+    }
+
+    function switchHelpSection(sectionId) {
+      const host = $('help-window');
+      if (!host) return;
+      host.querySelectorAll('.help-section').forEach(el => el.classList.toggle('active', el.id === `help-section-${sectionId}`));
+      host.querySelectorAll('.help-nav-item').forEach(btn => btn.classList.toggle('active', btn.dataset.helpSection === sectionId));
+    }
+
+    $('open-help')?.addEventListener('click', () => openHelp('getting-started'));
+
+    // Wire help nav buttons
+    const helpHost = $('help-window');
+    if (helpHost) {
+      helpHost.querySelectorAll('[data-help-section]').forEach(btn => {
+        btn.addEventListener('click', () => switchHelpSection(btn.dataset.helpSection));
+      });
+    }
+
+    // "About → Authorized Use" link in About window opens Help at the warning section
+    $('about-open-help-warning')?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const aboutHost = $('about-window');
+      if (aboutHost && window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(aboutHost);
+      else if (aboutHost) aboutHost.hidden = true;
+      openHelp('security-warning');
+    });
+
+    // ---- ABOUT WINDOW ----
+    function openAbout() {
+      const host = $('about-window');
+      if (!host) return;
+      // Populate system info from already-loaded doctor data
+      const d = state.doctor;
+      if (d) {
+        const distroEl = $('about-distro');
+        const kernelEl = $('about-kernel');
+        const archEl = $('about-arch');
+        const privEl = $('about-priv');
+        if (distroEl) distroEl.textContent = d.distribution?.pretty_name || d.distribution?.id || '—';
+        if (kernelEl) kernelEl.textContent = d.kernel || '—';
+        if (archEl) archEl.textContent = d.architecture || '—';
+        if (privEl) privEl.textContent = d.root ? 'UID 0 (root) — guarded' : (d.uid !== undefined ? `UID ${d.uid}` : '—');
+      }
+      if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
+      else host.hidden = false;
+    }
+
+    $('open-about')?.addEventListener('click', openAbout);
+
+    window.openHelp = openHelp;
+    window.openAbout = openAbout;
+
     $('open-deps')?.addEventListener('click', loadDependencies);
     $('open-deps-from-setup')?.addEventListener('click', loadDependencies);
     $('open-deps-from-tools')?.addEventListener('click', loadDependencies);
