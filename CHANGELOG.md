@@ -271,3 +271,11 @@ before it was fixed and covered by a regression test. Test suite 141 → 153.
 
 - Foundation: sidecar, deterministic planner, typed plans, approval tokens,
   real shell-free execution, redaction, audit chain, CLI, Electron-ready UI.
+
+## 0.2.21 (continued) — rename hardening
+
+- Conversation **RENAME** and chat **EDIT & BRANCH** no longer use the native
+  `prompt()` dialog, which sandboxed iframe previews block silently — they now
+  open inline editors (SAVE/CANCEL, Enter/Esc, Ctrl+Enter for the branch box).
+  Found while verifying rename during live manual testing; the API route and
+  the report-title cascade were already correct.

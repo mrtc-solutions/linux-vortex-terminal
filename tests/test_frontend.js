@@ -47,6 +47,12 @@ assert.ok(app.includes('${esc(verdict.total_duration_ms ?? 0)} ms wall execution
 assert.ok(app.includes('exit ${esc(c.exit_code ?? ' + "'—'" + ')}'), 'per-command timeline shows exit codes');
 assert.ok(workspace.includes("localStorage.getItem('vortex.conversationId')"), 'active conversation survives page reloads');
 assert.ok(workspace.includes('persistConversationId(state.conversationId);'), 'conversation id is persisted after every turn');
+// Rename and edit&branch use inline editors: native prompt() is silently
+// blocked in sandboxed iframe previews and reads as a dead button.
+assert.ok(!workspace.includes("prompt('Rename conversation')") && !workspace.includes("prompt('Edit this instruction"), 'no native prompt dialogs remain');
+assert.ok(workspace.includes('rename-input') && workspace.includes('data-rename-save'), 'conversation rename is an inline editor with SAVE');
+assert.ok(workspace.includes('edit-input') && workspace.includes('data-edit-save'), 'message edit & branch is an inline editor with SAVE');
+assert.ok(workspace.includes("api(`/api/conversations/${encodeURIComponent(id)}/rename`"), 'inline rename posts to the real route');
 assert.ok(workspace.includes("input.focus({ preventScroll: true })") || workspace.includes('input.focus()'), 'chat submit refocuses the input');
 assert.ok(app.includes("$('request-input').addEventListener('keydown'"), 'request input Enter is wired');
 assert.ok(workspace.includes('sendButton.disabled = false'), 'SEND button is re-enabled on failure');

@@ -34,17 +34,35 @@
       return `<article class="chat-msg ${esc(m.role)}"><span class="role">${esc((m.role || '').toUpperCase())}</span><p>${esc(m.content)}</p>${links}${edit}</article>`;
     }).join('');
     el.scrollTop = el.scrollHeight;
-    el.querySelectorAll('[data-edit-message]').forEach(btn => btn.addEventListener('click', async () => {
-      const content = prompt('Edit this instruction (creates a conversation branch)');
-      if (!content || !state.conversationId) return;
-      try {
-        const data = await api(`/api/conversations/${encodeURIComponent(state.conversationId)}/messages/${encodeURIComponent(btn.dataset.editMessage)}/edit`, { method: 'POST', body: { content } });
-        state.conversationId = data.conversation.id;
-        persistConversationId(state.conversationId);
-        renderChat(data.messages || []);
-        toast('Branched conversation. Original history is preserved.');
-        await window.makePlan(content);
-      } catch (e) { toast(e.message, true); }
+    el.querySelectorAll('[data-edit-message]').forEach(btn => btn.addEventListener('click', () => {
+      // Inline editor: native prompt() is silently blocked in sandboxed
+      // iframe previews and would read as a dead button.
+      const msg = btn.closest('.chat-msg');
+      const contentEl = msg ? msg.querySelector('p') : null;
+      if (!contentEl || msg.querySelector('.edit-input')) return;
+      const original = contentEl.textContent;
+      contentEl.innerHTML = `<textarea class="edit-input" aria-label="Edit instruction" style="width:100%;min-height:64px;background:#0c0c10;border:1px solid var(--cyan);color:var(--text);padding:8px;font:12px/1.5 inherit;resize:vertical">${esc(original)}</textarea><div style="margin-top:6px"><button class="text-button" data-edit-save>SAVE &amp; BRANCH</button> <button class="text-button" data-edit-cancel>CANCEL</button></div>`;
+      const area = contentEl.querySelector('.edit-input');
+      area.focus();
+      const restore = () => { contentEl.textContent = original; };
+      const save = async () => {
+        const content = area.value.trim();
+        if (!content || !state.conversationId) return;
+        try {
+          const data = await api(`/api/conversations/${encodeURIComponent(state.conversationId)}/messages/${encodeURIComponent(btn.dataset.editMessage)}/edit`, { method: 'POST', body: { content } });
+          state.conversationId = data.conversation.id;
+          persistConversationId(state.conversationId);
+          renderChat(data.messages || []);
+          toast('Branched conversation. Original history is preserved.');
+          await window.makePlan(content);
+        } catch (e) { toast(e.message, true); restore(); }
+      };
+      contentEl.querySelector('[data-edit-save]').addEventListener('click', save);
+      contentEl.querySelector('[data-edit-cancel]').addEventListener('click', restore);
+      area.addEventListener('keydown', (e2) => {
+        if (e2.key === 'Enter' && (e2.ctrlKey || e2.metaKey)) { e2.preventDefault(); save(); }
+        if (e2.key === 'Escape') { e2.preventDefault(); restore(); }
+      });
     }));
   }
 
@@ -191,12 +209,31 @@
       const data = await api('/api/conversations' + (q ? `?q=${encodeURIComponent(q)}` : ''));
       renderList('conversation-list', data.conversations || [], 'No conversations yet.', c => `<article class="engagement-card"><header><div><h3 data-open-conversation="${esc(c.id)}">${esc(c.title)}</h3><p>v${esc(c.version)} · ${esc(c.status)}</p></div><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-muted'}">${esc(c.status.toUpperCase())}</span></header><div class="engagement-details"><span>ID ${esc(c.id.slice(0,12))}…</span><span>${esc(fmtDate(c.updated_at))}</span><a class="report-dl" href="/api/conversations/${encodeURIComponent(c.id)}/export">EXPORT</a> <button class="text-button" data-rename-conversation="${esc(c.id)}">RENAME</button> <button class="text-button" data-archive-conversation="${esc(c.id)}">ARCHIVE</button> <button class="text-button" data-delete-conversation="${esc(c.id)}">DELETE</button></div></article>`);
       document.querySelectorAll('[data-open-conversation]').forEach(el => el.addEventListener('click', () => openConversation(el.dataset.openConversation).catch(err => toast(err.message, true))));
-      document.querySelectorAll('[data-rename-conversation]').forEach(btn => btn.addEventListener('click', async (ev) => {
+      document.querySelectorAll('[data-rename-conversation]').forEach(btn => btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const title = prompt('Rename conversation');
-        if (!title) return;
-        try { await api(`/api/conversations/${encodeURIComponent(btn.dataset.renameConversation)}/rename`, { method: 'POST', body: { title } }); loadConversations(); }
-        catch (e) { toast(e.message, true); }
+        // Inline editor, not a native prompt(): sandboxed iframe previews block
+        // modal dialogs silently, which would read as a dead button.
+        const card = btn.closest('.engagement-card');
+        const heading = card ? card.querySelector('h3') : null;
+        if (!heading || heading.querySelector('.rename-input')) return;
+        const id = btn.dataset.renameConversation;
+        const current = heading.textContent;
+        heading.innerHTML = `<input class="rename-input" aria-label="Conversation title" value="${esc(current)}" style="background:#0c0c10;border:1px solid var(--cyan);color:var(--text);padding:7px 9px;font:inherit;font-size:12px;width:60%"> <button class="text-button" data-rename-save>SAVE</button> <button class="text-button" data-rename-cancel>CANCEL</button>`;
+        const input = heading.querySelector('.rename-input');
+        input.addEventListener('click', (e2) => e2.stopPropagation());
+        const save = async () => {
+          const title = input.value.trim();
+          if (!title) { toast('Title is required.', true); return; }
+          try { await api(`/api/conversations/${encodeURIComponent(id)}/rename`, { method: 'POST', body: { title } }); toast('Conversation renamed. Reports follow the new name.'); loadConversations(); }
+          catch (e) { toast(e.message, true); loadConversations(); }
+        };
+        heading.querySelector('[data-rename-save]').addEventListener('click', (e2) => { e2.stopPropagation(); save(); });
+        heading.querySelector('[data-rename-cancel]').addEventListener('click', (e2) => { e2.stopPropagation(); loadConversations(); });
+        input.addEventListener('keydown', (e2) => {
+          if (e2.key === 'Enter') { e2.preventDefault(); save(); }
+          if (e2.key === 'Escape') { e2.preventDefault(); loadConversations(); }
+        });
+        input.focus(); input.select();
       }));
       document.querySelectorAll('[data-archive-conversation]').forEach(btn => btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
