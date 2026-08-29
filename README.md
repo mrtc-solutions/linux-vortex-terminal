@@ -93,6 +93,7 @@ UNAVAILABLE), or **Not implemented**.
 | Host PATH / Kali tool discovery (newly installed tools) | Implemented + tested |
 | Operator setting: host-tool access for the agent | Implemented + tested; off by default; Guardian still authorizes |
 | Android APK client (sync-then-download, same API) | Implemented + tested |
+| Linux desktop .deb (live rebuild-then-download, menu entry, unsigned) | Implemented + tested; signing is a release-VM gate |
 | MIT license (LICENSE, LICENSES.md, in-app, APK assets) | Implemented + tested |
 
 ## Explicitly not claimed on this host

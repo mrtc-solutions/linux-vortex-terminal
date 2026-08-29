@@ -66,7 +66,7 @@ except ImportError:  # direct `python backend/vortex_backend.py`
     from probe_cache import TTLCache
 
 SCHEMA_VERSION = 1
-APP_VERSION = "0.2.20"
+APP_VERSION = "0.2.21"
 REDACTION_RE = re.compile(
     r"(?i)(bearer\s+|password\s*[=:]\s*|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*|secret\s*[=:]\s*)([^\s,;]+)"
 )
@@ -3637,6 +3637,29 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self._write(data)
                 return
+            if path == "/api/desktop/deb":
+                try:
+                    status = _load("debbuild").deb_status()
+                except Exception as exc:
+                    status = {"ok": False, "built": False, "message": redact(str(exc))}
+                return self._json(200, {"deb": status, "license": "MIT"})
+            if path == "/api/desktop/deb/download":
+                try:
+                    builder = _load("debbuild")
+                    status = builder.deb_status()
+                    deb_path = Path(status["path"]) if status.get("built") else None
+                    if not deb_path or not deb_path.is_file():
+                        return self._json(404, {"error": {"code": "not_found", "message": "Desktop package has not been built yet. POST /api/desktop/deb first."}})
+                    data = deb_path.read_bytes()
+                except Exception as exc:
+                    return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
+                self.send_response(200)
+                self._headers("application/vnd.debian.binary-package")
+                self.send_header("Content-Disposition", f'attachment; filename="{deb_path.name}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self._write(data)
+                return
             if path == "/api/license":
                 license_path = Path(__file__).resolve().parent.parent / "LICENSE"
                 notice_path = Path(__file__).resolve().parent.parent / "NOTICE"
@@ -4011,6 +4034,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 url = self._sidecar_url_from_request(body)
                 result = builder.build_apk(sidecar_url=url)
                 return self._json(201, {"apk": result, "license": "MIT"})
+            if path == "/api/desktop/deb":
+                builder = _load("debbuild")
+                result = builder.build_deb()
+                return self._json(201, {"deb": result, "license": "MIT"})
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
         except PermissionError as exc:
             return self._json(403, {"error": {"code": "confirmation_or_privilege", "message": str(exc), "exit_code": EXIT_CODES["confirmation_required"]}})

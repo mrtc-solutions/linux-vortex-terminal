@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.21 — 2026-08-29
+
+Desktop twin of the mobile packaging flow: **DOWNLOAD .DEB** (Settings →
+Desktop app) packages the live workbench as a real Linux `.deb` and downloads
+it. Mirrors the verified APK flow end to end.
+
+- New `backend/debbuild.py` orchestrates the reviewed
+  `packaging/deb/build.sh` as the single source of truth. Every download
+  rebuilds from the live tree first, so the package cannot lag behind the
+  running workbench; a frontend digest is reported alongside size/sha256.
+- Routes `GET/POST /api/desktop/deb` and `GET /api/desktop/deb/download`
+  mirror `/api/mobile/apk*` and inherit the sidecar capability token gate.
+- The layered download trigger (top-level tab → anchor fallback → manual
+  toast link) is generalized into `triggerDownload()` and shared by the APK
+  and `.deb` buttons, so both work in sandboxed iframe previews.
+- The package gains a menu entry (`vortex serve`, `Terminal=true`) and an
+  icon while shipping **no maintainer scripts, no daemon, no user data** —
+  unchanged policy, now asserted by tests.
+- `./vortex desktop deb [--output DIR]` is the CLI equivalent of the button.
+- Honesty-first scope: the `.deb` is **unsigned** (signing stays a
+  release-VM gate) and the Electron shell is still not bundled.
+
 ## 0.2.20 — 2026-08-29
 
 Fix round for the mobile packaging flow: the DOWNLOAD APK control was

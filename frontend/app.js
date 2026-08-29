@@ -51,12 +51,23 @@ async function downloadApk() {
   try {
     const data = await api('/api/mobile/apk', { method: 'POST', body: {} });
     if (!data.apk || !data.apk.ok) { toast((data.apk && data.apk.message) || 'APK build failed.', true); return; }
-    triggerApkDownload();
-    showApkToast(data.apk.size_bytes);
+    const url = '/api/mobile/apk/download';
+    triggerDownload(url, 'vortex.apk');
+    showDownloadToast(`APK synced from the live workbench (${data.apk.size_bytes} bytes, MIT) — `, url, 'vortex.apk', 'DOWNLOAD vortex.apk');
   } catch (e) { toast(e.message, true); }
 }
-function triggerApkDownload() {
-  const url = '/api/mobile/apk/download';
+async function downloadDeb() {
+  toast('Building the live workbench into a Linux desktop package…');
+  try {
+    const data = await api('/api/desktop/deb', { method: 'POST', body: {} });
+    if (!data.deb || !data.deb.ok) { toast((data.deb && data.deb.message) || 'Desktop package build failed.', true); return; }
+    const url = '/api/desktop/deb/download';
+    const filename = data.deb.filename || 'vortex.deb';
+    triggerDownload(url, filename);
+    showDownloadToast(`Desktop .deb built from the live workbench (${data.deb.size_bytes} bytes, unsigned — review before install) — `, url, filename, `DOWNLOAD ${filename}`);
+  } catch (e) { toast(e.message, true); }
+}
+function triggerDownload(url, filename) {
   // Sandboxed iframe previews (embedded workbench) silently block synthetic
   // anchor downloads; a user-initiated new tab is served the file top-level.
   // Electron keeps the classic anchor download via the preload bridge.
@@ -64,22 +75,22 @@ function triggerApkDownload() {
     try { if (window.open(url, '_blank')) return; } catch (_) { /* popup blocked — fall through */ }
   }
   const link = document.createElement('a');
-  link.href = '/api/mobile/apk/download';
-  link.download = 'vortex.apk';
+  link.href = url;
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
 }
-function showApkToast(sizeBytes) {
+function showDownloadToast(prefix, url, filename, label) {
   const el = $('toast');
-  el.textContent = `APK synced from the live workbench (${sizeBytes} bytes, MIT) — `;
+  el.textContent = prefix;
   const manual = document.createElement('a');
-  manual.href = '/api/mobile/apk/download';
-  manual.download = 'vortex.apk';
+  manual.href = url;
+  manual.download = filename;
   manual.target = '_blank';
   manual.rel = 'noopener';
   manual.className = 'report-dl';
-  manual.textContent = 'DOWNLOAD vortex.apk';
+  manual.textContent = label;
   el.appendChild(manual);
   el.style.borderColor = 'var(--cyan)';
   el.classList.add('show');
@@ -87,6 +98,7 @@ function showApkToast(sizeBytes) {
   window.toastTimer = setTimeout(() => el.classList.remove('show'), 10000);
 }
 window.downloadApk = downloadApk;
+window.downloadDeb = downloadDeb;
 function engagementLive(item) {
   if (!item || item.status !== 'active' || item.expired || item.effective_status === 'expired') return false;
   const expires = Date.parse(item.expires_at);
@@ -433,5 +445,5 @@ async function resizeSession() {
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
-function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setupMatrix(); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('download-deb')?.addEventListener('click', downloadDeb); $('download-deb-settings')?.addEventListener('click', downloadDeb); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);

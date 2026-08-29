@@ -34,8 +34,8 @@ from .dexwrite import build_webview_dex
 
 PACKAGE = "io.vortex.mobile"
 APP_LABEL = "VORTEX"
-VERSION_NAME = "0.2.20"
-VERSION_CODE = 220
+VERSION_NAME = "0.2.21"
+VERSION_CODE = 221
 
 
 def repo_root() -> Path:

@@ -59,13 +59,21 @@ assert.ok(index.includes('id="download-apk"') && index.includes('id="download-ap
 assert.ok(index.includes('id="host-tools-setting"') && index.includes('id="rescan-host-tools"'), 'host-tool access and PATH rescan exist');
 assert.ok(index.includes('id="license-badge"') && index.includes('MIT'), 'MIT license badge exists');
 assert.ok(app.includes("api('/api/mobile/apk'"), 'APK button posts a live sync before download');
-assert.ok(app.includes("link.href = '/api/mobile/apk/download'"), 'APK download follows a successful sync');
-// The APK download must survive sandboxed iframe previews: a top-level tab
-// trigger first, the classic anchor click as fallback, and a real manual
-// download link in the completion toast for contexts that block both.
-assert.ok(app.includes("window.open(url, '_blank')"), 'APK download opens a top-level tab when embedded');
-assert.ok(app.includes('window.vortexApi?.request'), 'APK download keeps the Electron anchor path');
-assert.ok(app.includes("manual.href = '/api/mobile/apk/download'"), 'APK toast offers a manual download link');
+assert.ok(app.includes("const url = '/api/mobile/apk/download'") && app.includes("triggerDownload(url, 'vortex.apk')"), 'APK download follows a successful sync via the layered trigger');
+// Both package downloads must survive sandboxed iframe previews: a top-level
+// tab trigger first, the classic anchor click as fallback, and a real manual
+// link in the completion toast for contexts that block both.
+assert.ok(app.includes('function triggerDownload(url, filename)'), 'layered download trigger exists');
+assert.ok(app.includes("window.open(url, '_blank')"), 'layered trigger opens a top-level tab when embedded');
+assert.ok(app.includes('window.vortexApi?.request'), 'layered trigger keeps the Electron anchor path');
+assert.ok(app.includes('link.download = filename'), 'layered trigger falls back to a real anchor download');
+assert.ok(app.includes("manual.target = '_blank'"), 'completion toast carries a top-level manual link');
+// Desktop .deb button: live build before download, settings card placement.
+assert.ok(index.includes('id="download-deb-settings"'), 'DOWNLOAD .DEB settings card exists');
+assert.ok(index.includes('Desktop app</h2>'), 'desktop app card is titled');
+assert.ok(app.includes("api('/api/desktop/deb'"), 'desktop button posts a live build before download');
+assert.ok(app.includes("triggerDownload(url, filename)"), 'desktop download uses the layered trigger');
+assert.ok(app.includes("$('download-deb-settings')?.addEventListener('click', downloadDeb)"), 'desktop settings card button is wired');
 // Topbar overflow fix: HELP/ABOUT launch from the sidebar nav, the topbar
 // wraps instead of clipping controls, and DOWNLOAD APK stays in the topbar.
 assert.ok(index.includes('class="nav-item" id="open-help"') && index.includes('class="nav-item" id="open-about"'), 'HELP and ABOUT launchers live in the sidebar nav');

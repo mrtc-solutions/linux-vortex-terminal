@@ -1,6 +1,6 @@
 {
   "name": "linux-vortex-terminal",
-  "version": "0.2.20",
+  "version": "0.2.21",
   "description": "Linux-native Vortex AI cybersecurity and operations workbench",
   "private": true,
   "license": "MIT",

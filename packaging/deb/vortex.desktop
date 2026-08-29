@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=VORTEX
+GenericName=Linux Vortex Terminal
+Comment=Local-first Linux cybersecurity and operations workbench
+Comment[en_GB]=Local-first Linux cybersecurity and operations workbench
+Exec=vortex serve
+Icon=vortex
+Terminal=true
+Categories=System;Utility;Security;
+Keywords=terminal;security;operations;workbench;linux;
+StartupNotify=false
+NoDisplay=false
