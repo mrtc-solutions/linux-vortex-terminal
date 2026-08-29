@@ -447,7 +447,7 @@
           list.innerHTML = '<div class="empty-inline">No missing catalog items on this host.</div>';
           return;
         }
-        list.innerHTML = missing.map(item => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')}</small></div><span class="badge ${item.required ? 'badge-red' : 'badge-muted'}">${item.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="text-button" data-dep-install="${esc(item.id)}">INSTALL</button></div>`).join('');
+        list.innerHTML = missing.map(item => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')}</small></div><span class="badge ${item.required ? 'badge-red' : 'badge-muted'}">${item.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="text-button" data-dep-install="${esc(item.id)}" title="${item.method === 'apt' ? 'Open the reviewed install proposal' : 'No reviewed installer is mapped for this item; VORTEX shows operator instructions only and never auto-installs'}">${item.method === 'apt' ? 'INSTALL' : 'REVIEW'}</button></div>`).join('');
         list.querySelectorAll('[data-dep-install]').forEach(btn => btn.addEventListener('click', () => window.openDependency(btn.dataset.depInstall)));
       } catch (e) { toast(e.message, true); }
     }

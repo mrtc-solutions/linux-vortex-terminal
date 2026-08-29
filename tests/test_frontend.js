@@ -27,6 +27,7 @@ assert.ok(index.includes('id="plan-button"') && index.includes('aria-label="Send
 assert.ok(workspace.includes('local-echo'), 'chat submit local-echoes the user message');
 assert.ok(workspace.includes("api('/api/workspace/turn'"), 'chat submit uses the workspace turn endpoint');
 assert.ok(workspace.includes('auto_install=${deps.auto_install ? \'yes\' : \'no\'}'), 'dependency summary reports auto_install truthfully');
+assert.ok(workspace.includes("item.method === 'apt' ? 'INSTALL' : 'REVIEW'"), 'dep rows promise INSTALL only where a reviewed installer exists; unmapped items say REVIEW');
 assert.ok(workspace.includes("input.focus({ preventScroll: true })") || workspace.includes('input.focus()'), 'chat submit refocuses the input');
 assert.ok(app.includes("$('request-input').addEventListener('keydown'"), 'request input Enter is wired');
 assert.ok(workspace.includes('sendButton.disabled = false'), 'SEND button is re-enabled on failure');

@@ -21,6 +21,15 @@ it. Mirrors the verified APK flow end to end.
 - `./vortex desktop deb [--output DIR]` is the CLI equivalent of the button.
 - Honesty-first scope: the `.deb` is **unsigned** (signing stays a
   release-VM gate) and the Electron shell is still not bundled.
+- Dependencies window rows no longer promise **INSTALL** for items with no
+  reviewed installer mapping (lsusb, nft, third-party agents…). Those rows now
+  say **REVIEW** and open the operator instructions; INSTALL is reserved for
+  apt-mapped tools that produce a real typed plan. Found during live manual
+  testing — policy unchanged, only the label stopped overpromising.
+- Planner no longer misreads adjective phrases: "scan for open ports" is a
+  read-only socket query (reviewed `ss -lntup` adapter), while "open port
+  8080" remains a rejected firewall mutation. Also found during live manual
+  testing.
 
 ## 0.2.20 — 2026-08-29
 
