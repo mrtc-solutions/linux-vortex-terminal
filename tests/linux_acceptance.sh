@@ -41,7 +41,9 @@ if command -v systemctl >/dev/null 2>&1 && [[ -n "${VORTEX_ACCEPTANCE_UNIT:-}" ]
     exit 2
   fi
   echo '[READ-ONLY] systemctl show'
-  systemctl show "$VORTEX_ACCEPTANCE_UNIT" --property=Id,Description,LoadState,ActiveState,SubState,UnitFileState --no-pager
+  if ! systemctl show "$VORTEX_ACCEPTANCE_UNIT" --property=Id,Description,LoadState,ActiveState,SubState,UnitFileState --no-pager; then
+    echo 'NOT TESTABLE IN SANDBOX: systemd bus is unavailable for systemctl show on this host.' >&2
+  fi
 fi
 
 echo 'Real read-only acceptance checks completed. No mutation was performed.'

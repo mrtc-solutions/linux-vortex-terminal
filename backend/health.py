@@ -19,17 +19,32 @@ def _disk_percent(path: Path) -> int | None:
         return None
 
 
+def _binary_component(probe: dict[str, Any], role: str) -> dict[str, Any]:
+    state = probe.get("state")
+    installed = state == "installed"
+    blocked = state == "blocked"
+    detail = role if not blocked else f"{role} · review path safety before relying on it"
+    return {
+        "state": "healthy" if installed else ("warning" if blocked else "unavailable"),
+        "available": probe.get("path") if (installed or blocked) else "absent",
+        "detail": detail,
+        "version": probe.get("version"),
+        "path": probe.get("path"),
+        "security_flags": probe.get("security_flags") or [],
+    }
+
+
 def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = settings or {}
     try:
         from adapter_registry import TOOL_CATALOG
         from agents.council import discover
-        from models.router import model_status
+        from models.router import MODEL_CATALOG, model_status
         from vortex_backend import detect_context, probe_executable
     except ImportError:
         from backend.adapter_registry import TOOL_CATALOG
         from backend.agents.council import discover
-        from backend.models.router import model_status
+        from backend.models.router import MODEL_CATALOG, model_status
         from backend.vortex_backend import detect_context, probe_executable
 
     doctor = detect_context()
@@ -48,8 +63,20 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
         docker_name = "podman"
     else:
         docker_name = "docker"
+    node = probe_executable("node", include_version=False)
+    npm = probe_executable("npm", include_version=False)
+    pnpm = probe_executable("pnpm", include_version=False)
+    yarn = probe_executable("yarn", include_version=False)
+    go = probe_executable("go", include_version=False)
+    ollama_binary = probe_executable("ollama", include_version=False)
     models = model_status(settings)
     ollama = models.get("local") or {}
+    local_ai_state = "healthy" if ollama.get("state") == "healthy" else ("disabled" if ollama.get("state") == "disabled" else "unavailable")
+    installed_candidates = ollama.get("installed_candidates") or []
+    recommended = ollama.get("recommended") or {}
+    required_models = [name for name, meta in MODEL_CATALOG.items() if not meta.get("optional")]
+    missing_required_models = [name for name in required_models if name not in installed_candidates]
+    model_pool_state = "healthy" if ollama.get("state") == "healthy" and not missing_required_models else ("warning" if installed_candidates else "unavailable")
     data_dir = Path(store.db_path).parent
     storage = _disk_percent(data_dir)
     try:
@@ -69,8 +96,32 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
         "core": {"state": core, "version": "0.2.0"},
         "database": {"state": db_state, "detail": integrity},
         "terminal_engine": {"state": "healthy" if session_ok else "degraded"},
+        "nodejs": _binary_component(node, "desktop frontend and build scripts"),
+        "npm": _binary_component(npm, "frontend dependency management and packaging"),
+        "pnpm": _binary_component(pnpm, "optional package manager"),
+        "yarn": _binary_component(yarn, "optional package manager"),
+        "go": _binary_component(go, "optional toolchain for Go-based security tools"),
         "docker": {"state": "healthy" if docker.get("state") == "installed" else "unavailable", "runtime": docker_name if docker.get("state") == "installed" else None, "probe": docker.get("state")},
-        "ollama": {"state": ollama.get("state") or "unavailable", "models": len(ollama.get("models") or [])},
+        "ollama": {
+            "state": ollama.get("state") or ("installed" if ollama_binary.get("state") == "installed" else "unavailable"),
+            "binary_state": ollama_binary.get("state"),
+            "binary_path": ollama_binary.get("path"),
+            "models": len(ollama.get("models") or []),
+            "available": f"{len(installed_candidates)} recommended" if installed_candidates else (ollama.get("reason") or "no local models"),
+            "version": ollama.get("version") or ollama_binary.get("version"),
+            "endpoint": ollama.get("endpoint"),
+            "recommended_mode": recommended.get("mode"),
+        },
+        "local_ai": {
+            "state": local_ai_state,
+            "available": ", ".join(installed_candidates[:3]) if installed_candidates else "deterministic fallback only",
+            "detail": f"mode {recommended.get('mode') or 'unknown'} · strategy {((ollama.get('resources') or {}).get('recommended_strategy') or 'sequential')} · multi_model={'yes' if recommended.get('multi_model') else 'no'}",
+        },
+        "model_pool": {
+            "state": model_pool_state,
+            "available": ", ".join(installed_candidates) if installed_candidates else "no verified local models",
+            "detail": f"missing core models: {', '.join(missing_required_models) if missing_required_models else 'none'}",
+        },
         "agent_council": {"state": "healthy" if agent_healthy else "empty", "available": f"{agent_healthy}/{len(agents)}", "agents": agents},
         "kali_tools": {"state": "healthy" if installed else "empty", "detected": installed, "catalog": len(tools)},
         "memory": {"state": "healthy"},
@@ -93,19 +144,25 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
 def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """First-run requirements from live probes. Missing items are skippable, never faked."""
     import sys
+
     settings = settings or {}
     health = collect(store, None, settings)
     doctor = health["host"]
     git_ok = bool(shutil.which("git"))
     py_ok = sys.version_info >= (3, 11)
     linux_ok = sys.platform == "linux"
+    node_ok = health["components"]["nodejs"]["state"] in {"healthy", "warning"}
+    npm_ok = health["components"]["npm"]["state"] in {"healthy", "warning"}
+    pnpm_ok = health["components"]["pnpm"]["state"] in {"healthy", "warning"}
+    yarn_ok = health["components"]["yarn"]["state"] in {"healthy", "warning"}
+    go_ok = health["components"]["go"]["state"] in {"healthy", "warning"}
     docker = health["components"]["docker"]["state"] == "healthy"
     ollama = health["components"]["ollama"]["state"] == "healthy"
+    model_pool = health["components"]["model_pool"]["state"] == "healthy"
     db_ok = health["components"]["database"]["state"] == "healthy"
     tools_n = health["components"]["kali_tools"]["detected"]
     agents_n = health["components"]["agent_council"].get("available")
     cpu = os.cpu_count() or 1
-    ram = health["components"].get("storage", {})
     mem_mb = None
     try:
         with open("/proc/meminfo", encoding="utf-8") as handle:
@@ -119,10 +176,16 @@ def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str
         {"id": "linux", "title": "Linux host", "ok": linux_ok, "required": True, "detail": f"{doctor.get('support_tier')} · {doctor.get('architecture')} · {cpu} CPU · {mem_mb or '?'} MB RAM"},
         {"id": "python", "title": "Python 3.11+", "ok": py_ok, "required": True, "detail": sys.version.split()[0]},
         {"id": "git", "title": "Git", "ok": git_ok, "required": False, "detail": "installed" if git_ok else "absent"},
+        {"id": "nodejs", "title": "Node.js", "ok": node_ok, "required": False, "detail": health["components"]["nodejs"].get("available")},
+        {"id": "npm", "title": "npm", "ok": npm_ok, "required": False, "detail": health["components"]["npm"].get("available")},
+        {"id": "pnpm", "title": "pnpm", "ok": pnpm_ok, "required": False, "detail": health["components"]["pnpm"].get("available")},
+        {"id": "yarn", "title": "yarn", "ok": yarn_ok, "required": False, "detail": health["components"]["yarn"].get("available")},
+        {"id": "go", "title": "Go", "ok": go_ok, "required": False, "detail": health["components"]["go"].get("available")},
         {"id": "docker", "title": "Docker or Podman", "ok": docker, "required": False, "detail": health["components"]["docker"].get("probe")},
         {"id": "tools", "title": "Linux tools", "ok": tools_n > 0, "required": True, "detail": f"{tools_n} detected"},
         {"id": "agents", "title": "AI agents", "ok": str(agents_n).split("/")[0] not in {"0", "None", ""}, "required": False, "detail": f"{agents_n} available; missing third-party agents stay UNAVAILABLE"},
-        {"id": "models", "title": "Local model (Ollama)", "ok": ollama, "required": False, "detail": health["components"]["ollama"]["state"]},
+        {"id": "ollama", "title": "Local model runtime (Ollama)", "ok": ollama, "required": False, "detail": health["components"]["ollama"].get("state")},
+        {"id": "model_pool", "title": "Recommended local model pool", "ok": model_pool, "required": False, "detail": health["components"]["model_pool"].get("detail")},
         {"id": "database", "title": "Local database", "ok": db_ok, "required": True, "detail": "SQLite WAL + audit chain"},
         {"id": "policy", "title": "Security policy", "ok": True, "required": True, "detail": settings.get("profile") or "safe"},
     ]

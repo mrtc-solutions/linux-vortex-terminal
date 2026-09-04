@@ -15,8 +15,12 @@ CASES = (
 def run_suite(store: Any, workspace: Any, executor: Any, cwd: str | None = None) -> dict[str, Any]:
     try:
         from orchestrate import run_turn
+        from config import load_settings
+        from models.router import benchmark_local_ai
     except ImportError:
         from backend.orchestrate import run_turn
+        from backend.config import load_settings
+        from backend.models.router import benchmark_local_ai
     results = []
     for case in CASES:
         started = time.monotonic()
@@ -48,4 +52,12 @@ def run_suite(store: Any, workspace: Any, executor: Any, cwd: str | None = None)
             "commands": len((operation or {}).get("commands") or turn["plan"].get("commands") or []),
         })
     passed = sum(1 for item in results if item["success"])
-    return {"product": "VORTEX", "cases": results, "passed": passed, "total": len(results), "pass_rate": passed / len(results) if results else 0}
+    ai = benchmark_local_ai(load_settings())
+    return {
+        "product": "VORTEX",
+        "cases": results,
+        "passed": passed,
+        "total": len(results),
+        "pass_rate": passed / len(results) if results else 0,
+        "local_ai": ai,
+    }

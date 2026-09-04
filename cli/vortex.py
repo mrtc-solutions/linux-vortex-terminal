@@ -289,8 +289,8 @@ def main(argv=None):
         if args.subcommand == 'doctor': emit({'doctor': detect_context()}, args.as_json); return EXIT_CODES['success']
         if args.subcommand == 'health':
             from backend.health import collect
-            from backend.config import load_settings
-            emit({'health': collect(store, None, load_settings())}, args.as_json); return 0
+            from backend.config import load_settings as _load_settings
+            emit({'health': collect(store, None, _load_settings())}, args.as_json); return 0
         if args.subcommand == 'agents':
             from backend.agents.council import discover
             emit({'agents': discover()}, args.as_json); return 0
@@ -338,10 +338,10 @@ def main(argv=None):
             emit({'install': result}, args.as_json)
             return 0 if result.get('ok') else EXIT_CODES['failure']
         if args.subcommand == 'turn':
-            from backend.config import load_settings
+            from backend.config import load_settings as _load_settings
             from backend.orchestrate import run_turn
             from backend.workspace import Workspace
-            settings = load_settings()
+            settings = _load_settings()
             if args.offline:
                 settings['offline'] = True
             settings['profile'] = args.profile
@@ -362,12 +362,12 @@ def main(argv=None):
             emit({'conversations': ws.list_conversations()}, args.as_json); return 0
         if args.subcommand == 'host-tools':
             from backend.tools.hostscan import invalidate_host_scan_cache, scan_host_tools
-            from backend.config import load_settings
+            from backend.config import load_settings as _load_settings
             rescan = getattr(args, 'action', 'list') == 'rescan'
             if rescan:
                 invalidate_host_scan_cache()
             scan = scan_host_tools(persist=rescan, use_cache=not rescan)
-            emit({'host_tools': scan, 'host_tool_access': load_settings().get('host_tool_access') is True}, args.as_json)
+            emit({'host_tools': scan, 'host_tool_access': _load_settings().get('host_tool_access') is True}, args.as_json)
             return 0
         if args.subcommand == 'mobile':
             from backend.mobile.apkbuild import build_apk
@@ -414,10 +414,13 @@ def main(argv=None):
                 emit({'retention': {'history_days': 90, 'output_days': 30, 'policy': 'redacted local evidence; raw evidence is opt-in'}}, args.as_json); return 0
             emit({'prune': store.prune(args.history_days, args.output_days)}, args.as_json); return 0
         if args.subcommand == 'model':
-            model = {'state': 'disabled', 'providers': [], 'selected': None, 'network': 'disabled', 'message': 'No local model is configured; deterministic mode remains active.'}
-            if args.action == 'use': model['message'] = 'No provider selected. Configuration is not implemented in this offline-first build.'
+            from backend.config import load_settings as _load_settings
+            from backend.models.router import model_status
+            model = model_status(_load_settings())
+            if args.action == 'use':
+                model['message'] = 'Provider selection is automatic and local-first in this build. Change model_* settings if you need different routing preferences.'
             emit({'model': model}, args.as_json)
-            return 0 if args.action in ('status', 'list') else EXIT_CODES['unavailable']
+            return 0 if args.action in ('status', 'list', 'use') else EXIT_CODES['unavailable']
         if args.subcommand == 'shell':
             return shell_command(args.shell, args.action, getattr(args, 'yes', False), args.as_json)
         if args.subcommand == 'session':
@@ -499,7 +502,15 @@ def main(argv=None):
             item={'schema_version':1,'id':secrets.token_hex(16),'created_at':now_iso(),'expires_at':datetime.fromtimestamp(time.time()+86400,tz=timezone.utc).isoformat(),'name':args.name or 'Authorized assessment','authorization':args.authorization or 'operator-declared authorization','targets':[normalize_target(x) for x in (args.target or [])],'classes':['reconnaissance'],'status':'active'}
             if not item['targets']: raise ValueError('--target is required')
             store.create_engagement(item); emit({'engagement':item},args.as_json); return 0
-        if args.subcommand == 'run' and ((args.plan_id is None and (args.direct_mode or args.direct)) or args.plan_id == '--'):
+        if args.subcommand == 'run' and args.plan_id and args.plan_id != '--' and not (args.direct_mode or args.direct):
+            plan = store.get_plan(args.plan_id)
+            if not plan:
+                raise ValueError('plan id not found')
+            if not args.as_json:
+                plan_text(plan)
+                if any(spec.get('privilege') == 'root-required' for spec in plan.get('commands', [])) and os.getuid() != 0:
+                    print(f"\nThis reviewed plan needs root for the final mutation. Re-run as:\n  sudo vortex --allow-root run {plan['id']}\n", file=sys.stderr)
+        elif args.subcommand == 'run' and ((args.plan_id is None and (args.direct_mode or args.direct)) or args.plan_id == '--'):
             direct = args.direct_mode or args.direct
             if direct and direct[0] == '--': direct = direct[1:]
             if not direct: raise ValueError('direct command is empty')
@@ -523,10 +534,12 @@ def main(argv=None):
             if args.as_json: emit({'plan':plan},True)
             else: plan_text(plan)
         if not plan.get('commands'):
-            if is_natural_request and args.as_json: emit({'plan': plan}, True)
+            if args.as_json and (is_natural_request or args.subcommand == 'run'):
+                emit({'plan': plan}, True)
             return EXIT_CODES['unavailable'] if plan['status']=='unavailable' else 0
         if args.dry_run:
-            if is_natural_request and args.as_json: emit({'plan': plan}, True)
+            if args.as_json and (is_natural_request or args.subcommand == 'run'):
+                emit({'plan': plan}, True)
             return 0
         yes = getattr(args, 'yes', False)
         non_interactive = getattr(args, 'non_interactive', False)
@@ -542,7 +555,9 @@ def main(argv=None):
         supplied_token = getattr(args, 'approval_token', None)
         token = plan['approval_token'] if supplied_token is None else supplied_token
         if non_interactive and (not getattr(args, 'digest', None) or supplied_token is None or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
-        manager=ExecutionManager(store); op=manager.start(plan,True,token,getattr(args, 'allow_root', False), getattr(args, 'offline', False)); op=wait_operation(store,manager,op['id'])
+        from backend.config import load_settings as _load_settings
+        settings = _load_settings()
+        manager=ExecutionManager(store); op=manager.start(plan,True,token,getattr(args, 'allow_root', False), getattr(args, 'offline', False), settings=settings); op=wait_operation(store,manager,op['id'])
         if op.get('status') == 'awaiting_confirmation':
             if not yes:
                 print('\nFresh preflight completed. Review the observed facts before approving the mutation:', file=sys.stderr)
@@ -555,7 +570,7 @@ def main(argv=None):
             op = manager.approve_preflight(op['id'], True, token, preflight_digest)
             op = wait_operation(store, manager, op['id'])
         if args.as_json:
-            emit({'plan': plan, 'operation': op} if is_natural_request else {'operation': op}, True)
+            emit({'plan': plan, 'operation': op} if (is_natural_request or args.subcommand == 'run') else {'operation': op}, True)
         else: print(f"[{op['status'].upper()}] operation {op['id']}")
         return {'succeeded': EXIT_CODES['success'], 'cancelled': EXIT_CODES['interrupted'], 'interrupted': EXIT_CODES['interrupted'], 'timed_out': EXIT_CODES['timeout'], 'unavailable': EXIT_CODES['unavailable']}.get(op['status'], EXIT_CODES['command_failed'])
     except KeyboardInterrupt: return EXIT_CODES['interrupted']

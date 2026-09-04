@@ -26,6 +26,24 @@ def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None
         str(analysis.get("fact") or "No analysis was recorded."),
         str(analysis.get("inference") or ""),
         str(analysis.get("unknown") or ""),
+    ]
+    local_ai = analysis.get("local_ai") or {}
+    if local_ai:
+        route = local_ai.get("route") or {}
+        selected = ", ".join(str(item.get("model")) for item in (route.get("selected") or []) if item.get("model"))
+        synthesis = local_ai.get("synthesis") or {}
+        fuzzy = local_ai.get("fuzzy") or {}
+        lines += [
+            "",
+            "Local AI synthesis",
+            f"Provider: {local_ai.get('provider') or 'ollama'}",
+            f"Route: {selected or 'none'}",
+            f"Confidence: {fuzzy.get('confidence') or 'unavailable'} ({fuzzy.get('agreement') or 'no agreement data'})",
+            str(synthesis.get("fact_summary") or local_ai.get("message") or ""),
+            str(synthesis.get("meaning") or ""),
+            str(synthesis.get("unknowns") or ""),
+        ]
+    lines += [
         "",
         "Command timeline",
     ]
@@ -56,7 +74,7 @@ def markdown(operation: dict[str, Any], plan: dict[str, Any] | None = None, task
     lines = _lines_from_operation(operation, plan, task)
     out = [f"# {lines[0]}", ""]
     for line in lines[1:]:
-        if line in {"Interpretation", "Command timeline", "Artifacts"}:
+        if line in {"Interpretation", "Local AI synthesis", "Command timeline", "Artifacts"}:
             out += ["", f"## {line}", ""]
         else:
             out.append(line)

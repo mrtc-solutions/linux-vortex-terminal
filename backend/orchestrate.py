@@ -5,36 +5,47 @@ import time
 from typing import Any
 
 
+def _with_local_ai(base: str, advisory: dict[str, Any] | None) -> str:
+    advisory = advisory or {}
+    message = str(advisory.get("message") or "").strip()
+    if advisory.get("state") != "responded" or not message:
+        return base
+    return (base.rstrip() + " Local AI: " + message).strip()
+
+
 def interpret_operation(plan: dict[str, Any], operation: dict[str, Any]) -> str:
     if not operation:
         return "No operation ran."
     status = operation.get("status")
     commands = operation.get("commands") or []
+    local_ai = ((operation.get("analysis") or {}).get("local_ai") or {})
     if status == "succeeded":
         bits = []
         for command in commands:
             summary = (command.get("stdout") or command.get("stderr") or "").strip().splitlines()
             head = summary[0][:220] if summary else "no output"
             bits.append(f"{command.get('display')}: {head}")
-        return "Objective completed with observed command output. " + " | ".join(bits[:6])
+        return _with_local_ai("Objective completed with observed command output. " + " | ".join(bits[:6]), local_ai)
     if status == "awaiting_confirmation":
-        return "Fresh preflight facts were observed. Review them before approving the mutation."
+        return _with_local_ai("Fresh preflight facts were observed. Review them before approving the mutation.", local_ai)
     if status == "unavailable":
-        return "A required tool was missing. No fabricated result was stored."
+        return _with_local_ai("A required tool was missing. No fabricated result was stored.", local_ai)
     if status in {"cancelled", "interrupted"}:
-        return "Execution stopped before completion."
+        return _with_local_ai("Execution stopped before completion.", local_ai)
     if status == "timed_out":
-        return "A command hit its timeout or output cap."
-    return f"Operation ended as {status}. Review the command timeline for observed evidence."
+        return _with_local_ai("A command hit its timeout or output cap.", local_ai)
+    return _with_local_ai(f"Operation ended as {status}. Review the command timeline for observed evidence.", local_ai)
 
 
 def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: str | None, engagement_id: str | None, conversation_id: str | None, settings: dict[str, Any], confirm: bool = False, approval_token: str | None = None, allow_root: bool = False) -> dict[str, Any]:
     try:
         from agents.council import consult
+        from models.router import advise as local_ai_advise, advisory_workers
         from security.guardian import evaluate
         from vortex_backend import build_plan
     except ImportError:
         from backend.agents.council import consult
+        from backend.models.router import advise as local_ai_advise, advisory_workers
         from backend.security.guardian import evaluate
         from backend.vortex_backend import build_plan
 
@@ -55,6 +66,11 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
     except ImportError:
         from backend.episode import observe
     observation = observe(plan)
+    local_ai = local_ai_advise(request, plan=plan, phase="plan", settings=settings)
+    plan_workers = list(plan.get("workers") or [])
+    if plan_workers:
+        plan_workers = [item for item in plan_workers if item.get("id") != "local-model"]
+    plan["workers"] = plan_workers + advisory_workers(local_ai)
     procedure = workspace.matching_procedure(plan.get("kind") or request)
     if procedure:
         plan.setdefault("notes", []).insert(0, f"Retrieved validated procedure {procedure['name']} (used {procedure.get('uses', 1)} time(s)). Commands still come from reviewed adapters.")
@@ -73,37 +89,37 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
             store.append_audit("observe_log_failed", {"task_id": task["id"]})
         except (OSError, Exception):
             pass
-    workspace.update_task(task["id"], plan_id=plan["id"], risk=guardian["risk"], result={"kind": plan.get("kind"), "plan_status": plan.get("status"), "guardian": guardian, "council": council, "procedure": procedure["name"] if procedure else None, "observation": observation})
+    workspace.update_task(task["id"], plan_id=plan["id"], risk=guardian["risk"], result={"kind": plan.get("kind"), "plan_status": plan.get("status"), "guardian": guardian, "council": council, "procedure": procedure["name"] if procedure else None, "observation": observation, "local_ai": local_ai})
     operation = None
     auto = False
     if guardian["blocked"] or plan["status"] in {"clarified", "unavailable", "rejected"} or not plan.get("commands"):
         workspace.update_task(task["id"], state="COMPLETED" if plan["status"] == "clarified" else ("FAILED" if plan["status"] in {"rejected", "unavailable"} else "COMPLETED"))
         workspace.record_approval("observe", plan["id"], task["id"], guardian.get("risk"), {"status": plan["status"]})
-        explanation = " ".join(plan.get("notes") or [guardian["reasons"][0] if guardian["reasons"] else "No command was planned."])
+        explanation = _with_local_ai(" ".join(plan.get("notes") or [guardian["reasons"][0] if guardian["reasons"] else "No command was planned."]), local_ai)
     elif guardian["decision"] == "auto" and plan["status"] == "planned":
         workspace.update_task(task["id"], state="EXECUTING")
         workspace.record_approval("auto", plan["id"], task["id"], guardian.get("risk"), {"policy": settings.get("profile")})
         # Only the CLI can provide this explicit per-invocation override. The
         # desktop/API callers leave it false, so a renderer can never cause
         # UID 0 execution.
-        operation = executor.start(plan, True, plan["approval_token"], allow_root, offline)
+        operation = executor.start(plan, True, plan["approval_token"], allow_root, offline, settings=settings)
         auto = True
         workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
-        explanation = "Guardian authorized a low-risk local diagnostic under the current policy. Real execution started."
+        explanation = _with_local_ai("Guardian authorized a low-risk local diagnostic under the current policy. Real execution started.", local_ai)
     elif confirm:
         token = approval_token or (plan.get("approval_token") if settings.get("cli_yes") is True else None)
         if not token:
             workspace.update_task(task["id"], state="WAITING_FOR_APPROVAL")
-            explanation = "A typed plan is ready. Guardian requires recorded approval before execution."
+            explanation = _with_local_ai("A typed plan is ready. Guardian requires recorded approval before execution.", local_ai)
         else:
             workspace.update_task(task["id"], state="EXECUTING")
             workspace.record_approval("approve", plan["id"], task["id"], guardian.get("risk"), {"cli_yes": True})
-            operation = executor.start(plan, True, token, allow_root, offline)
+            operation = executor.start(plan, True, token, allow_root, offline, settings=settings)
             workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
-            explanation = "Approved plan execution started."
+            explanation = _with_local_ai("Approved plan execution started.", local_ai)
     else:
         workspace.update_task(task["id"], state="WAITING_FOR_APPROVAL")
-        explanation = "A typed plan is ready. Guardian requires recorded approval before execution."
+        explanation = _with_local_ai("A typed plan is ready. Guardian requires recorded approval before execution.", local_ai)
     assistant = workspace.add_message(conversation["id"], "vortex", explanation, {"task_id": task["id"], "plan_id": plan["id"], "guardian": guardian, "operation_id": operation["id"] if operation else None})
     return {
         "conversation": workspace.get_conversation(conversation["id"]),
@@ -116,6 +132,7 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         "auto_executed": auto,
         "explanation": explanation,
         "observation": observation,
+        "local_ai": local_ai,
     }
 
 
