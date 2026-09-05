@@ -536,6 +536,80 @@ class Workspace:
             return {"excluded_targets": [], "environment": None, "owner": None}
         return {"excluded_targets": json.loads(row["excluded_json"]), "environment": row["environment"] or None, "owner": row["owner"] or None}
 
+    def search_all(self, term: str, limit: int = 100) -> dict[str, Any]:
+        """Cross-layer global search (history, conversation, findings, evidence,
+        reports, sessions, tasks, memory).
+
+        ``term`` is matched as a case-insensitive substring over the canonical
+        JSON of each stored record.  Results are grouped by layer, bounded, and
+        never fabricated: an empty match simply returns an empty group.
+        """
+        term = (term or "").strip()
+        if not term:
+            return {"term": term, "total": 0, "results": []}
+        needle = term.lower()
+        results: list[dict[str, Any]] = []
+
+        def matches(item: Any) -> bool:
+            try:
+                return needle in canonical(item).lower() or needle in str(item).lower()
+            except (TypeError, ValueError):
+                return needle in str(item).lower()
+
+        def add(layer: str, item_id: str | None, label: str, at: str | None, summary: str, data: Any) -> None:
+            if len(results) >= limit * 5:
+                return
+            results.append({
+                "layer": layer,
+                "id": item_id,
+                "label": label[:160],
+                "at": at,
+                "summary": summary[:240],
+                "data": data,
+            })
+
+        for op in self.store.list_history(200):
+            if matches(op):
+                first = (op.get("commands") or [{}])[0]
+                label = first.get("display") if first.get("display") else op.get("id")
+                fact = (op.get("analysis") or {}).get("fact") or ""
+                add("operations", op.get("id"), label, op.get("ended_at") or op.get("started_at"), fact, {"status": op.get("status"), "plan_id": op.get("plan_id"), "id": op.get("id")})
+
+        for conversation in self.list_conversations():
+            if matches(conversation):
+                add("conversations", conversation.get("id"), conversation.get("title"), conversation.get("updated_at"), conversation.get("status"), {"id": conversation.get("id"), "title": conversation.get("title"), "status": conversation.get("status")})
+            for message in self.list_messages(conversation["id"]):
+                if matches(message):
+                    add("messages", message.get("id"), f"{conversation.get('title')} · {message.get('role')}", message.get("created_at"), message.get("content")[:240], {"conversation_id": conversation.get("id"), "role": message.get("role"), "content": message.get("content")[:400]})
+
+        for finding in self.list_findings():
+            if matches(finding):
+                add("findings", finding.get("id"), finding.get("title"), finding.get("created_at"), finding.get("severity"), {"id": finding.get("id"), "severity": finding.get("severity"), "validation": finding.get("validation"), "task_id": finding.get("task_id")})
+
+        for artifact in self.store.list_artifacts():
+            if matches(artifact):
+                add("evidence", artifact.get("artifact_id"), artifact.get("kind"), artifact.get("created_at"), artifact.get("summary"), {"id": artifact.get("artifact_id"), "kind": artifact.get("kind"), "state": artifact.get("state"), "sha256": artifact.get("sha256")})
+
+        for report in self.list_reports():
+            if matches(report):
+                add("reports", report.get("id"), report.get("title"), report.get("created_at"), report.get("kind"), {"id": report.get("id"), "kind": report.get("kind"), "formats": report.get("formats")})
+
+        for session in self.store.list_sessions():
+            if matches(session):
+                add("sessions", session.get("id"), session.get("name"), session.get("started_at"), session.get("status"), {"id": session.get("id"), "shell": session.get("shell"), "status": session.get("status"), "cwd": session.get("cwd")})
+
+        for task in self.list_tasks(200):
+            if matches(task):
+                add("tasks", task.get("id"), task.get("request"), task.get("updated_at"), task.get("state"), {"id": task.get("id"), "state": task.get("state"), "risk": task.get("risk"), "kind": (task.get("result") or {}).get("kind")})
+
+        for memory in self.list_memories():
+            if matches(memory):
+                add("memory", memory.get("id"), memory.get("title"), memory.get("created_at"), memory.get("kind"), {"id": memory.get("id"), "kind": memory.get("kind")})
+
+        results.sort(key=lambda item: item.get("at") or "", reverse=True)
+        results = results[:limit]
+        return {"term": term, "total": len(results), "results": results}
+
     def enrich_engagement(self, item: dict[str, Any] | None) -> dict[str, Any] | None:
         if not item:
             return None

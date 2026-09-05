@@ -72,7 +72,7 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn', 'host-tools', 'mobile', 'desktop'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn', 'host-tools', 'mobile', 'desktop', 'palette', 'search', 'dashboard'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
@@ -260,6 +260,9 @@ def main(argv=None):
     sub.add_parser('deps')
     sub.add_parser('benchmark')
     sv = sub.add_parser('serve'); sv.add_argument('--bind-host', dest='bind_host', default=os.environ.get('VORTEX_HOST', '127.0.0.1')); sv.add_argument('--bind-port', dest='bind_port', type=int, default=int(os.environ.get('VORTEX_PORT', '8765'))); sv.add_argument('--token', default=os.environ.get('VORTEX_SIDECAR_TOKEN'))
+    pal = sub.add_parser('palette'); pal.add_argument('request', nargs='+')
+    se = sub.add_parser('search'); se.add_argument('term', nargs='+')
+    sub.add_parser('dashboard')
     ins = sub.add_parser('install'); ins.add_argument('--user', action='store_true', dest='user_install'); ins.add_argument('--prefix', default=None)
     tn = sub.add_parser('turn'); tn.add_argument('request')
     art = sub.add_parser('artifact'); art.add_argument('action', choices=['inspect','analyze'], nargs='?', default='inspect'); art.add_argument('path'); art.add_argument('--type', choices=['auto','nmap-xml','http-headers','text'], default='auto')
@@ -354,6 +357,25 @@ def main(argv=None):
             from backend.benchmark import run_suite
             from backend.workspace import Workspace
             emit({'benchmark': run_suite(store, Workspace(store), ExecutionManager(store), args.cwd)}, args.as_json); return 0
+        if args.subcommand == 'palette':
+            from backend.palette import run_palette
+            from backend.workspace import Workspace
+            request = ' '.join(getattr(args, 'request', []) or [])
+            if not request:
+                request = '/help'
+            emit(run_palette(store, Workspace(store), request, cwd=args.cwd, engagement_id=args.engagement_id, offline=args.offline), args.as_json)
+            return 0
+        if args.subcommand == 'search':
+            from backend.workspace import Workspace
+            term = ' '.join(getattr(args, 'term', []) or [])
+            emit({'search': Workspace(store).search_all(term)}, args.as_json)
+            return 0
+        if args.subcommand == 'dashboard':
+            from backend import dashboard
+            from backend.config import load_settings as _load_settings
+            from backend.workspace import Workspace
+            emit({'dashboard': dashboard.collect(store, Workspace(store), _load_settings())}, args.as_json)
+            return 0
         if args.subcommand == 'conversations':
             from backend.workspace import Workspace
             ws = Workspace(store)

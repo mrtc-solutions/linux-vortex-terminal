@@ -154,4 +154,13 @@ assert.ok(backend.includes('BrokenPipeError'), 'broken-pipe handling is present'
 assert.ok(backend.includes('def do_HEAD'), 'HEAD support is present');
 assert.ok(backend.includes('adapter_id = None'), 'scanner adapter_id is defensively initialized');
 
+// Intelligent command palette: a leading "/" routes to the reviewed palette
+// route. Plan commands reuse the existing reviewed planner (Guardian/approval
+// apply); query commands are read-only local lookups.
+assert.ok(workspace.includes("api('/api/palette'"), 'palette posts to the reviewed palette route');
+assert.ok(workspace.includes('submitPalette'), 'palette handler is defined');
+assert.ok(workspace.includes("text.startsWith('/')"), 'slash commands route to the palette');
+assert.ok(workspace.includes('renderPaletteResult'), 'palette query results render into the plan view');
+assert.ok(workspace.includes('submitPalette(command)'), 'palette request is passed as one string');
+
 console.log('frontend smoke tests: PASS');

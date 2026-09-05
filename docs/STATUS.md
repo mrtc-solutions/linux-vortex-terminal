@@ -84,15 +84,46 @@ There is no general silent installer in this product.
 4. Reviewed Docker/Podman sandbox execution beyond probe/inspect/log surfaces
 5. Signed `.deb` release evidence on a release-controlled VM
 
+## Intelligent terminal workbench (palette, search, dashboard)
+
+The terminal now acts as a coherent operational workspace without replacing
+the existing planner, Guardian, executor, conversation, or audit systems.
+
+- **Command palette** (`vortex palette "<request>"`, leading `/` in the chat
+  input, `POST /api/palette`). A leading `/` is a convenience command. Plan
+  commands (`/health`, `/ports`) route through the same reviewed
+  `build_plan` path, so Guardian/engagement/approval semantics are unchanged.
+  Query commands (`/history`, `/search <term>`, `/dashboard`) are read-only
+  local lookups and never execute anything.
+- **Global search** (`vortex search <term>`, `GET /api/search?q=`). Searches
+  operations, sessions, findings, artifacts, conversations/messages,
+  engagements, and reports for a substring. Nothing is fabricated; an empty
+  result is an honest absence.
+- **Terminal dashboard** (`vortex dashboard`, `GET /api/dashboard`). Live host
+  facts (distribution, kernel, memory, CPU, load, disk), tool inventory
+  (installed/catalog/blocked/unavailable), AI/model status, session count, and
+  findings. VPN is deliberately reported as `unavailable` because no reviewed
+  VPN/Secure Network Mode subsystem exists in this build.
+- **Registry metadata**. `inventory()` now reports license, installation
+  method, and declared dependencies per tool, so the palette/dashboard can
+  label tools honestly instead of guessing.
+
+Persistence, the audit hash chain, redaction, output caps, and the
+no-fabrication rule all still apply.
+
 ## Latest validation summary
 
-- `python3 -m unittest tests.test_local_ai -v` → PASS (`Ran 12 tests`)
+- `python3 -m unittest tests.test_intelligence -v` → PASS (`Ran 26 tests`)
+- `python3 -m unittest discover -s tests` → PASS (`Ran 219 tests ... OK`)
 - `python3 -m compileall -q backend cli tests && node --check ...` → PASS
-- `npm test` → PASS (`Ran 193 tests ... OK` + JS suites)
+- `npm test` → PASS (219 tests + terminal emulator/window control/frontend
+  smoke/frontend runtime smoke all PASS)
 - `npm run lint` → PASS
 - `VORTEX_REAL_ACCEPTANCE=1 ... ./tests/linux_acceptance.sh` → PASS
 - Live CLI validation for `install`, `doctor`, `health`, `deps`, `model status`,
-  and `benchmark` → PASS
+  `benchmark`, `palette`, `search`, and `dashboard` → PASS
+- Live HTTP validation for `POST /api/palette` (plan + query), `GET /api/search`,
+  and `GET /api/dashboard` → PASS
 - Live loopback local-AI validation against a stub Ollama runtime/model pool → PASS
 
 ## Bottom line
