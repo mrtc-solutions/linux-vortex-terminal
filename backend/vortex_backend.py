@@ -2597,6 +2597,29 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     return plan
 
 
+def model_settings_snapshot(settings: dict[str, Any] | None = None, *, offline: bool | None = None) -> dict[str, Any]:
+    source = dict(settings or {})
+    keys = (
+        "privacy_mode",
+        "ai_enabled",
+        "ai_verbosity",
+        "ollama_endpoint",
+        "model_primary",
+        "model_planner",
+        "model_fast",
+        "model_specialist",
+        "model_timeout_seconds",
+        "model_max_parallel",
+        "model_keepalive",
+    )
+    snapshot = {key: source.get(key) for key in keys if key in source}
+    if offline is not None:
+        snapshot["offline"] = offline is True
+    elif "offline" in source:
+        snapshot["offline"] = source.get("offline") is True
+    return snapshot
+
+
 class ExecutionManager:
     def __init__(self, store: Store, reconcile: bool = True):
         self.store = store
@@ -2612,7 +2635,7 @@ class ExecutionManager:
             except (OSError, sqlite3.Error):
                 pass
 
-    def start(self, plan: dict[str, Any], confirm: bool, approval_token: str | None = None, allow_root: bool = False, offline: bool = False) -> dict[str, Any]:
+    def start(self, plan: dict[str, Any], confirm: bool, approval_token: str | None = None, allow_root: bool = False, offline: bool = False, settings: dict[str, Any] | None = None) -> dict[str, Any]:
         if not confirm:
             raise PermissionError("confirmation required")
         # Re-read the canonical row. A caller must not be able to mutate an
@@ -2675,7 +2698,7 @@ class ExecutionManager:
         if not claimed:
             raise PolicyError(reason)
         self.store.append_audit("plan_approved", {"plan_id": plan["id"], "digest": plan["digest"]})
-        op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "network_facts": plan.get("network_facts", {}), "output_digest": None, "analysis": None}
+        op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "network_facts": plan.get("network_facts", {}), "output_digest": None, "analysis": None, "settings_snapshot": model_settings_snapshot(settings, offline=offline)}
         self.store.save_operation(op)
         self.store.append_audit("operation_started", {"operation_id": op["id"], "plan_id": plan["id"], "digest": plan["digest"], "privilege": "root-override" if allow_root else "user"})
         thread = threading.Thread(target=self._run, args=(plan, op, 0), daemon=True)
@@ -3004,6 +3027,19 @@ class ExecutionManager:
             op["facts"] = self._collect_adapter_facts(plan, op)
             op["artifacts"] = self._collect_artifacts(plan, op)
             op["analysis"] = make_analysis(plan, op)
+            advisory_workers = lambda _value: [{"id": "local-model", "state": "unavailable", "role": "advisory only", "evidence_used": False}]
+            try:
+                settings_now = dict(_load("config").load_settings())
+                settings_now.update(op.get("settings_snapshot") or {})
+                router = _load("models.router")
+                local_ai = router.advise(plan.get("request", ""), plan=plan, operation=op, phase="interpret", settings=settings_now)
+                advisory_workers = router.advisory_workers
+            except Exception as exc:
+                local_ai = {"state": "unavailable", "message": "", "error": redact(str(exc))[:200], "responses": [], "route": {}, "fuzzy": {"confidence": "unavailable"}, "synthesis": {"unknowns": "Local AI interpretation failed."}}
+            op["analysis"]["local_ai"] = local_ai
+            base_workers = [item for item in (op.get("workers") or []) if item.get("id") != "local-model"]
+            op["workers"] = base_workers + advisory_workers(local_ai)
+            op["analysis"]["workers"] = op["workers"]
             op["analysis"]["next_steps"] = analysis_next_steps(plan, op)
             self.store.update_operation(op)
             self.store.append_audit("operation_finished", {"operation_id": op["id"], "plan_id": plan["id"], "status": op["status"], "output_digest": op["output_digest"]})
@@ -3238,6 +3274,7 @@ def capabilities_document() -> dict[str, Any]:
             "episode-observe-act-evaluate",
             "nuclei-ffuf-nikto-amass-gobuster-adapters",
             "host-tool-discovery",
+            "local-ai-advisory-routing",
             "android-apk-client",
             "mit-license",
         ],
@@ -3916,7 +3953,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 settings = _load("config").load_settings()
                 offline = settings.get("offline") is True or self._flag(body, "offline")
                 # HTTP never grants UID 0 override; only an explicit CLI --allow-root may.
-                op = self.executor.start(plan, self._flag(body, "confirm"), self._text(body, "approval_token"), False, offline); return self._json(202, {"operation": op})
+                op = self.executor.start(plan, self._flag(body, "confirm"), self._text(body, "approval_token"), False, offline, settings=settings); return self._json(202, {"operation": op})
             if path == "/api/engagements":
                 raw_targets = body.get("targets", [])
                 if raw_targets is None:

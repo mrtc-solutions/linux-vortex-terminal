@@ -1,85 +1,102 @@
 # Current implementation status
 
-VORTEX 0.2.19 is a real Linux application. Production paths use installed host
-tools and observed output only. Test doubles exist only inside tests.
+VORTEX 0.2.21 is a real Linux application. Production paths use installed host
+tools, typed argv, and observed output only. Test doubles exist only inside
+controlled tests.
 
-**Python tests + JS terminal, window-control, and frontend suites: passing.**
+**Automated validation is passing:** 193 Python tests, plus JS terminal,
+window-control, frontend smoke, and frontend runtime smoke suites.
 
-## 0.2.19 — host tools and Android APK
+## 0.2.21 — local-AI-first advisory routing and install-flow audit
 
-- Live PATH discovery for Kali/Linux tools, including newly installed binaries.
-- Operator setting `host_tool_access` (default off) lets the agent plan discovered tools through Guardian.
-- Android APK client: sync live frontend, sign, download. Same HTTP API as the workbench.
-- MIT license surfaced in the UI, API, APK, and `LICENSES.md`.
+This round focused on the plan follow-up: re-review the app, investigate the
+reported tool-installation failure, test the whole reachable surface, and fix
+any remaining inaccuracies.
 
-## Audit round (2026-08-28)
+### What was implemented or tightened
 
-A full repository audit was run against the actual source and runtime rather
-than against the README. Four genuine defects were found and fixed, each with a
-regression test. No feature was removed and no subsystem was rewritten.
+- Local-AI-first advisory routing remains loopback-only and non-authoritative.
+- Dependency inventory now covers Node.js, npm, pnpm, yarn, Go, Docker/Podman,
+  reviewed wordlists, Ollama runtime, and the local model pool.
+- Dependency proposals now distinguish:
+  - reviewed apt-plan requests such as `install package <pkg>`
+  - manual Ollama bootstrap guidance
+  - manual local model-pool pull guidance
+- Health/setup checks now surface Node.js, npm, pnpm, yarn, Go, Ollama, and
+  model-pool readiness.
+- Real read-only acceptance now treats an unavailable `systemctl` bus in this
+  sandbox as an honest sandbox limitation instead of a false app failure.
 
-Full write-up: [`AUDIT_REPORT_2026-08-28.md`](AUDIT_REPORT_2026-08-28.md).
+### Defects found in the latest audit pass
 
-| # | Defect | Severity | Root cause | Fix |
-|---|---|---|---|---|
-| 1 | Exclusion-list check crashed in package import context | High | `from security.scope import excluded` only resolves when `backend/` is on `sys.path`; a `backend.security.guardian` consumer raised `ModuleNotFoundError` before the exclusion loop | `_load_scope_excluded()` resolves under all import contexts and Guardian fails closed if it cannot load |
-| 2 | Guardian's engagement gate could be bypassed | High | The gate only fired for `kind in {authorized_engagement, ssh_diagnostics}`; a network-effecting command under any other plan kind reached `decision=approve` with no engagement | Guardian now recomputes the requirement from the typed command specs (`guardian.requires_engagement`), mirroring `plan_requires_engagement` |
-| 3 | Operations stuck `running` forever after a crash | Medium | Nothing reconciled operation rows at startup, so their tasks stayed `EXECUTING` permanently | `Store.reconcile_stale_operations()` + `Workspace.reconcile_orphaned_tasks()` mark them `unknown_after_crash` / `PAUSED` |
-| 4 | Replan budget was not enforced across iterations | Medium | The `depth` counter was never passed through the executor thread, so every follow-up re-entered at depth 0 | Budget persisted on the task result with duplicate-plan digest detection |
-
-Verified working during the audit and left unchanged: `shell=False` argv
-execution, PTY lifecycle, approval-token single-use and replay rejection,
-executable identity pinning, audit hash-chain tamper detection (payload edit,
-row delete, event-type change all detected), path-traversal rejection, STOP ALL,
-apt/systemd preflight gating, and honest UNAVAILABLE for every missing tool.
+| # | Defect | Why it mattered | Fix |
+|---|---|---|---|
+| 1 | Per-turn execution could lose the intended Ollama settings snapshot | A saved or per-turn Ollama endpoint was not always used consistently across execution analysis | Settings propagation was fixed across backend execution/orchestration/CLI paths and covered by regression tests |
+| 2 | Dependency inventory counted `blocked` runtimes like Node/npm/yarn as missing installs | It looked like VORTEX had failed to install tools even when the binaries were already present on the host | Blocked runtimes are now reported as present-but-flagged, with security flags preserved |
+| 3 | Dependency inventory ignored saved Ollama settings | `deps` could report the wrong endpoint/runtime state | Inventory now loads saved runtime settings before probing model status |
+| 4 | Health/setup checks treated blocked runtimes as unavailable | First-run checks could falsely imply Node/npm/yarn/Go were absent rather than review-needed | Health now reports `warning` for blocked paths and setup checks accept that state honestly |
 
 ## Directive coverage
 
 | Area | State |
 |---|---|
 | Real execution / PTY / NL Linux (reviewed adapters) | Done + tested |
-| os-release / lscpu adapters | Done + tested |
-| Guardian, risk policy, kill switch | Done + tested |
-| Engagements / scope / excluded targets / close | Done + tested |
-| Tasks (VTX-*), resume, pause, reject, events, replan | Done + tested |
-| Conversations, branch, export, message search | Done + tested |
+| Guardian, risk policy, STOP ALL | Done + tested |
+| Engagements / scope / exclusions / close | Done + tested |
+| Tasks, resume, pause, reject, replay, replan bounds | Done + tested |
+| Conversations, branch, export, search | Done + tested |
 | Tool registry live probes | Done + tested |
-| Agent adapters + discovery (9 third-party + builtin `vortex-local`) | Done + tested; third-party consult = REQUIRES CONFIGURATION |
-| Reports MD/HTML/JSON/PDF + assessment (engagement-scoped) | Done + tested |
+| Agent council discovery (builtin + third-party probes) | Done + tested |
+| Reports MD/HTML/JSON/PDF + assessment scope | Done + tested |
 | Memory / procedures / experiences | Done + tested |
-| Workspace SEND (`/api/workspace/turn`) | Done + tested |
-| SSE operations + sessions | Done |
-| Secret slots (values never returned) | Done + tested |
-| Static path-traversal rejection | Done + tested |
-| Capabilities document (`GET /api/capabilities`) | Done + tested |
-| Missing-dependency window + INSTALL buttons | Done + tested (apt plans / operator proposals; no silent install) |
-| Linux desktop + first-run/dependency/terminal window controls | Done + JS tested; display-server smoke remains a release-host check |
-| Aggregate inventory latency (no third-party version fan-out) | Done + tested |
-| CLI `tasks pause` / `tasks reject` / `deps` | Done + tested |
-| Observe → typed action → host-state reward (WAA-inspired, Linux argv) | Done + tested |
-| Built-in `vortex-local` advisor (always present, never executes) | Done + tested |
-| nuclei / ffuf / nikto / amass / gobuster execution adapters | Done + tested; host binary + engagement required |
-| User-local install, `vortex serve`, `vortex turn`, USER_GUIDE | Done + tested |
-| Session EventSource | Done (poll fallback remains) |
-| Bounded replanning + duplicate-plan detection | Done + tested |
-| Crash reconciliation of stale operations/tasks | Done + tested |
+| Missing-dependency inventory and reviewed install proposals | Done + tested |
+| User-local install, `vortex serve`, `vortex turn` | Done + tested |
+| Android APK client | Done + tested |
+| Linux desktop .deb packaging | Done + tested |
+| Local-AI-first Ollama advisory routing | Done + tested; advisory only, loopback only |
+| Ollama runtime/model-pool dependency visibility | Done + tested |
+| Wordlist dependency proposal | Done + tested |
+| Node/npm/pnpm/yarn/Go health/setup visibility | Done + tested |
+| Docker/Podman runtime probe | Done + tested; execution remains limited |
+| Third-party agent non-interactive consult execution | Not implemented |
+| Docker/Podman sandbox execution | Not implemented |
+| sqlmap / msf execution adapters | Not implemented |
 | MCP | Not implemented |
 | Remote graphical sessions | Not implemented |
-| Ollama loopback probe | Done; unavailable here |
-| Docker isolation **execution** | Probe only; runtime missing here |
-| Plugin code loading | Deliberately not implemented |
-| FastAPI / PostgreSQL / pgvector | Intentionally not added |
-| sqlmap / msf execution | Honest UNAVAILABLE; no command fabricated |
-| Signed 1.0 `.deb` | Not a 1.0 gate pass |
 
-**Plan to make “only host tools remain”:** `docs/READY_WHEN_TOOLS_EXIST.md`
+## What the earlier “install failure” really was
 
-## Remaining host / release gates (cannot be faked)
+There is no general silent installer in this product.
 
-These stay UNAVAILABLE until the host has the software or a release VM:
+- `scripts/install-user.sh` writes only a launcher.
+- `vortex install --user` writes only a launcher.
+- Reviewed distro packages become reviewed apt plans.
+- Those plans still require an operator/admin to execute them separately.
+- Ollama and third-party agents remain operator-installed.
+- Binaries found in unsafe paths may show as `blocked`, which means “present but
+  not silently trusted,” not “missing because install failed.”
 
-1. Reviewed non-interactive consult APIs for third-party agents that are actually installed
-2. Disposable-VM apt/systemd mutation acceptance
-3. Full xterm + durable PTY attach across sidecar restarts
-4. Signed `.deb` install/upgrade/uninstall evidence
-5. Scanner execution on a host that actually has nuclei/ffuf/nmap and reviewed wordlists (adapters exist; this host does not)
+## Remaining host / release gates that cannot be faked
+
+1. Real reviewed apt/systemd mutation on a host you administer
+2. Real default Ollama runtime at `http://127.0.0.1:11434` on this sandbox host
+3. Reviewed third-party agent consult execution for actual installed CLIs
+4. Reviewed Docker/Podman sandbox execution beyond probe/inspect/log surfaces
+5. Signed `.deb` release evidence on a release-controlled VM
+
+## Latest validation summary
+
+- `python3 -m unittest tests.test_local_ai -v` → PASS (`Ran 12 tests`)
+- `python3 -m compileall -q backend cli tests && node --check ...` → PASS
+- `npm test` → PASS (`Ran 193 tests ... OK` + JS suites)
+- `npm run lint` → PASS
+- `VORTEX_REAL_ACCEPTANCE=1 ... ./tests/linux_acceptance.sh` → PASS
+- Live CLI validation for `install`, `doctor`, `health`, `deps`, `model status`,
+  and `benchmark` → PASS
+- Live loopback local-AI validation against a stub Ollama runtime/model pool → PASS
+
+## Bottom line
+
+Everything reachable in this sandbox for the recent plan is green. The remaining
+unknowns are real environment limits outside this sandbox, not untested claims
+inside the codebase.

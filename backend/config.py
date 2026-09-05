@@ -16,6 +16,15 @@ DEFAULTS = {
     "developer_mode": False,
     "matrix": "medium",
     "ollama_endpoint": "http://127.0.0.1:11434",
+    "ai_enabled": True,
+    "ai_verbosity": "balanced",
+    "model_primary": "phi4-mini:3.8b",
+    "model_planner": "qwen3:4b",
+    "model_fast": "llama3.2:3b",
+    "model_specialist": "gemma3:4b",
+    "model_timeout_seconds": 12,
+    "model_max_parallel": 2,
+    "model_keepalive": "0m",
     "first_run_complete": False,
     "host_tool_access": False,
 }
@@ -39,6 +48,10 @@ def _typed_value(key: str, value: Any) -> Any:
     if expected is bool:
         if not isinstance(value, bool):
             raise ValueError(f"{key} must be a boolean")
+        return value
+    if expected is int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{key} must be an integer")
         return value
     if expected is str:
         if not isinstance(value, str):
@@ -69,6 +82,12 @@ def load_settings() -> dict[str, Any]:
         data["offline"] = True
     if data.get("profile") not in {"safe", "standard", "expert"}:
         data["profile"] = "safe"
+    if data.get("privacy_mode") not in {"local", "hybrid", "cloud"}:
+        data["privacy_mode"] = "local"
+    if data.get("ai_verbosity") not in {"brief", "balanced", "detailed"}:
+        data["ai_verbosity"] = "balanced"
+    data["model_timeout_seconds"] = max(2, min(int(data.get("model_timeout_seconds") or 12), 60))
+    data["model_max_parallel"] = max(1, min(int(data.get("model_max_parallel") or 2), 3))
     data["auto_low_risk"] = data["profile"] in {"standard", "expert"}
     data["auto_medium_risk"] = False
     data["allow_root"] = False
@@ -92,6 +111,10 @@ def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
         current["privacy_mode"] = "local"
     if current["profile"] not in {"safe", "standard", "expert"}:
         current["profile"] = "safe"
+    if current.get("ai_verbosity") not in {"brief", "balanced", "detailed"}:
+        current["ai_verbosity"] = "balanced"
+    current["model_timeout_seconds"] = max(2, min(int(current.get("model_timeout_seconds") or 12), 60))
+    current["model_max_parallel"] = max(1, min(int(current.get("model_max_parallel") or 2), 3))
     # Safe always confirms. HTTP/settings cannot unlock medium auto-run or root.
     current["auto_low_risk"] = current["profile"] in {"standard", "expert"}
     current["auto_medium_risk"] = False

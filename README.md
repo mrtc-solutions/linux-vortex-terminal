@@ -7,8 +7,12 @@ Linux-native, AI-assisted authorized cybersecurity and Linux operations workbenc
 VORTEX turns a natural-language objective into an inspectable plan, checks tools
 actually installed on the host, evaluates the plan with an independent Guardian,
 runs only typed argv through one local Python authority, and records observed
-evidence. Missing tools, agents, Docker, and models are reported as unavailable.
-Nothing is fabricated to make the UI look complete.
+evidence. Local-AI-first advisory routing is used only when a loopback-only
+Ollama runtime and the recommended local model pool are healthy; deterministic
+planning and Guardian remain authoritative. Missing tools, agents, Docker, and
+models are reported as unavailable, and tools found in unsafe/user-writable
+locations are shown as present-but-blocked for review rather than silently
+trusted. Nothing is fabricated to make the UI look complete.
 
 > **Authorized use only.** VORTEX is for systems, networks, and artifacts you
 > own or are explicitly authorized to assess.
@@ -31,6 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ./vortex tools
 ./vortex agents --json
 ./vortex deps --json
+./vortex model status --json
 ./vortex sandbox --json
 ./vortex plan "system health"
 ./vortex plan "whoami"
@@ -47,6 +52,12 @@ npm run preview
 Step-by-step install and use: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
 Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
+
+Install semantics are explicit:
+- `vortex install --user` and `scripts/install-user.sh` write only a user-local launcher.
+- **Dependencies → INSTALL** builds a reviewed apt plan or shows operator steps; it never silently installs packages.
+- Root-required reviewed plans are executed separately with `sudo vortex --allow-root run <plan-id>`.
+- Ollama and model pulls stay operator-controlled; VORTEX only probes loopback, reports status, and suggests commands.
 
 ## What is implemented and tested
 
@@ -78,14 +89,14 @@ UNAVAILABLE), or **Not implemented**.
 | Prompt-injection defense (tool output is data, never instructions) | Implemented + tested |
 | MCP server / client | Not implemented |
 | Remote graphical (VNC/RDP/noVNC) sessions | Not implemented |
-| Missing-dependency window / `vortex deps` | Implemented + tested; no silent install |
+| Missing-dependency window / `vortex deps` | Implemented + tested; reviewed apt plans/operator proposals only; no silent install |
 | Reports Markdown / HTML / JSON / PDF from observed operations | Implemented + tested |
 | System inventory report from doctor + tool probes | Implemented |
 | Memory, experiences, validated procedures | Implemented + tested |
-| First-run live requirement checks | Implemented |
+| First-run live requirement checks | Implemented; blocked runtimes show as warnings instead of false missing installs |
 | Offline mode, privacy mode, lab-mode flag | Implemented |
 | STOP ALL kill switch | Implemented + tested |
-| Local Ollama loopback probe | Implemented; unavailable unless a server is running |
+| Local-AI-first advisory routing via Ollama loopback + model pool | Implemented + tested; advisory only, unavailable unless the loopback runtime and recommended models are healthy |
 | Docker/Podman isolation probe | Implemented; UNAVAILABLE when no runtime is installed |
 | Plugin JSON manifests (no plugin code execution) | Implemented |
 | Security tests: injection, prompt-injection text, Guardian | Implemented + tested |
@@ -121,7 +132,10 @@ Verified absent on this host at the time of the last audit: `nmap`, `nuclei`,
 `ffuf`, `nikto`, `amass`, `gobuster`, `sqlmap`, `msfconsole`, `docker`,
 `podman`, `ollama`, and all nine third-party agent CLIs. Every one of those
 reports UNAVAILABLE rather than a fabricated result. Present and exercised:
-`git`, `ss`, `ip`, `curl`, `ssh`, `ps`, `df`, `systemctl`, `journalctl`.
+`git`, `ss`, `ip`, `curl`, `ssh`, `ps`, `df`, `systemctl`, `journalctl`. On this
+host, `node`, `npm`, and `yarn` were additionally discovered under
+`/usr/local/bin` but flagged `blocked` by path-safety policy, so VORTEX reports
+them as present for review rather than as trusted installs.
 
 ## Trust model
 

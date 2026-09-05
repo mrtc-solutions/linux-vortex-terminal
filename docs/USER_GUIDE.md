@@ -31,15 +31,15 @@ Installing VORTEX does **not** apt-install Kali tools, Docker, or agents.
 ```bash
 git clone https://github.com/mrtc-solutions/linux-vortex-terminal.git
 cd linux-vortex-terminal
-git checkout arena/01a048e3-linux-vortex-terminal
+git checkout arena/01a06dc4-linux-vortex-terminal
 ```
 
 If you already have a clone:
 
 ```bash
 git fetch origin
-git checkout arena/01a048e3-linux-vortex-terminal
-git pull --ff-only origin arena/01a048e3-linux-vortex-terminal
+git checkout arena/01a06dc4-linux-vortex-terminal
+git pull --ff-only origin arena/01a06dc4-linux-vortex-terminal
 ```
 
 ## 3. Verify the build (recommended first)
@@ -69,7 +69,9 @@ All Python tests must print `OK`. The terminal emulator prints `PASS`.
 ## 4. Install as a real user-local app (no root)
 
 This writes `~/.local/bin/vortex` pointing at this source tree. It does
-**not** install apt packages and never asks for a sudo password.
+**not** install apt packages and never asks for a sudo password. Reviewed
+package installs stay separate: VORTEX builds a plan first, then an
+administrator can execute that reviewed plan with `sudo vortex --allow-root run <plan-id>`.
 
 ```bash
 ./vortex install --user --json
@@ -99,9 +101,9 @@ Remove that directory if you also want history, tasks, and the audit DB gone.
 
 ```bash
 # requires dpkg-deb on a Linux builder
-VORTEX_VERSION=0.2.0 packaging/deb/build.sh
+VORTEX_VERSION=0.2.21 packaging/deb/build.sh
 # then, as an administrator of that machine:
-# sudo dpkg -i dist/deb/linux-vortex-terminal_0.2.0_all.deb
+# sudo dpkg -i dist/deb/linux-vortex-terminal_0.2.21_all.deb
 ```
 
 The package does not start a daemon, create user data, or install agents.
@@ -114,6 +116,7 @@ vortex health --json
 vortex tools
 vortex agents --json
 vortex deps --json
+vortex model status --json
 vortex sandbox --json
 vortex db integrity
 vortex audit verify
@@ -122,7 +125,10 @@ vortex mobile apk --sidecar-url http://127.0.0.1:8765/
 ```
 
 Read the `state` fields. `absent` / `UNAVAILABLE` means the binary is not
-on this host. That is expected in a minimal sandbox.
+on this host. `blocked` or a component `warning` means VORTEX found the tool
+but refused to silently trust the path because of path-safety policy; reinstall
+is not automatically required. That is expected in some sandboxes and custom
+`/usr/local/bin` setups.
 
 `vortex host-tools` walks only safe PATH directories and reports Kali-known
 and newly installed binaries. Planning those tools still requires **Settings →
@@ -135,6 +141,30 @@ download. The phone talks to this sidecar over the same HTTP API as the
 desktop workbench.
 
 VORTEX is MIT-licensed (`LICENSE`, `GET /api/license`, Settings → License).
+
+### Optional local AI (Ollama, loopback only)
+
+VORTEX is local-AI-first only in an **advisory** sense. Deterministic planning,
+Guardian, and the typed executor remain authoritative.
+
+- Default endpoint: `http://127.0.0.1:11434`
+- Endpoint is clamped to loopback-only settings
+- Recommended local model pool: `phi4-mini:3.8b`, `qwen3:4b`, `llama3.2:3b`
+- Optional specialist: `gemma3:4b`
+
+Check live status:
+
+```bash
+vortex model status --json
+vortex deps --json
+vortex benchmark --json
+```
+
+If `runtime:ollama` or `data:ollama-models` is missing in Dependencies, VORTEX
+shows operator steps such as `ollama serve`, `ollama pull <model>`, and
+`curl http://127.0.0.1:11434/api/version`. It does **not** run an upstream
+installer, does **not** pull models for you, and does **not** send model traffic
+outside loopback.
 
 ## 6. Use it from the terminal (no browser)
 
@@ -191,7 +221,10 @@ In the UI:
 4. Click **APPROVE & EXECUTE** unless policy auto-ran a low-risk local command.
 5. Read **observed** stdout in the live output pane. That is host output.
 6. Open **Dependencies** for missing tools. **INSTALL** builds an apt *plan*
-   or an operator proposal. VORTEX never silent-installs.
+   or an operator proposal. VORTEX never silent-installs. If the reviewed plan
+   needs root, execute it separately with `sudo vortex --allow-root run <plan-id>`.
+7. When local Ollama is healthy, the plan/result views also show a **Local AI**
+   interpretation block. That text is advisory only and never authorizes execution.
 
 ## 8. Optional desktop window (Electron)
 
@@ -239,8 +272,9 @@ Reviewed security adapters (tool must be installed; otherwise UNAVAILABLE):
 | `ffuf` / `gobuster` | content discovery | engagement + URL + existing host wordlist |
 
 Wordlist: pass `wordlist /absolute/path` or have a standard Kali path such as
-`/usr/share/wordlists/dirb/common.txt`. If no wordlist exists, VORTEX does
-not invent one.
+`/usr/share/wordlists/dirb/common.txt`. If no reviewed wordlist exists, VORTEX
+does not invent one; Dependencies can instead propose a reviewed apt plan for a
+distro wordlist package such as `seclists`.
 
 `sqlmap` and `msfconsole` are catalogued and probed only. There is no
 execution adapter.
@@ -250,9 +284,11 @@ execution adapter.
 Installing VORTEX on Kali does **not** install the rest of Kali. Kali
 already has many tools; VORTEX only probes `PATH` and uses what is present.
 
-In this Arena sandbox: Debian 12, no Docker/Podman, no Ollama, no third-party
-agent CLIs, typically no nmap. Local Linux adapters (whoami, df, ss, git,
-systemd inspect, os-release, lscpu, …) work because those binaries exist.
+In this Arena sandbox: Debian 12, no Docker/Podman, no default Ollama runtime,
+no third-party agent CLIs, typically no nmap. Local Linux adapters (whoami, df,
+ss, git, systemd inspect, os-release, lscpu, …) work because those binaries
+exist. On the audited host, `node`, `npm`, and `yarn` were discoverable under
+`/usr/local/bin` but reported as blocked-by-review rather than trusted installs.
 
 ## 11. If VORTEX restarts mid-operation
 
