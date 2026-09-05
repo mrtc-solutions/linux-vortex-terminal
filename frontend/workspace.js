@@ -305,13 +305,17 @@
       const tools = value?.tools || {};
       return `tools ${tools.installed || 0}/${tools.catalog || 0} · sessions ${value?.session?.running || 0} running · findings ${value?.findings?.total || 0} · vpn ${value?.vpn?.state || 'unavailable'}`;
     }
+    if (key === 'model') {
+      const local = value?.local || {};
+      return `local AI ${local.state || 'disabled'} · endpoint ${local.endpoint || 'none'} · ${(local.installed_candidates || []).length} model candidate(s)`;
+    }
     return '→';
   }
 
   function renderPaletteResult(data, meta) {
     const el = $('plan-content');
     if (!el || typeof el === 'undefined') return;
-    const keys = ['history','sessions','findings','artifacts','reports','tasks','engagements','search','dashboard'];
+    const keys = ['history','sessions','findings','artifacts','reports','tasks','engagements','search','dashboard','model'];
     const rows = keys.filter(k => data[k] !== undefined).map(k => `<li><strong>${esc(k)}</strong> · ${esc(paletteRow(k, data[k]))}</li>`);
     el.className = 'plan-card';
     if (!rows.length) {

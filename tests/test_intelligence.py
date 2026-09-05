@@ -91,12 +91,37 @@ class PaletteTests(unittest.TestCase):
         self.assertNotIn("operation", res)
         self.assertIsNone(res.get("operation"))
 
+    def test_external_domains_route_honestly_and_never_fabricate(self):
+        # /scan, /osint, /gis, /satellite route through the reviewed planner.
+        # Without an engagement/binary/adapter they must stay clarified or
+        # unavailable -- never a fabricated scan, location, or imagery.
+        for command in ("/scan", "/osint", "/gis", "/satellite"):
+            result = run_palette(self.store, self.workspace, command, cwd=self.cwd)
+            self.assertEqual(result["palette"]["kind"], "plan")
+            self.assertTrue(result["palette"]["command"])
+            self.assertFalse(result["plan"]["commands"],
+                             f"{command} must not produce an executable command when unsupported")
+
+    def test_query_aliases_and_model(self):
+        # /report and /session are read-only aliases; /ai is a read-only model
+        # lookup that exposes a real (possibly disabled) local state.
+        report = run_palette(self.store, self.workspace, "/report", cwd=self.cwd)
+        self.assertEqual(report["palette"]["kind"], "query")
+        self.assertIn("reports", report)
+        session = run_palette(self.store, self.workspace, "/session", cwd=self.cwd)
+        self.assertEqual(session["palette"]["kind"], "query")
+        self.assertIn("sessions", session)
+        ai = run_palette(self.store, self.workspace, "/ai", cwd=self.cwd)
+        self.assertEqual(ai["palette"]["kind"], "query")
+        model = ai.get("model") or {}
+        self.assertIn("local", model)
+
     def test_available_commands_are_reviewed(self):
         # Every palette plan command must map to a friendly, reviewed request.
         for cmd in _available_commands():
             if cmd == "/explain <command>":
                 continue
-            if cmd in ("/history", "/sessions", "/findings", "/evidence", "/reports", "/tasks", "/engagements", "/search", "/dashboard"):
+            if cmd in ("/history", "/sessions", "/session", "/findings", "/evidence", "/reports", "/report", "/tasks", "/engagements", "/search", "/dashboard", "/ai"):
                 continue
             meta = expand(cmd)
             self.assertEqual(meta["kind"], "plan", cmd)

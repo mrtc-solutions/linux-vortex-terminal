@@ -42,6 +42,15 @@ PALETTE: dict[str, dict[str, Any]] = {
     "/usb": {"kind": "plan", "request": "show usb devices"},
     "/dns": {"kind": "plan", "request": "show dns servers"},
     "/containers": {"kind": "plan", "request": "inspect docker containers"},
+    # Authorized-security and external-intelligence domains.  These route
+    # through the reviewed planner so a missing binary, missing engagement, or
+    # absent adapter is reported honestly as clarified/unavailable -- never a
+    # fabricated scan or location.  A trailing arg supplies the target/host.
+    "/scan": {"kind": "plan", "request": "scan"},
+    "/osint": {"kind": "plan", "request": "osint"},
+    "/gis": {"kind": "plan", "request": "gis"},
+    "/satellite": {"kind": "plan", "request": "satellite"},
+    "/analyze": {"kind": "plan", "request": "analyze"},
 }
 
 # Read-only /query-style commands.  Each maps to a workspace/store lookup; the
@@ -49,13 +58,16 @@ PALETTE: dict[str, dict[str, Any]] = {
 QUERY_PALETTE: dict[str, str] = {
     "/history": "history",
     "/sessions": "sessions",
+    "/session": "sessions",
     "/findings": "findings",
     "/evidence": "evidence",
     "/reports": "reports",
+    "/report": "reports",
     "/tasks": "tasks",
     "/engagements": "engagements",
     "/search": "search",
     "/dashboard": "dashboard",
+    "/ai": "model",
 }
 
 
@@ -132,6 +144,14 @@ def _run_query(store: Any, workspace: Any, query: str, term: str) -> tuple[str, 
         except ImportError:
             from backend.dashboard import collect as dashboard_collect
         return "dashboard", dashboard_collect(store, workspace)
+    if query == "model":
+        try:
+            from config import load_settings
+            from models.router import model_status
+        except ImportError:
+            from backend.config import load_settings
+            from backend.models.router import model_status
+        return "model", model_status(load_settings())
     return query, []
 
 
