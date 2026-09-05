@@ -142,18 +142,30 @@ already provided by the pipeline.
 
 ## Latest validation summary
 
-- `python3 -m unittest tests.test_intelligence -v` → PASS (`Ran 32 tests`)
-- `python3 -m unittest discover -s tests` → PASS (`Ran 225 tests ... OK`)
-- `python3 -m compileall -q backend cli tests && node --check ...` → PASS
-- `npm test` → PASS (225 tests + terminal emulator/window control/frontend
+- `python3 -m unittest discover -s tests` → PASS (`Ran 239 tests ... OK`)
+- `npm test` → PASS (239 tests + terminal emulator/window control/frontend
   smoke/frontend runtime smoke all PASS)
 - `npm run lint` → PASS
 - `VORTEX_REAL_ACCEPTANCE=1 ... ./tests/linux_acceptance.sh` → PASS
-- Live CLI validation for `install`, `doctor`, `health`, `deps`, `model status`,
-  `benchmark`, `palette`, `search`, and `dashboard` → PASS
-- Live HTTP validation for `POST /api/palette` (plan + query), `GET /api/search`,
-  and `GET /api/dashboard` → PASS
-- Live loopback local-AI validation against a stub Ollama runtime/model pool → PASS
+- Live sidecar HTTP probe (36 endpoints, all 200) + `POST /api/workspace/turn`,
+  `/api/plan`, `/api/palette` (plan + query), `/api/engagements`, `/api/mobile/apk`,
+  `/api/desktop/deb` → PASS
+- Live CLI validation (24 subcommands: `doctor`, `health`, `tools`, `adapters`,
+  `agents`, `deps`, `model status`, `sandbox`, `db integrity`, `audit verify`,
+  `dashboard`, `assets`, `search`, `palette`, `plan`, `history`, `memory`,
+  `learning`, `tasks`, `conversations`, `plugins`, `benchmark`, `host-tools`) → PASS
+- Real end-to-end run (plan → `linux.system.identity` → real `whoami` output →
+  SHA-256 evidence digest → analysis `EXECUTED/PASS` → report md/html/json/pdf →
+  conversation → valid audit chain) → PASS
+- Live loopback local-AI state check (no runtime → honest `unavailable`) → PASS
+
+## Final audit report
+
+See `docs/FINAL_AUDIT_REPORT.md` for the per-section (§1–§62) 10/10 validation
+matrix. Every capability that can run in this sandbox is green and verified
+against real host data; capabilities that require an external provider, a real
+Ollama runtime, or a physical device are reported as **NOT TESTABLE IN SANDBOX**
+rather than pretended to work.
 
 ## Bottom line
 
