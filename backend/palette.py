@@ -40,6 +40,7 @@ PALETTE: dict[str, dict[str, Any]] = {
     "/git": {"kind": "plan", "request": "git status"},
     "/mounts": {"kind": "plan", "request": "show mounts"},
     "/usb": {"kind": "plan", "request": "show usb devices"},
+    "/device": {"kind": "plan", "request": "show usb devices"},
     "/dns": {"kind": "plan", "request": "show dns servers"},
     "/containers": {"kind": "plan", "request": "inspect docker containers"},
     # Authorized-security and external-intelligence domains.  These route
