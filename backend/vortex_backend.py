@@ -3588,6 +3588,24 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/findings":
                 return self._json(200, {"findings": self.workspace.list_findings()})
+            if path == "/api/assets/graph":
+                query = urllib.parse.parse_qs(parsed.query)
+                limit = self._query_text(query, "limit", "200", limit=5)
+                try:
+                    limit_i = int(limit)
+                except (TypeError, ValueError):
+                    limit_i = 200
+                return self._json(200, {"graph": self.workspace.asset_graph(max(1, min(limit_i, 500)))})
+            if path == "/api/search":
+                query = urllib.parse.parse_qs(parsed.query)
+                return self._json(200, {"search": self.workspace.search_all(self._query_text(query, "q", "", limit=200))})
+            if path == "/api/dashboard":
+                load_settings = _load("config").load_settings
+                collect = _load("dashboard").collect
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_probe_lookups()
+                return self._json(200, {"dashboard": collect(self.store, self.workspace, load_settings())})
             if path == "/api/learning/agents":
                 return self._json(200, {"scores": self.workspace.agent_scores()})
             if path == "/api/tools/route":
@@ -3944,6 +3962,15 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not isinstance(request, str):
                     raise ValueError("request must be a string")
                 plan = build_plan(self.store, request, self._optional_str(body, "cwd"), self._optional_str(body, "engagement_id"), self._flag(body, "offline")); return self._json(200, {"plan": plan})
+            if path == "/api/palette":
+                run_palette = _load("palette").run_palette
+                request = self._text(body, "request")
+                if not request:
+                    raise ValueError("palette request is required")
+                if len(request) > 8000:
+                    raise ValueError("palette request is too long")
+                result = run_palette(self.store, self.workspace, request, cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), offline=self._flag(body, "offline"))
+                return self._json(200, result)
             if path == "/api/execute":
                 plan_id = self._optional_str(body, "plan_id")
                 if not plan_id:

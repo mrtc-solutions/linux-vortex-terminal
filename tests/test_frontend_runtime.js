@@ -128,8 +128,9 @@ const expectLoad = {
   learning: '/api/learning',
   system: '/api/system/health',
   settings: '/api/settings',
+  assets: '/api/assets/graph',
 };
-for (const view of ['overview', 'conversations', 'terminal', 'tasks', 'reports', 'engagements', 'activity', 'agents', 'tools', 'memory', 'learning', 'system', 'settings']) {
+for (const view of ['overview', 'conversations', 'terminal', 'tasks', 'reports', 'engagements', 'activity', 'agents', 'tools', 'memory', 'learning', 'system', 'settings', 'assets']) {
   global.setView(view);
 }
 for (const [view, endpoint] of Object.entries(expectLoad)) {

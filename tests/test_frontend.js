@@ -154,4 +154,29 @@ assert.ok(backend.includes('BrokenPipeError'), 'broken-pipe handling is present'
 assert.ok(backend.includes('def do_HEAD'), 'HEAD support is present');
 assert.ok(backend.includes('adapter_id = None'), 'scanner adapter_id is defensively initialized');
 
+// Intelligent command palette: a leading "/" routes to the reviewed palette
+// route. Plan commands reuse the existing reviewed planner (Guardian/approval
+// apply); query commands are read-only local lookups.
+assert.ok(workspace.includes("api('/api/palette'"), 'palette posts to the reviewed palette route');
+assert.ok(workspace.includes('submitPalette'), 'palette handler is defined');
+assert.ok(workspace.includes("text.startsWith('/')"), 'slash commands route to the palette');
+assert.ok(workspace.includes('renderPaletteResult'), 'palette query results render into the plan view');
+assert.ok(workspace.includes('submitPalette(command)'), 'palette request is passed as one string');
+
+// Asset graph view is reachable and loads the store-derived graph endpoint.
+assert.ok(index.includes('id="view-assets"'), 'asset graph view exists');
+assert.ok(index.includes('data-view="assets"'), 'asset graph nav entry exists');
+assert.ok(workspace.includes("api('/api/assets/graph'"), 'asset graph loads the real endpoint');
+assert.ok(workspace.includes('loadAssets'), 'asset graph renderer is defined');
+assert.ok(workspace.includes("if (view === 'assets') loadAssets()"), 'setView loads the asset graph');
+
+// Results popup actions: contextual VERIFY / REPORT / EXPORT reuse existing
+// endpoints and are offered only for a result that has observed output.
+assert.ok(app.includes('data-result-action="verify"'), 'results actions render VERIFY');
+assert.ok(app.includes('data-result-action="report"'), 'results actions render REPORT');
+assert.ok(app.includes('data-result-action="export"'), 'results actions render EXPORT');
+assert.ok(app.includes("api('/api/audit/verify'"), 'VERIFY re-checks the audit chain');
+assert.ok(app.includes("api('/api/reports'"), 'REPORT looks up the real operation report');
+assert.ok(app.includes('/api/conversations/${encodeURIComponent(state.conversationId)}/export'), 'EXPORT uses the conversation export route');
+
 console.log('frontend smoke tests: PASS');

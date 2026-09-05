@@ -284,6 +284,60 @@
     } catch (e) { toast(e.message, true); }
   }
 
+  // ---- INTELLIGENT COMMAND PALETTE ----
+  // A leading "/" is a convenience command (/ports, /history, /search <term>).
+  // Plan commands reuse the existing reviewed planner (Guardian/approval apply);
+  // query commands are read-only local lookups.  Nothing here bypasses safety.
+  function paletteRow(key, value) {
+    if (key === 'search') {
+      const results = value?.results || [];
+      const layers = [...new Set(results.map(r => r.layer))];
+      return `${results.length} result(s)${layers.length ? ' across ' + layers.join(', ') : ''}`;
+    }
+    if (key === 'history') return `${(value || []).length} operation(s)`;
+    if (key === 'sessions') return `${(value || []).length} session(s)`;
+    if (key === 'findings') return `${(value || []).length} finding(s)`;
+    if (key === 'artifacts') return `${(value || []).length} evidence artifact(s)`;
+    if (key === 'reports') return `${(value || []).length} report(s)`;
+    if (key === 'tasks') return `${(value || []).length} task(s)`;
+    if (key === 'engagements') return `${(value || []).length} engagement(s)`;
+    if (key === 'dashboard') {
+      const tools = value?.tools || {};
+      return `tools ${tools.installed || 0}/${tools.catalog || 0} · sessions ${value?.session?.running || 0} running · findings ${value?.findings?.total || 0} · vpn ${value?.vpn?.state || 'unavailable'}`;
+    }
+    if (key === 'model') {
+      const local = value?.local || {};
+      return `local AI ${local.state || 'disabled'} · endpoint ${local.endpoint || 'none'} · ${(local.installed_candidates || []).length} model candidate(s)`;
+    }
+    return '→';
+  }
+
+  function renderPaletteResult(data, meta) {
+    const el = $('plan-content');
+    if (!el || typeof el === 'undefined') return;
+    const keys = ['history','sessions','findings','artifacts','reports','tasks','engagements','search','dashboard','model'];
+    const rows = keys.filter(k => data[k] !== undefined).map(k => `<li><strong>${esc(k)}</strong> · ${esc(paletteRow(k, data[k]))}</li>`);
+    el.className = 'plan-card';
+    if (!rows.length) {
+      el.innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>PALETTE / ${esc((meta.command || '').replace('/', '').toUpperCase() || 'CMD')}</span>${esc(meta.message || meta.args || '')}</div></div>`;
+      return;
+    }
+    el.innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>PALETTE / ${esc((meta.command || '').replace('/', '').toUpperCase() || 'CMD')}</span>${esc(meta.args || '')}</div></div><ul class="plan-notes">${rows.join('')}</ul>`;
+  }
+
+  async function submitPalette(command) {
+    try {
+      const payload = { request: command, cwd: state.doctor?.cwd || undefined, conversation_id: state.conversationId, offline: !!state.settings.offline };
+      const data = await api('/api/palette', { method: 'POST', body: payload });
+      const meta = data.palette || {};
+      if (data.plan && origRenderPlan) origRenderPlan(data.plan);
+      else if (data.plan) renderPlan(data.plan);
+      if (meta.kind === 'query' || meta.kind === 'search_help' || meta.kind === 'help') renderPaletteResult(data, meta);
+      if (data.error) toast(data.error.message, true);
+      else if (data.plan && !data.history && !data.search && !data.dashboard) toast(data.plan.status === 'planned' ? 'Reviewed plan ready. Approve it only if you administer this host.' : statusLabel(data.plan.status));
+    } catch (e) { toast(e.message, true); }
+  }
+
   window.renderReports = function () {
     const el = $('report-grid');
     if (!el) return;
@@ -335,6 +389,26 @@
     }
   }
 
+  async function loadAssets() {
+    try {
+      const data = await api('/api/assets/graph');
+      const graph = data.graph || {};
+      const nodes = graph.nodes || [];
+      const edges = graph.edges || [];
+      const summary = graph.summary || {};
+      const el = $('asset-graph');
+      if (!el) return;
+      if (!nodes.length) {
+        el.innerHTML = '<div class="empty-state panel"><div class="empty-icon">⌗</div><h3>No observed assets yet</h3><p>Declare an engagement with targets or run approved operations to populate the graph.</p></div>';
+        return;
+      }
+      const byType = Object.entries(summary.by_type || {}).map(([type, count]) => `<span class="badge badge-muted">${esc(type)} ${esc(count)}</span>`).join(' ');
+      const nodeRows = nodes.map(n => `<li><strong>${esc(n.label)}</strong><span class="badge badge-muted">${esc(n.type)}</span>${n.severity ? `<span class="badge ${n.severity === 'critical' || n.severity === 'high' ? 'badge-red' : 'badge-amber'}">${esc(n.severity)}</span>` : ''}<small>${esc(n.count)} record(s)</small></li>`).join('');
+      const edgeRows = edges.map(e => `<li><code>${esc(e.source)}</code> <span>${esc(e.relationship)}</span> <code>${esc(e.target)}</code></li>`).join('');
+      el.innerHTML = `<div class="audit-strip"><span class="status-dot"></span> ${esc(nodes.length)} node(s) · ${esc(edges.length)} edge(s) · ${byType}</div><div class="grid-row"><section class="panel"><div class="panel-head"><div><span class="panel-kicker">ASSET NODES</span><h2>Observed entities</h2></div></div><ul class="plan-notes">${nodeRows}</ul></section><section class="panel"><div class="panel-head"><div><span class="panel-kicker">RELATIONSHIPS</span><h2>Observed edges</h2></div></div><ul class="plan-notes">${edgeRows || '<li>No observed relationships.</li>'}</ul></section></div>`;
+    } catch (e) { toast(e.message, true); }
+  }
+
   window.setView = function (view) {
     origSetView(view);
     if (view === 'conversations') loadConversations();
@@ -345,6 +419,7 @@
     if (view === 'system') loadHealth();
     if (view === 'reports') loadReportsWorkspace();
     if (view === 'settings') loadSettings();
+    if (view === 'assets') loadAssets();
   };
 
   if (origRenderAnalysis) {
@@ -375,6 +450,10 @@
     if (sendButton) sendButton.disabled = true;
     if (sendButton) sendButton.textContent = 'INSPECTING…';
     try {
+      if (text.startsWith('/')) {
+        await submitPalette(text);
+        return;
+      }
       const payload = { request: text, cwd: state.doctor?.cwd || undefined, conversation_id: state.conversationId, offline: !!state.settings.offline };
       if (state.activeEngagementId) payload.engagement_id = state.activeEngagementId;
       const data = await api('/api/workspace/turn', { method: 'POST', body: payload });
@@ -431,6 +510,7 @@
     }).catch(() => {});
     $('refresh-agents')?.addEventListener('click',()=>loadAgents(true));
     $('refresh-health')?.addEventListener('click',()=>loadHealth(true));
+    $('refresh-assets')?.addEventListener('click',()=>loadAssets());
     $('new-conversation')?.addEventListener('click', async () => {
       try {
         const data = await api('/api/conversations', { method: 'POST', body: { title: 'New conversation' } });

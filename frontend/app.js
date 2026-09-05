@@ -212,10 +212,29 @@ function renderAnalysis(op) {
   const localAiBlock = localAi.state ? `<div class="analysis-block"><h3>Local AI interpretation</h3><p><b style="color:var(--text)">${esc((localAi.fuzzy && localAi.fuzzy.confidence) || localAi.state)}</b> · ${esc(localAiRoute || 'no routed model')} · ${esc((localAi.fuzzy && localAi.fuzzy.evidence_basis) || 'plan-only')}</p><p>${esc(localAi.synthesis?.fact_summary || localAi.message || 'No local AI interpretation was available.')}</p><p style="color:var(--dim);font-size:10px">${esc(localAi.synthesis?.meaning || localAi.synthesis?.unknowns || '')}</p></div>` : '';
   $('plan-badge').textContent = a.lifecycle || statusLabel(op.status);
   $('plan-badge').className = `badge ${statusClass(op.status)}`;
+  const actionRow = (op.commands && op.commands.length) ? `<div class="analysis-block results-actions"><h3>Results actions</h3><div><button class="text-button" data-result-action="verify">VERIFY</button> <button class="text-button" data-result-action="report">REPORT</button> <button class="text-button" data-result-action="export">EXPORT</button></div><p style="color:var(--dim);font-size:10px;margin-top:7px">Verify re-checks the audit hash chain. Report and Export act on real stored data; only appropriate actions are offered for a result with observed output.</p></div>` : '';
   $('plan-content').className = 'plan-card';
-  $('plan-content').innerHTML = `<div class="analysis-block"><h3>${esc(a.lifecycle || statusLabel(op.status))} · verified outcome</h3><p>${esc(a.fact || 'Observed execution record.')}</p></div><div class="analysis-block" style="border:1px solid ${verdictColor};background:rgba(0,0,0,.25)"><h3 style="color:${verdictColor}">VERDICT · ${esc(verdict.outcome || 'NOT RUN')}</h3><p><b style="color:${verdictColor}">${esc(verdict.passed ?? 0)}/${esc(verdict.total_commands ?? 0)} commands passed</b> · ${esc(verdict.failed ?? 0)} failed · ${esc(verdict.total_duration_ms ?? 0)} ms wall execution · ${esc(verdict.total_observed_lines ?? 0)} output line(s) · ${esc(verdict.total_output_bytes ?? 0)} bytes of evidence</p><p style="color:var(--dim);font-size:10px;margin-top:7px">${esc(verdict.note || '')}</p></div><div class="analysis-block"><h3>Command timeline</h3>${timeline || '<p>No command was run.</p>'}</div><div class="analysis-block"><h3>Interpretation boundaries</h3><p><b style="color:var(--text)">Fact:</b> ${esc(a.fact || 'Observed output only.')}<br><b style="color:var(--text)">Inference:</b> ${esc(a.inference || '')}<br><b style="color:var(--text)">Unknown:</b> ${esc(a.unknown || '')}</p></div>${verification}${localAiBlock}${steps ? `<div class="analysis-block"><h3>Next steps — click to run the reviewed follow-up</h3>${steps}</div>` : ''}<div class="analysis-block"><h3>Adapter facts</h3><pre class="analysis-json">${esc(JSON.stringify(a.adapter_facts || {}, null, 2))}</pre></div>${confirmation}<div class="worker-row">WORKER PARTICIPATION · ${(a.workers || []).map(w => `${esc(w.id)}: <strong>${esc(w.state)}</strong>`).join(' · ')}</div>`;
+  $('plan-content').innerHTML = `<div class="analysis-block"><h3>${esc(a.lifecycle || statusLabel(op.status))} · verified outcome</h3><p>${esc(a.fact || 'Observed execution record.')}</p></div><div class="analysis-block" style="border:1px solid ${verdictColor};background:rgba(0,0,0,.25)"><h3 style="color:${verdictColor}">VERDICT · ${esc(verdict.outcome || 'NOT RUN')}</h3><p><b style="color:${verdictColor}">${esc(verdict.passed ?? 0)}/${esc(verdict.total_commands ?? 0)} commands passed</b> · ${esc(verdict.failed ?? 0)} failed · ${esc(verdict.total_duration_ms ?? 0)} ms wall execution · ${esc(verdict.total_observed_lines ?? 0)} output line(s) · ${esc(verdict.total_output_bytes ?? 0)} bytes of evidence</p><p style="color:var(--dim);font-size:10px;margin-top:7px">${esc(verdict.note || '')}</p></div><div class="analysis-block"><h3>Command timeline</h3>${timeline || '<p>No command was run.</p>'}</div><div class="analysis-block"><h3>Interpretation boundaries</h3><p><b style="color:var(--text)">Fact:</b> ${esc(a.fact || 'Observed output only.')}<br><b style="color:var(--text)">Inference:</b> ${esc(a.inference || '')}<br><b style="color:var(--text)">Unknown:</b> ${esc(a.unknown || '')}</p></div>${verification}${localAiBlock}${steps ? `<div class="analysis-block"><h3>Next steps — click to run the reviewed follow-up</h3>${steps}</div>` : ''}<div class="analysis-block"><h3>Adapter facts</h3><pre class="analysis-json">${esc(JSON.stringify(a.adapter_facts || {}, null, 2))}</pre></div>${confirmation}${actionRow}<div class="worker-row">WORKER PARTICIPATION · ${(a.workers || []).map(w => `${esc(w.id)}: <strong>${esc(w.state)}</strong>`).join(' · ')}</div>`;
   document.querySelectorAll('[data-next-step]').forEach(btn => btn.addEventListener('click', () => { if (typeof window.makePlan === 'function') window.makePlan(btn.dataset.nextStep); }));
   $('approve-mutation')?.addEventListener('click', () => approveMutation(op));
+  document.querySelectorAll('[data-result-action]').forEach(btn => btn.addEventListener('click', async () => {
+    const action = btn.dataset.resultAction;
+    try {
+      if (action === 'verify') {
+        const data = await api('/api/audit/verify');
+        const audit = data.audit || {};
+        toast('Audit chain ' + (audit.valid ? 'INTACT' : 'BROKEN') + ' · ' + String(audit.checked || 0) + ' event(s)');
+      } else if (action === 'report') {
+        const data = await api('/api/reports');
+        const report = (data.reports || []).find(r => r.operation_id === op.id);
+        if (!report) { toast('No report for this operation yet — it is generated when the task completes.', true); return; }
+        window.open(`/api/reports/${encodeURIComponent(report.id)}/download?format=md`, '_blank');
+      } else if (action === 'export') {
+        if (!state.conversationId) { toast('No active conversation to export.', true); return; }
+        window.open(`/api/conversations/${encodeURIComponent(state.conversationId)}/export`, '_blank');
+      }
+    } catch (e) { toast(e.message, true); }
+  }));
 }
 
 async function createEngagement() {

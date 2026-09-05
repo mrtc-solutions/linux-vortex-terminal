@@ -124,6 +124,19 @@ only `/api/` routes. The local preview intentionally has no token and serves the
 renderer and API same-origin; it is development convenience, not a production
 LAN deployment. The sidecar never binds a public interface in desktop mode.
 
+## Asset graph (read-only derived view)
+
+`Workspace.asset_graph()` builds a node/edge graph that is a *projection* of the
+local store, never an authoritative model. Nodes come from engagements and
+declared targets, observed findings, operations, the tools they invoked, tasks,
+and PTY sessions. Edges are only the explicit relationships in those records
+(`authorizes`, `reported_in`, `from_task`, `used`, `scoped_to`, `under`,
+`runs_in`). It is served as `GET /api/assets/graph` and `vortex assets`, and
+rendered in an "Assets" view. Because it is derived purely from what already
+exists, it cannot invent an asset, a host, or a connection; an empty graph is an
+honest empty graph. The intentional segregation from execution keeps this a
+reporting surface, not a control path.
+
 ## Deliberate non-decisions
 
 No cloud API, plugin execution, remote host management, automatic sudo, terminal

@@ -76,6 +76,14 @@ UNAVAILABLE), or **Not implemented**.
 | Engagements and scope gate for active network work | Implemented + tested |
 | VTX task engine, persistence, resume/restart/delete | Implemented + tested |
 | Conversations, edit-branching, export, search | Implemented + tested |
+| Intelligent command palette (`/health`, `/search <term>`, `/history`, `/dashboard`) | Implemented + tested; plan commands reuse the reviewed planner |
+| Cross-layer global search (operations, sessions, findings, artifacts, messages, engagements) | Implemented + tested |
+| Terminal dashboard (live host facts, tool inventory, AI/model status, VPN honesty) | Implemented + tested; VPN honestly UNAVAILABLE in this build |
+| Palette HTTP endpoints `/api/palette`, `/api/search`, `/api/dashboard` | Implemented + tested |
+| CLI subcommands `palette`, `search`, `dashboard`, `assets` | Implemented + tested |
+| Asset graph derived only from observed/declared records (`/api/assets/graph`) | Implemented + tested; no connection is invented |
+| Command palette flag (`/` prefix) + palette in the chat bar | Implemented + tested |
+| Results popup contextual actions (Verify / Report / Export) | Implemented + tested; only offered when a result produced observed output |
 | Objective evaluation / replan proposal after observed results | Implemented + tested |
 | Bounded replanning (max 2 follow-ups, duplicate-plan detection) | Implemented + tested |
 | Crash recovery: stale operations/tasks reconciled at startup | Implemented + tested |

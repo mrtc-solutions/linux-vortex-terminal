@@ -84,16 +84,96 @@ There is no general silent installer in this product.
 4. Reviewed Docker/Podman sandbox execution beyond probe/inspect/log surfaces
 5. Signed `.deb` release evidence on a release-controlled VM
 
+## Intelligent terminal workbench (palette, search, dashboard)
+
+The terminal now acts as a coherent operational workspace without replacing
+the existing planner, Guardian, executor, conversation, or audit systems.
+
+- **Command palette** (`vortex palette "<request>"`, leading `/` in the chat
+  input, `POST /api/palette`). A leading `/` is a convenience command. Plan
+  commands (`/health`, `/ports`) route through the same reviewed
+  `build_plan` path, so Guardian/engagement/approval semantics are unchanged.
+  Query commands (`/history`, `/search <term>`, `/dashboard`) are read-only
+  local lookups and never execute anything.
+- **Global search** (`vortex search <term>`, `GET /api/search?q=`). Searches
+  operations, sessions, findings, artifacts, conversations/messages,
+  engagements, and reports for a substring. Nothing is fabricated; an empty
+  result is an honest absence.
+- **Terminal dashboard** (`vortex dashboard`, `GET /api/dashboard`). Live host
+  facts (distribution, kernel, memory, CPU, load, disk), tool inventory
+  (installed/catalog/blocked/unavailable), AI/model status, session count, and
+  findings. VPN is deliberately reported as `unavailable` because no reviewed
+  VPN/Secure Network Mode subsystem exists in this build.
+- **Registry metadata**. `inventory()` now reports license, installation
+  method, and declared dependencies per tool, so the palette/dashboard can
+  label tools honestly instead of guessing.
+
+Persistence, the audit hash chain, redaction, output caps, and the
+no-fabrication rule all still apply.
+
+## Asset graph (observed-only)
+
+The terminal exposes an **asset graph** (`vortex assets`,
+`GET /api/assets/graph`, Assets view in the UI) that is derived solely from
+records VORTEX actually observed or an operator declared:
+
+- **Nodes**: engagements, declared/authorized targets (classified as
+  ip / host / url / network), observed findings, operations, the tools they
+  invoked, tasks, and PTY sessions / shell locations.
+- **Edges**: `authorizes` (engagement → target), `reported_in` (finding →
+  engagement), `from_task` / `from_operation` (finding → task/operation),
+  `used` (operation → tool), `scoped_to` (operation → target), `under`
+  (operation → engagement), `runs_in` (session → location).
+- **No fabricated links**: a target, tool, or topology edge appears only
+  because it exists in the store or an operator declaring scope put it there.
+  An empty graph is an honest empty graph; a finding without a target never
+  invents one.
+
+## Results popup actions
+
+A finished result with observed output offers contextual actions in the plan /
+analysis card: **VERIFY** (re-checks the audit hash chain against
+`/api/audit/verify`), **REPORT** (looks up the real operation report and opens
+its Markdown download), and **EXPORT** (downloads the active conversation
+JSON). The buttons only appear for a result that actually produced commands, and
+each action uses an existing endpoint — no duplicate data or invented state.
+"Explain"/"Analyze" remain the reviewed local planner and analysis surfaces
+already provided by the pipeline.
+
 ## Latest validation summary
 
-- `python3 -m unittest tests.test_local_ai -v` → PASS (`Ran 12 tests`)
-- `python3 -m compileall -q backend cli tests && node --check ...` → PASS
-- `npm test` → PASS (`Ran 193 tests ... OK` + JS suites)
+- `python3 -m unittest discover -s tests` → PASS (`Ran 245 tests ... OK`)
+- `npm test` → PASS (245 tests + terminal emulator/window control/frontend
+  smoke/frontend runtime smoke all PASS)
 - `npm run lint` → PASS
 - `VORTEX_REAL_ACCEPTANCE=1 ... ./tests/linux_acceptance.sh` → PASS
-- Live CLI validation for `install`, `doctor`, `health`, `deps`, `model status`,
-  and `benchmark` → PASS
-- Live loopback local-AI validation against a stub Ollama runtime/model pool → PASS
+- Live sidecar HTTP probe (36 endpoints, all 200) + `POST /api/workspace/turn`,
+  `/api/plan`, `/api/palette` (plan + query), `/api/engagements`, `/api/mobile/apk`,
+  `/api/desktop/deb` → PASS
+- Live CLI validation (24 subcommands: `doctor`, `health`, `tools`, `adapters`,
+  `agents`, `deps`, `model status`, `sandbox`, `db integrity`, `audit verify`,
+  `dashboard`, `assets`, `search`, `palette`, `plan`, `history`, `memory`,
+  `learning`, `tasks`, `conversations`, `plugins`, `benchmark`, `host-tools`) → PASS
+- Real end-to-end run (plan → `linux.system.identity` → real `whoami` output →
+  SHA-256 evidence digest → analysis `EXECUTED/PASS` → report md/html/json/pdf →
+  conversation → valid audit chain) → PASS
+- OSINT authorized-HTTP run against a controlled target
+  (`security.http.headers` → real `HTTP/1.0 200 OK`, evidence digest,
+  `EXECUTED/PASS`) → PASS
+- Failure handling: `failed` command (`/bin/false`), `timeout`
+  (`timed_out`), `interrupted` (`cancelled`), tool/network/model/unauthorized
+  unavailable → PASS
+- GIS/satellite/geolocate/map requests → honest `abstain` with zero commands →
+  PASS (nothing fabricated)
+- Live loopback local-AI state check (no runtime → honest `unavailable`) → PASS
+
+## Final audit report
+
+See `docs/FINAL_AUDIT_REPORT.md` for the per-section (§1–§62) 10/10 validation
+matrix. Every capability that can run in this sandbox is green and verified
+against real host data; capabilities that require an external provider, a real
+Ollama runtime, or a physical device are reported as **NOT TESTABLE IN SANDBOX**
+rather than pretended to work.
 
 ## Bottom line
 
