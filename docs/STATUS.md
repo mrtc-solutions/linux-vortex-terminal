@@ -129,6 +129,17 @@ records VORTEX actually observed or an operator declared:
   An empty graph is an honest empty graph; a finding without a target never
   invents one.
 
+## Results popup actions
+
+A finished result with observed output offers contextual actions in the plan /
+analysis card: **VERIFY** (re-checks the audit hash chain against
+`/api/audit/verify`), **REPORT** (looks up the real operation report and opens
+its Markdown download), and **EXPORT** (downloads the active conversation
+JSON). The buttons only appear for a result that actually produced commands, and
+each action uses an existing endpoint — no duplicate data or invented state.
+"Explain"/"Analyze" remain the reviewed local planner and analysis surfaces
+already provided by the pipeline.
+
 ## Latest validation summary
 
 - `python3 -m unittest tests.test_intelligence -v` → PASS (`Ran 32 tests`)

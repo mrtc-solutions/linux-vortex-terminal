@@ -170,4 +170,13 @@ assert.ok(workspace.includes("api('/api/assets/graph'"), 'asset graph loads the 
 assert.ok(workspace.includes('loadAssets'), 'asset graph renderer is defined');
 assert.ok(workspace.includes("if (view === 'assets') loadAssets()"), 'setView loads the asset graph');
 
+// Results popup actions: contextual VERIFY / REPORT / EXPORT reuse existing
+// endpoints and are offered only for a result that has observed output.
+assert.ok(app.includes('data-result-action="verify"'), 'results actions render VERIFY');
+assert.ok(app.includes('data-result-action="report"'), 'results actions render REPORT');
+assert.ok(app.includes('data-result-action="export"'), 'results actions render EXPORT');
+assert.ok(app.includes("api('/api/audit/verify'"), 'VERIFY re-checks the audit chain');
+assert.ok(app.includes("api('/api/reports'"), 'REPORT looks up the real operation report');
+assert.ok(app.includes('/api/conversations/${encodeURIComponent(state.conversationId)}/export'), 'EXPORT uses the conversation export route');
+
 console.log('frontend smoke tests: PASS');

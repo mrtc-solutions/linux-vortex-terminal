@@ -83,6 +83,7 @@ UNAVAILABLE), or **Not implemented**.
 | CLI subcommands `palette`, `search`, `dashboard`, `assets` | Implemented + tested |
 | Asset graph derived only from observed/declared records (`/api/assets/graph`) | Implemented + tested; no connection is invented |
 | Command palette flag (`/` prefix) + palette in the chat bar | Implemented + tested |
+| Results popup contextual actions (Verify / Report / Export) | Implemented + tested; only offered when a result produced observed output |
 | Objective evaluation / replan proposal after observed results | Implemented + tested |
 | Bounded replanning (max 2 follow-ups, duplicate-plan detection) | Implemented + tested |
 | Crash recovery: stale operations/tasks reconciled at startup | Implemented + tested |
