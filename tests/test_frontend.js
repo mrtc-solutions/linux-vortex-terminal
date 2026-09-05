@@ -163,4 +163,11 @@ assert.ok(workspace.includes("text.startsWith('/')"), 'slash commands route to t
 assert.ok(workspace.includes('renderPaletteResult'), 'palette query results render into the plan view');
 assert.ok(workspace.includes('submitPalette(command)'), 'palette request is passed as one string');
 
+// Asset graph view is reachable and loads the store-derived graph endpoint.
+assert.ok(index.includes('id="view-assets"'), 'asset graph view exists');
+assert.ok(index.includes('data-view="assets"'), 'asset graph nav entry exists');
+assert.ok(workspace.includes("api('/api/assets/graph'"), 'asset graph loads the real endpoint');
+assert.ok(workspace.includes('loadAssets'), 'asset graph renderer is defined');
+assert.ok(workspace.includes("if (view === 'assets') loadAssets()"), 'setView loads the asset graph');
+
 console.log('frontend smoke tests: PASS');

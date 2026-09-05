@@ -80,6 +80,34 @@ def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _asset_target_type(value: str) -> str:
+    """Best-effort classification of a declared/observed target for the graph.
+
+    This is a label for visualization only; it never reinterprets a target as a
+    different asset or guesses a connection.  IPs, networks, URLs, hostnames, and
+    unknown strings are kept distinct.
+    """
+    import ipaddress
+    text = str(value or "").strip()
+    lower = text.lower()
+    if lower.startswith(("http://", "https://")):
+        return "url"
+    if "/" in text:
+        try:
+            ipaddress.ip_network(text, strict=False)
+            return "network"
+        except ValueError:
+            pass
+    try:
+        ipaddress.ip_address(text)
+        return "ip"
+    except ValueError:
+        pass
+    if any(char.isalpha() for char in lower) and "." in lower:
+        return "host"
+    return "target"
+
+
 def ensure_schema(store: Any) -> None:
     with store.connect() as db:
         db.executescript(SCHEMA)
@@ -628,3 +656,123 @@ class Workspace:
         else:
             item["effective_status"] = item.get("status")
         return item
+
+    def asset_graph(self, limit: int = 200) -> dict[str, Any]:
+        """Derive an asset graph from observed store records.
+
+        Nodes come only from records that actually exist (engagements, findings,
+        operations, tasks, tools, sessions, and declared/authorized targets).
+        Edges come only from explicit relationships in those records.  Nothing
+        is invented: a target, tool, or topology link appears here only because
+        VORTEX observed it or an operator declared it, never by guesswork.
+        """
+        limit = max(1, min(int(limit), 500))
+        nodes: dict[str, dict[str, Any]] = {}
+        edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+        def node(node_id: str, ntype: str, label: str, **extra: Any) -> str:
+            existing = nodes.get(node_id)
+            if not existing:
+                nodes[node_id] = {"id": node_id, "type": ntype, "label": str(label)[:160], "count": 0, **extra}
+            nodes[node_id]["count"] += 1
+            return node_id
+
+        def edge(source: str, target: str, relationship: str) -> None:
+            key = (source, target, relationship)
+            existing = edges.get(key)
+            if not existing:
+                edges[key] = {"source": source, "target": target, "relationship": relationship, "count": 0}
+            edges[key]["count"] += 1
+
+        def target_node(raw: str) -> tuple[str, str]:
+            value = str(raw).strip()
+            ntype = _asset_target_type(value)
+            return node(f"target:{value}", ntype, value), ntype
+
+        def engagement_node(eng: dict[str, Any]) -> str:
+            return node("engagement:" + str(eng["id"]), "engagement", eng.get("name") or str(eng["id"]), status=eng.get("status"))
+
+        # Engagements -> declared targets (operator-authorized assets).
+        for engagement in self.store.list_engagements():
+            eng_id = engagement_node(engagement)
+            for entry in (engagement.get("targets") or [])[:limit]:
+                target_id, _ = target_node(entry)
+                edge(eng_id, target_id, "authorizes")
+            # Excluded targets are deliberately not added as assets: the operator
+            # told VORTEX they are out of scope, so no link is drawn to them.
+
+        # Findings (observed evidence) -> task -> operation -> tools.
+        findings = self.list_findings()
+        for finding in findings[:limit]:
+            finding_id = node("finding:" + str(finding["id"]), "finding", finding.get("title") or str(finding["id"]), severity=finding.get("severity"), validation=finding.get("validation"))
+            if finding.get("engagement_id"):
+                engagement = self.store.get_engagement(finding["engagement_id"])
+                if engagement:
+                    edge(finding_id, engagement_node(engagement), "reported_in")
+            task_id = finding.get("task_id")
+            if task_id:
+                task = self.get_task(task_id)
+                if task:
+                    task_node_id = node("task:" + str(task["id"]), "task", task.get("request") or str(task["id"]), state=task.get("state"))
+                    edge(finding_id, task_node_id, "from_task")
+                    operation = self.store.get_operation(task.get("operation_id")) if task.get("operation_id") else None
+                    if operation:
+                        operation_id = node("operation:" + str(operation["id"]), "operation", operation.get("id"))
+                        edge(finding_id, operation_id, "from_operation")
+                        self._graph_operation(operation, node, edge, target_node, engagement_node, limit)
+
+        # Operations -> tools + scoped targets + engagement.
+        for operation in self.store.list_history(limit)[:limit]:
+            self._graph_operation(operation, node, edge, target_node, engagement_node, limit)
+
+        # Sessions -> host location.
+        for session in self.store.list_sessions()[:limit]:
+            session_id = node("session:" + str(session["id"]), "session", session.get("name") or str(session["id"]), status=session.get("status"), shell=session.get("shell"))
+            if session.get("cwd"):
+                host_id = node("location:" + str(session["cwd"]), "location", session["cwd"])
+                edge(session_id, host_id, "runs_in")
+
+        nodes_list = list(nodes.values())
+        edges_list = list(edges.values())
+        by_type: dict[str, int] = {}
+        for item in nodes_list:
+            by_type[item["type"]] = by_type.get(item["type"], 0) + 1
+        return {
+            "nodes": nodes_list,
+            "edges": edges_list,
+            "summary": {"nodes": len(nodes_list), "edges": len(edges_list), "by_type": by_type},
+        }
+
+    def _graph_operation(self, operation: dict[str, Any], node: Any, edge: Any, target_node: Any, engagement_node: Any, limit: int) -> None:
+        """Contribute a single operation's tools/targets/engagement to the graph.
+
+        ``operation`` is an observed store record.  Scope targets and the
+        engagement are read back from the bound plan because the operation row
+        does not carry them; a missing plan simply contributes no invented link.
+        """
+        if not operation:
+            return
+        operation_id = node("operation:" + str(operation["id"]), "operation", operation.get("id"))
+        # Tools actually invoked by this operation; only observed commands count.
+        for command in (operation.get("commands") or [])[:limit]:
+            executable = command.get("executable")
+            if executable:
+                tool_id = node("tool:" + str(executable), "tool", executable)
+                edge(operation_id, tool_id, "used")
+        plan = None
+        if operation.get("plan_id"):
+            try:
+                plan = self.store.get_plan(operation["plan_id"])
+            except Exception:
+                plan = None
+        targets = (plan or {}).get("scope", {}).get("targets") or []
+        for target in list(targets)[:limit]:
+            target_id, _ = target_node(target)
+            edge(operation_id, target_id, "scoped_to")
+        engagement_id = (plan or {}).get("engagement_id")
+        if engagement_id:
+            engagement = self.store.get_engagement(engagement_id)
+            if engagement:
+                edge(operation_id, engagement_node(engagement), "under")
+            else:
+                node("engagement:" + str(engagement_id), "engagement", str(engagement_id))

@@ -264,6 +264,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["dashboard"]["vpn"]["state"], "unavailable")
 
+    def test_cli_assets(self):
+        self.store.create_engagement({
+            "id": "eng-cli", "created_at": now_iso(), "expires_at": "2099-01-01",
+            "name": "CLI audit", "authorization": "operator",
+            "targets": ["192.168.1.20", "target.test"], "classes": ["reconnaissance"],
+            "status": "active",
+        })
+        code, payload = self._cli("assets")
+        self.assertEqual(code, 0)
+        by_type = payload["graph"]["summary"]["by_type"]
+        assert by_type.get("ip") == 1
+        assert by_type.get("host") == 1
+        self.assertGreaterEqual(payload["graph"]["summary"]["nodes"], 3)
+
 
 class HttpApiTests(unittest.TestCase):
     def setUp(self):
@@ -336,6 +350,80 @@ class HttpApiTests(unittest.TestCase):
 
     def test_palette_requires_request(self):
         self._json("POST", "/api/palette", {}, expected=422)
+
+    def test_assets_graph_route(self):
+        self.handler.workspace.add_finding(None, None, "Open port 22 observed", "medium", {"port": 22}, "observed")
+        payload = self._json("GET", "/api/assets/graph")
+        self.assertIn("graph", payload)
+        self.assertGreaterEqual(payload["graph"]["summary"]["nodes"], 1)
+
+
+class AssetsGraphTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["VORTEX_DATA_DIR"] = self.tmp.name
+        config_home = Path(self.tmp.name) / "config"
+        config_home.mkdir(parents=True, exist_ok=True)
+        os.environ["XDG_CONFIG_HOME"] = str(config_home)
+        self.store = Store(Path(self.tmp.name) / "vortex.db")
+        self.workspace = Workspace(self.store)
+        self.cwd = str(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop("VORTEX_DATA_DIR", None)
+        os.environ.pop("XDG_CONFIG_HOME", None)
+
+    def test_empty_graph_is_honest(self):
+        graph = self.workspace.asset_graph()
+        self.assertEqual(graph["summary"]["nodes"], 0)
+        self.assertEqual(graph["summary"]["edges"], 0)
+
+    def test_engagement_targets_become_authorized_nodes(self):
+        self.store.create_engagement({
+            "id": "eng-g", "created_at": now_iso(), "expires_at": "2099-01-01",
+            "name": "Graph audit", "authorization": "operator",
+            "targets": ["192.168.1.20", "target.test"], "classes": ["reconnaissance"],
+            "status": "active",
+        })
+        graph = self.workspace.asset_graph()
+        by_type = graph["summary"]["by_type"]
+        self.assertEqual(by_type.get("ip"), 1)
+        self.assertEqual(by_type.get("host"), 1)
+        self.assertEqual(graph["summary"]["edges"], 2)
+        relationships = {edge["relationship"] for edge in graph["edges"]}
+        self.assertIn("authorizes", relationships)
+
+    def test_findings_connect_to_engagement_without_inventing_targets(self):
+        self.store.create_engagement({
+            "id": "eng-g2", "created_at": now_iso(), "expires_at": "2099-01-01",
+            "name": "Graph audit 2", "authorization": "operator",
+            "targets": ["target.test"], "classes": ["reconnaissance"], "status": "active",
+        })
+        self.workspace.add_finding(None, "eng-g2", "Open SSH port observed", "medium", {"port": 22}, "observed")
+        graph = self.workspace.asset_graph()
+        self.assertIn("reported_in", {edge["relationship"] for edge in graph["edges"]})
+        # The engagement declares a host target, so a host node is legitimate;
+        # no IP is declared and the finding itself carries no target, so no IP
+        # node is fabricated.
+        self.assertEqual(graph["summary"]["by_type"].get("ip") or 0, 0)
+        self.assertEqual(graph["summary"]["by_type"].get("host") or 0, 1)
+
+    def test_operation_tools_and_scoped_targets_are_observed(self):
+        plan = build_plan(self.store, "show listening ports", self.cwd)
+        now = now_iso()
+        operation = {
+            "id": "op-g", "plan_id": plan["id"], "status": "succeeded",
+            "started_at": now, "ended_at": now,
+            "commands": [{"display": "ss -lntup", "executable": "ss", "status": "succeeded",
+                          "stdout": "", "stderr": "", "exit_code": 0}],
+            "analysis": {"fact": "Observed sockets."},
+        }
+        self.store.save_operation(operation)
+        graph = self.workspace.asset_graph()
+        by_type = graph["summary"]["by_type"]
+        self.assertIn("tool", by_type)
+        self.assertIn("operation", by_type)
 
 
 if __name__ == "__main__":

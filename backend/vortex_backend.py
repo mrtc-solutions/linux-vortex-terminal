@@ -3588,6 +3588,14 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/findings":
                 return self._json(200, {"findings": self.workspace.list_findings()})
+            if path == "/api/assets/graph":
+                query = urllib.parse.parse_qs(parsed.query)
+                limit = self._query_text(query, "limit", "200", limit=5)
+                try:
+                    limit_i = int(limit)
+                except (TypeError, ValueError):
+                    limit_i = 200
+                return self._json(200, {"graph": self.workspace.asset_graph(max(1, min(limit_i, 500)))})
             if path == "/api/search":
                 query = urllib.parse.parse_qs(parsed.query)
                 return self._json(200, {"search": self.workspace.search_all(self._query_text(query, "q", "", limit=200))})

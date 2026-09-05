@@ -72,7 +72,7 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn', 'host-tools', 'mobile', 'desktop', 'palette', 'search', 'dashboard'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn', 'host-tools', 'mobile', 'desktop', 'palette', 'search', 'dashboard', 'assets'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
@@ -263,6 +263,7 @@ def main(argv=None):
     pal = sub.add_parser('palette'); pal.add_argument('request', nargs='+')
     se = sub.add_parser('search'); se.add_argument('term', nargs='+')
     sub.add_parser('dashboard')
+    asg = sub.add_parser('assets'); asg.add_argument('--limit', type=int, default=200)
     ins = sub.add_parser('install'); ins.add_argument('--user', action='store_true', dest='user_install'); ins.add_argument('--prefix', default=None)
     tn = sub.add_parser('turn'); tn.add_argument('request')
     art = sub.add_parser('artifact'); art.add_argument('action', choices=['inspect','analyze'], nargs='?', default='inspect'); art.add_argument('path'); art.add_argument('--type', choices=['auto','nmap-xml','http-headers','text'], default='auto')
@@ -375,6 +376,10 @@ def main(argv=None):
             from backend.config import load_settings as _load_settings
             from backend.workspace import Workspace
             emit({'dashboard': dashboard.collect(store, Workspace(store), _load_settings())}, args.as_json)
+            return 0
+        if args.subcommand == 'assets':
+            from backend.workspace import Workspace
+            emit({'graph': Workspace(store).asset_graph(getattr(args, 'limit', 200))}, args.as_json)
             return 0
         if args.subcommand == 'conversations':
             from backend.workspace import Workspace

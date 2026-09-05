@@ -111,12 +111,30 @@ the existing planner, Guardian, executor, conversation, or audit systems.
 Persistence, the audit hash chain, redaction, output caps, and the
 no-fabrication rule all still apply.
 
+## Asset graph (observed-only)
+
+The terminal exposes an **asset graph** (`vortex assets`,
+`GET /api/assets/graph`, Assets view in the UI) that is derived solely from
+records VORTEX actually observed or an operator declared:
+
+- **Nodes**: engagements, declared/authorized targets (classified as
+  ip / host / url / network), observed findings, operations, the tools they
+  invoked, tasks, and PTY sessions / shell locations.
+- **Edges**: `authorizes` (engagement → target), `reported_in` (finding →
+  engagement), `from_task` / `from_operation` (finding → task/operation),
+  `used` (operation → tool), `scoped_to` (operation → target), `under`
+  (operation → engagement), `runs_in` (session → location).
+- **No fabricated links**: a target, tool, or topology edge appears only
+  because it exists in the store or an operator declaring scope put it there.
+  An empty graph is an honest empty graph; a finding without a target never
+  invents one.
+
 ## Latest validation summary
 
-- `python3 -m unittest tests.test_intelligence -v` → PASS (`Ran 26 tests`)
-- `python3 -m unittest discover -s tests` → PASS (`Ran 219 tests ... OK`)
+- `python3 -m unittest tests.test_intelligence -v` → PASS (`Ran 32 tests`)
+- `python3 -m unittest discover -s tests` → PASS (`Ran 225 tests ... OK`)
 - `python3 -m compileall -q backend cli tests && node --check ...` → PASS
-- `npm test` → PASS (219 tests + terminal emulator/window control/frontend
+- `npm test` → PASS (225 tests + terminal emulator/window control/frontend
   smoke/frontend runtime smoke all PASS)
 - `npm run lint` → PASS
 - `VORTEX_REAL_ACCEPTANCE=1 ... ./tests/linux_acceptance.sh` → PASS

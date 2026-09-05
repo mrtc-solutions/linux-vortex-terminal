@@ -385,6 +385,26 @@
     }
   }
 
+  async function loadAssets() {
+    try {
+      const data = await api('/api/assets/graph');
+      const graph = data.graph || {};
+      const nodes = graph.nodes || [];
+      const edges = graph.edges || [];
+      const summary = graph.summary || {};
+      const el = $('asset-graph');
+      if (!el) return;
+      if (!nodes.length) {
+        el.innerHTML = '<div class="empty-state panel"><div class="empty-icon">⌗</div><h3>No observed assets yet</h3><p>Declare an engagement with targets or run approved operations to populate the graph.</p></div>';
+        return;
+      }
+      const byType = Object.entries(summary.by_type || {}).map(([type, count]) => `<span class="badge badge-muted">${esc(type)} ${esc(count)}</span>`).join(' ');
+      const nodeRows = nodes.map(n => `<li><strong>${esc(n.label)}</strong><span class="badge badge-muted">${esc(n.type)}</span>${n.severity ? `<span class="badge ${n.severity === 'critical' || n.severity === 'high' ? 'badge-red' : 'badge-amber'}">${esc(n.severity)}</span>` : ''}<small>${esc(n.count)} record(s)</small></li>`).join('');
+      const edgeRows = edges.map(e => `<li><code>${esc(e.source)}</code> <span>${esc(e.relationship)}</span> <code>${esc(e.target)}</code></li>`).join('');
+      el.innerHTML = `<div class="audit-strip"><span class="status-dot"></span> ${esc(nodes.length)} node(s) · ${esc(edges.length)} edge(s) · ${byType}</div><div class="grid-row"><section class="panel"><div class="panel-head"><div><span class="panel-kicker">ASSET NODES</span><h2>Observed entities</h2></div></div><ul class="plan-notes">${nodeRows}</ul></section><section class="panel"><div class="panel-head"><div><span class="panel-kicker">RELATIONSHIPS</span><h2>Observed edges</h2></div></div><ul class="plan-notes">${edgeRows || '<li>No observed relationships.</li>'}</ul></section></div>`;
+    } catch (e) { toast(e.message, true); }
+  }
+
   window.setView = function (view) {
     origSetView(view);
     if (view === 'conversations') loadConversations();
@@ -395,6 +415,7 @@
     if (view === 'system') loadHealth();
     if (view === 'reports') loadReportsWorkspace();
     if (view === 'settings') loadSettings();
+    if (view === 'assets') loadAssets();
   };
 
   if (origRenderAnalysis) {
@@ -485,6 +506,7 @@
     }).catch(() => {});
     $('refresh-agents')?.addEventListener('click',()=>loadAgents(true));
     $('refresh-health')?.addEventListener('click',()=>loadHealth(true));
+    $('refresh-assets')?.addEventListener('click',()=>loadAssets());
     $('new-conversation')?.addEventListener('click', async () => {
       try {
         const data = await api('/api/conversations', { method: 'POST', body: { title: 'New conversation' } });
