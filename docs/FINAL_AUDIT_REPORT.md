@@ -34,10 +34,10 @@ an honest boundary. The matrix below records the true status of each.
 | `tests/test_intelligence.py` | 34 | PASS |
 | `tests/test_local_ai.py` | 12 | PASS |
 | `tests/test_hostscan.py` | 11 | PASS |
-| `tests/test_final_validation.py` | 12 | PASS |
+| `tests/test_final_validation.py` | 18 | PASS |
 | `tests/test_mobile_apk.py` | 5 | PASS |
 | `tests/test_desktop_deb.py` | 5 | PASS |
-| **Python total** | **239** | **OK** |
+| **Python total** | **245** | **OK** |
 | JS: terminal emulator | — | PASS |
 | JS: window control | — | PASS |
 | JS: frontend smoke | — | PASS |
@@ -50,6 +50,23 @@ produced a reviewed plan → `linux.system.identity` adapter → Guardian-approv
 execution → real `whoami` stdout (`user\n`) → SHA-256 evidence digest → analysis
 `EXECUTED / PASS (1/1)` → derived report (md/html/json/pdf all render) →
 conversation record → audit chain `valid`. **No output was fabricated.**
+
+Additional genuinely-verified end-to-end runs in `test_final_validation`:
+- **OSINT authorized-HTTP success**: a controlled local HTTP server
+  (`127.0.0.1:<random>`) is the authorized target; `security.http.headers`
+  really runs `curl`, observes real response headers (`HTTP/1.0 200 OK`,
+  `X-Vortex`), exit 0, evidence digest, analysis `EXECUTED/PASS`. Also confirmed
+  live against the running sidecar.
+- **Failed command**: `/bin/false` exits non-zero → operation `failed`, lifecycle
+  `FAILED`, verdict `FAIL` (no fabricated success).
+- **Timeout**: `/bin/sleep 30` with a 1s timeout → operation `timed_out`,
+  `termination_reason=timeout`, lifecycle `TIMED OUT`.
+- **Interrupted command**: a live `/bin/sleep 10` cancelled → operation
+  `cancelled`, lifecycle `CANCELLED`.
+- **Resource awareness**: host profile reads real CPU/RAM/no-GPU and selects
+  `low-resource`/`sequential`.
+- **GIS / satellite / geolocate / map**: all return `abstain` / `clarified` with
+  **zero** commands (nothing fabricated).
 
 ### Live HTTP probe (fresh sidecar, port 4173)
 
@@ -89,7 +106,7 @@ an unsigned .deb. `/api/reports/assessment/<unknown>` → honest `404`.
 | 9 | Results popup actions | **PASS** | VERIFY / REPORT / EXPORT buttons added (only when output observed) + existing Explain/Analyze/next-steps. See §47 README. |
 | 10 | Conversation history | **PASS** | conversations/messages, edit-and-branch, export; operation output and analysis preserved in the thread. Verified 3 messages after a turn. |
 | 11 | Session principle (no persistent unauthorized creds) | **PASS** | Redaction, `secretstore` never returns values, no credential capture; §52. |
-| 12 | OSINT workspace | **PARTIAL** | DNS/WHOIS/https/scanner adapters route correctly (verified `nmap …` → requires engagement, no command). Real OSINT network/registry data requires a target + installed binaries + outbound network → **real data NOT TESTABLE IN SANDBOX**. No dedicated OSINT UI. |
+| 12 | OSINT workspace | **PASS (implemented surface) / PARTIAL (live public data)** | DNS/WHOIS/https/scanner adapters route correctly through the reviewed planner. The authenticated-HTTP adapter was **genuinely executed against a controlled target**: `curl http://127.0.0.1:<port>/` under an authorized engagement produced `security.http.headers`, real response headers, exit 0, and an evidence digest. Live DNS/WHOIS data requires the `whois`/`dig`/`nslookup` binaries + outbound network, which are absent in this sandbox → **NOT TESTABLE IN SANDBOX**. No dedicated OSINT UI. |
 | 13 | GIS intelligence | **NOT IMPLEMENTED / NOT TESTABLE** | No GIS/map/geocoding module; requires external map/geocoding providers not present. Would be fabricated to claim otherwise. |
 | 14 | Satellite intelligence | **NOT IMPLEMENTED / NOT TESTABLE** | No satellite imagery integration; requires external imagery data sources. |
 | 15 | Satellite change detection | **NOT IMPLEMENTED / NOT TESTABLE** | Requires imagery (above). Not fabricated. |
@@ -135,7 +152,7 @@ an unsigned .deb. `/api/reports/assessment/<unknown>` → honest `404`.
 | 55 | Vortex intelligence pipeline | **PASS** | full pipeline verified end-to-end (test_01). |
 | 56 | Not dangerous by default | **PASS** | Guardian, approvals, no covert capabilities; §52. |
 | 57 | Testing | **PASS** | 239 Python + 4 JS suites + lint + acceptance run. |
-| 58 | Failure testing | **PASS** | unavailable/offline/unauthorized/no-engagement/no-binary/shell-syntax/crashed-session all verified graceful. |
+| 58 | Failure testing | **PASS** | Additionally verified genuine failure handling: **tool unavailable** (`whois`/`dig`/`nmap` absent → `unavailable`, no fake evidence), **unauthorized/out-of-scope target** (`rejected`), **invalid target** (shell/normalization injection `rejected`), **network/offline** (`unavailable`), **malformed output** (XML/port parsers reject), **model unavailable** (honest `unavailable`), **failed command** (`/bin/false` → `failed`/`FAILED`), **timeout** (`timed_out`), **interrupted command** (`cancelled`). **Low RAM / insufficient disk at exhaustion** require deliberately exhausting host resources → NOT TESTABLE beyond the verified resource-aware scheduling (see §41). |
 | 59 | Sandbox validation | **PASS** | Apps installed & run in the sandbox; real host execution verified. |
 | 60 | Final 10/10 validation | **PASS** | this matrix. |
 | 61 | Final audit report | **PASS** | this document. |

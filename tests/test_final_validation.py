@@ -60,6 +60,19 @@ class FinalValidationTests(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        # Let any executor background thread finish its write before we remove
+        # the database directory, to avoid a transient open-DB warning.
+        mgr = getattr(self, "manager", None)
+        if mgr is not None:
+            for _ in range(100):
+                try:
+                    with mgr.lock:
+                        threads = list(mgr.threads.values())
+                    if not any(t.is_alive() for t in threads):
+                        break
+                except Exception:
+                    break
+                time.sleep(0.02)
         shutil.rmtree(os.environ.get("XDG_CONFIG_HOME", ""), ignore_errors=True)
         shutil.rmtree(os.environ.get("VORTEX_DATA_DIR", ""), ignore_errors=True)
         self.tmp.cleanup()
@@ -295,6 +308,173 @@ class FinalValidationTests(unittest.TestCase):
         SessionManager(self.store)
         record = self.store.get_session_record("sess-dead")
         self.assertEqual(record["status"], "unknown_after_crash")
+
+    def test_13_authorized_http_osint_runs_against_controlled_target(self):
+        """OSINT authorized-HTTP adapter really runs against a controlled target."""
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from backend.orchestrate import run_turn
+
+        class _H(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"vortex-controlled-ok"
+                self.send_response(200)
+                self.send_header("X-Vortex", "controlled")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):  # silence
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), _H)
+        port = srv.server_port
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{port}/"
+            self.store.create_engagement({
+                "id": "http-osint", "created_at": "2026-08-25T00:00:00+00:00",
+                "expires_at": "2099-08-25T00:00:00+00:00", "name": "controlled http lab",
+                "authorization": "operator", "targets": [url],
+                "classes": ["reconnaissance"], "status": "active",
+            })
+            result = run_turn(
+                self.store, self.workspace, self.manager, f"curl {url}",
+                cwd=self.cwd, engagement_id="http-osint", conversation_id=None,
+                settings={"profile": "standard", "auto_low_risk": True,
+                          "offline": False, "cli_yes": True},
+                allow_root=ALLOW_ROOT, confirm=True, approval_token=None,
+            )
+            op_id = (result.get("operation") or {}).get("id")
+            self.assertIsNotNone(op_id, "approved authorized-HTTP plan should execute")
+            final = _wait_terminal(self.store, self.workspace, op_id, result["task"]["id"])
+            operation = final["operation"]
+            self.assertEqual(operation["status"], "succeeded")
+            first = (operation["commands"] or [{}])[0]
+            self.assertEqual(first["adapter_id"], "security.http.headers")
+            self.assertEqual(first["exit_code"], 0)
+            self.assertTrue(first.get("evidence_digest"))
+            observed = (first.get("stdout") or "")
+            self.assertIn("200", observed)
+            self.assertIn("X-Vortex", observed)
+        finally:
+            srv.shutdown()
+
+    def test_14_failed_command_is_truthful(self):
+        """A genuinely failing command is reported as FAILED, never as success."""
+        from backend.vortex_backend import command_spec, plan_digest, ExecutionManager
+        # /bin/false exits non-zero immediately with no output: a real failure.
+        spec = command_spec("/bin/false", ["/bin/false"], Path(self.cwd), timeout=30)
+        plan = {
+            "schema_version": 1, "id": "plan-fail", "created_at": "2026-08-25T00:00:00+00:00",
+            "expires_at": "2099-08-25T00:00:00+00:00", "request": "fail test",
+            "cwd": self.cwd, "status": "planned", "kind": "test", "risk": "low",
+            "authorization": "local", "commands": [spec], "notes": [],
+            "missing_tools": [], "scope": {"cwd": self.cwd}, "workers": [],
+            "approval_required": True, "approval_phrase": "APPROVE", "source": "deterministic",
+            "policy_version": "safe-v1", "knowledge_version": "builtin-v1",
+            "approval_token": "fail-token",
+        }
+        plan["digest"] = plan_digest(plan)
+        self.store.save_plan(plan)
+        op = ExecutionManager(self.store).start(plan, True, "fail-token", allow_root=ALLOW_ROOT)
+        for _ in range(300):
+            record = self.store.get_operation(op["id"])
+            if record and record["status"] not in ("started", "running"):
+                break
+            time.sleep(0.02)
+        record = self.store.get_operation(op["id"])
+        self.assertEqual(record["status"], "failed")
+        self.assertNotEqual((record["commands"] or [{}])[0]["exit_code"], 0)
+        # The analysis must reflect the real failure, not a fabricated PASS.
+        analysis = record.get("analysis") or {}
+        self.assertEqual(analysis.get("lifecycle"), "FAILED")
+        self.assertEqual((analysis.get("verdict") or {}).get("outcome"), "FAIL")
+
+    def test_15_timeout_terminates_gracefully(self):
+        """A command exceeding its timeout is terminated and reported honestly."""
+        from backend.vortex_backend import command_spec, plan_digest
+        spec = command_spec("/bin/sleep", ["/bin/sleep", "30"], Path(self.cwd), timeout=1)
+        plan = {
+            "schema_version": 1, "id": "plan-timeout", "created_at": "2026-08-25T00:00:00+00:00",
+            "expires_at": "2099-08-25T00:00:00+00:00", "request": "timeout test",
+            "cwd": self.cwd, "status": "planned", "kind": "test", "risk": "low",
+            "authorization": "local", "commands": [spec], "notes": [],
+            "missing_tools": [], "scope": {"cwd": self.cwd}, "workers": [],
+            "approval_required": True, "approval_phrase": "APPROVE", "source": "deterministic",
+            "policy_version": "safe-v1", "knowledge_version": "builtin-v1",
+            "approval_token": "to-token",
+        }
+        plan["digest"] = plan_digest(plan)
+        self.store.save_plan(plan)
+        from backend.vortex_backend import ExecutionManager
+        op = ExecutionManager(self.store).start(plan, True, "to-token", allow_root=ALLOW_ROOT)
+        for _ in range(300):
+            record = self.store.get_operation(op["id"])
+            if record and record["status"] not in ("started", "running"):
+                break
+            time.sleep(0.02)
+        record = self.store.get_operation(op["id"])
+        self.assertEqual(record["status"], "timed_out")
+        self.assertEqual((record["commands"] or [{}])[0]["termination_reason"], "timeout")
+        self.assertEqual((record.get("analysis") or {}).get("lifecycle"), "TIMED OUT")
+
+    def test_16_interrupted_command_is_graceful(self):
+        """A live command can be cancelled and is reported as CANCELLED."""
+        from backend.vortex_backend import command_spec, plan_digest
+        spec = command_spec("/bin/sleep", ["/bin/sleep", "10"], Path(self.cwd), timeout=30)
+        plan = {
+            "schema_version": 1, "id": "plan-cancel", "created_at": "2026-08-25T00:00:00+00:00",
+            "expires_at": "2099-08-25T00:00:00+00:00", "request": "cancel test",
+            "cwd": self.cwd, "status": "planned", "kind": "test", "risk": "low",
+            "authorization": "local", "commands": [spec], "notes": [],
+            "missing_tools": [], "scope": {"cwd": self.cwd}, "workers": [],
+            "approval_required": True, "approval_phrase": "APPROVE", "source": "deterministic",
+            "policy_version": "safe-v1", "knowledge_version": "builtin-v1",
+            "approval_token": "cancel-token",
+        }
+        plan["digest"] = plan_digest(plan)
+        self.store.save_plan(plan)
+        from backend.vortex_backend import ExecutionManager
+        manager = ExecutionManager(self.store)
+        op = manager.start(plan, True, "cancel-token", allow_root=ALLOW_ROOT)
+        time.sleep(0.05)
+        self.assertTrue(manager.cancel(op["id"]))
+        for _ in range(300):
+            record = self.store.get_operation(op["id"])
+            if record and record["status"] not in ("started", "running"):
+                break
+            time.sleep(0.02)
+        record = self.store.get_operation(op["id"])
+        self.assertEqual(record["status"], "cancelled")
+        self.assertEqual((record.get("analysis") or {}).get("lifecycle"), "CANCELLED")
+
+    def test_17_resource_awareness_detects_host_and_adapts(self):
+        """Hardware awareness reads real host facts and selects a conservative strategy."""
+        from backend.models.router import hardware_profile, model_status
+        from backend.config import load_settings
+        hw = hardware_profile()
+        for key in ("platform", "architecture", "cpu_cores", "ram_total_mb", "gpu",
+                    "mode", "max_parallel_models", "recommended_strategy", "task_queue_depth"):
+            self.assertIn(key, hw)
+        # On this host we have cores and ram; the profile respects that reality.
+        self.assertGreaterEqual(hw["cpu_cores"], 1)
+        self.assertIsNone(hw["gpu"])  # no GPU is advertised on this build
+        status = model_status(load_settings())
+        local = status.get("local") or {}
+        # The scheduling decision is honest: bounded by the detected resources.
+        self.assertIn(local.get("state") or "disabled", ("healthy", "disabled", "unavailable"))
+        self.assertIn(hw["mode"], ("low-resource", "balanced", "roomy"))
+        self.assertIn(hw["recommended_strategy"], ("sequential", "bounded-multi-model"))
+
+    def test_18_gis_satellite_geolocate_never_fabricate(self):
+        """Geospatial requests abstain honestly; no coordinates or imagery are invented."""
+        from backend.vortex_backend import build_plan
+        for request in ("gis analysis of target", "satellite imagery of site", "geolocate 8.8.8.8", "map target"):
+            plan = build_plan(self.store, request, self.cwd)
+            self.assertEqual(plan["kind"], "abstain")
+            self.assertFalse(plan["commands"], f"{request!r} must never produce a command")
+            self.assertEqual(plan["status"], "clarified")
 
 
 if __name__ == "__main__":

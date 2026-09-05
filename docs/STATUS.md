@@ -142,8 +142,8 @@ already provided by the pipeline.
 
 ## Latest validation summary
 
-- `python3 -m unittest discover -s tests` → PASS (`Ran 239 tests ... OK`)
-- `npm test` → PASS (239 tests + terminal emulator/window control/frontend
+- `python3 -m unittest discover -s tests` → PASS (`Ran 245 tests ... OK`)
+- `npm test` → PASS (245 tests + terminal emulator/window control/frontend
   smoke/frontend runtime smoke all PASS)
 - `npm run lint` → PASS
 - `VORTEX_REAL_ACCEPTANCE=1 ... ./tests/linux_acceptance.sh` → PASS
@@ -157,6 +157,14 @@ already provided by the pipeline.
 - Real end-to-end run (plan → `linux.system.identity` → real `whoami` output →
   SHA-256 evidence digest → analysis `EXECUTED/PASS` → report md/html/json/pdf →
   conversation → valid audit chain) → PASS
+- OSINT authorized-HTTP run against a controlled target
+  (`security.http.headers` → real `HTTP/1.0 200 OK`, evidence digest,
+  `EXECUTED/PASS`) → PASS
+- Failure handling: `failed` command (`/bin/false`), `timeout`
+  (`timed_out`), `interrupted` (`cancelled`), tool/network/model/unauthorized
+  unavailable → PASS
+- GIS/satellite/geolocate/map requests → honest `abstain` with zero commands →
+  PASS (nothing fabricated)
 - Live loopback local-AI state check (no runtime → honest `unavailable`) → PASS
 
 ## Final audit report
