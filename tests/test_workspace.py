@@ -967,3 +967,57 @@ class ReplanBudgetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchFairnessTests(unittest.TestCase):
+    """A cross-layer search must not let one busy layer hide the others."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["VORTEX_HOME"] = self.tmp.name
+        self.store = Store(Path(self.tmp.name) / "vortex.db")
+        self.workspace = Workspace(self.store)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_busy_layer_does_not_starve_other_layers(self):
+        conversation = self.workspace.create_conversation("noisy")
+        # 300 recent messages would previously consume the entire result budget.
+        for index in range(300):
+            self.workspace.add_message(conversation["id"], "user", f"docker note {index}")
+        plan = build_plan(self.store, "whoami", self.tmp.name)
+        for index in range(40):
+            self.store.save_operation({
+                "id": f"searchop{index}", "plan_id": plan["id"],
+                "started_at": "2020-01-01T00:00:00+00:00",
+                "ended_at": "2020-01-01T00:00:01+00:00",
+                "status": "succeeded", "schema_version": 1,
+                "commands": [{"display": "docker ps", "executable": "docker"}],
+                "analysis": {"fact": "docker observed"},
+            })
+
+        result = self.workspace.search_all("docker")
+
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["total_matched"], 340)
+        self.assertEqual(result["total"], len(result["results"]))
+        # Both layers must be represented rather than only the newest one.
+        self.assertIn("operations", result["by_layer"])
+        self.assertIn("messages", result["by_layer"])
+        self.assertGreater(result["by_layer"]["operations"], 0)
+        # Ordering within the returned page stays newest-first.
+        stamps = [item.get("at") or "" for item in result["results"]]
+        self.assertEqual(stamps, sorted(stamps, reverse=True))
+
+    def test_untruncated_search_reports_no_truncation(self):
+        conversation = self.workspace.create_conversation("small")
+        self.workspace.add_message(conversation["id"], "user", "docker once")
+        result = self.workspace.search_all("docker")
+        self.assertFalse(result["truncated"])
+        self.assertEqual(result["total"], result["total_matched"])
+
+    def test_empty_term_is_still_empty(self):
+        result = self.workspace.search_all("   ")
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["results"], [])

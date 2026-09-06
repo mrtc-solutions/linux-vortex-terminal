@@ -118,21 +118,10 @@ body.electron-shell .surface-window{top:var(--native-titlebar-height)}
 .terminal-window::before { content:""; position:absolute; inset:auto 0 0 0; height:1px; z-index:3; pointer-events:none;
   background:linear-gradient(90deg,transparent,rgba(0,212,170,.65),transparent); animation:vortex-bar 7s linear infinite; }
 @media(prefers-reduced-motion:reduce){ .brand-mark,.status-dot,.pulse,.hero-art,.eyebrow-line,.panel::after,.terminal-window::before { animation:none; } }
-/* Only the panels the operator can actually see are animated. Every view stays
-   in the DOM, so the decorative sweep was previously repainting the panels of
-   all fourteen hidden views on every frame -- a continuous full-page repaint
-   that made the whole workbench feel sluggish. Hidden views cost nothing now. */
-.view:not(.active) .panel::after,
-.view:not(.active) .terminal-window::before,
-.view:not(.active) .brand-mark,
-.view:not(.active) .status-dot,
-.view:not(.active) .pulse,
-.view:not(.active) .hero-art,
-.view:not(.active) .eyebrow-line { animation:none; }
-/* Skip layout/paint entirely for off-screen views. */
-.view:not(.active) { content-visibility:hidden; }
-/* A surface window (Help/About/Dependencies) covers the page; stop the
-   decoration underneath it from competing for frames. */
+/* Inactive views are display:none and already generate no boxes, so they cost
+   nothing to animate -- no rule is needed for them. What does keep painting is
+   the decoration underneath a full-screen surface window (Help/About/
+   Dependencies), which the operator cannot even see while it is open. */
 body:has(.surface-window:not([hidden])) .panel::after,
 body:has(.surface-window:not([hidden])) .terminal-window::before { animation:none; }
 
@@ -309,13 +298,13 @@ body:has(.surface-window:not([hidden])) .terminal-window::before { animation:non
    button instead of changing any layout, colour, or behaviour.
    ============================================================ */
 
-/* A button is a flow-root for its own content: it may shrink, but
-   its label must never spill outside the painted box. */
+/* A button's label must never spill outside its painted box. Baseline
+   alignment is deliberately left untouched so inline buttons keep sitting
+   exactly where they did before. */
 button, .secondary-button, .text-button, .primary-button,
 .terminal-button, .suggestion-chip, .approve-button {
   max-width: 100%;
   overflow: hidden;
-  vertical-align: middle;
 }
 
 /* Multi-part buttons (icon + label + arrow) need an explicit gap and

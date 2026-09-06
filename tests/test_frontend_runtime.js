@@ -75,7 +75,14 @@ global.requestAnimationFrame = () => 1;
 global.addEventListener = (type, fn) => { (windowListeners[type] ||= []).push(fn); };
 const opened = [];
 global.open = (url, target) => { opened.push({ url, target }); return { closed: false }; };
-global.EventSource = function () { return { close() {}, onmessage: null, onerror: null }; };
+// Track constructed streams so the SSE-drop recovery path can be asserted.
+const eventSources = [];
+global.EventSource = function (url) {
+  const es = { url, closed: false, close() { this.closed = true; }, onmessage: null, onerror: null };
+  eventSources.push(es);
+  return es;
+};
+global.__eventSources = eventSources;
 global.VortexTerminal = class { constructor() {} feed() {} render() {} resize() {} };
 const fetched = [];
 global.fetch = async (url) => {
@@ -166,6 +173,45 @@ for (const [view, endpoint] of Object.entries(expectLoad)) {
   assert.strictEqual(opened[opened.length - 1]?.target, '_blank', 'desktop download tab opens in the background');
   assert.ok(String(toastEl.textContent).includes('Desktop .deb built'), 'desktop toast reports the built package');
   assert.ok(toastEl.children.some((c) => c.href === '/api/desktop/deb/download' && c.download === 'linux-vortex-terminal_0.2.21_all.deb'), 'desktop toast carries the manual download link');
+
+  // A live PTY is served by an SSE stream, and the 220ms poll timer stands
+  // down while that stream is running. If the stream drops the timer must be
+  // restarted, otherwise terminal output freezes for the rest of the session.
+  // `state` is a top-level `const` in app.js, so it is script-scoped rather
+  // than a global property; read it back through the same context.
+  const state = vm.runInThisContext('state');
+  state.sessions = [{ id: 'sse1', status: 'running', name: 'pty' }];
+  state.activeSessionId = 'sse1';
+  state.sessionSeqs = { sse1: 0 };
+  state.paneIds = ['sse1'];
+  state.sessionStreams = {};
+  state.sessionTimer = null;
+
+  await global.pollSessions();
+  const firstStream = global.__eventSources[global.__eventSources.length - 1];
+  assert.ok(firstStream, 'a live session opens an SSE stream');
+  assert.strictEqual(state.sessionTimer, null, 'poll timer stands down while the stream is serving output');
+
+  const streamCountBeforeDrop = global.__eventSources.length;
+  firstStream.onerror();
+  assert.ok(firstStream.closed, 'the dropped stream is closed');
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.ok(
+    global.__eventSources.length > streamCountBeforeDrop || state.sessionTimer !== null,
+    'a dropped stream restarts streaming or polling so output keeps flowing',
+  );
+
+  // A session that has already finished must not be resurrected.
+  state.sessions = [{ id: 'sse1', status: 'exited', name: 'pty' }];
+  state.sessionStreams = {};
+  state.sessionTimer = null;
+  const streamCountBeforeDead = global.__eventSources.length;
+  const deadStream = { closed: false, close() { this.closed = true; } };
+  state.sessionStreams = {};
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(global.__eventSources.length, streamCountBeforeDead, 'a finished session is not resurrected');
+  void deadStream;
 
   console.log('frontend runtime smoke: PASS');
 })().catch((error) => { console.error(error); process.exit(1); });

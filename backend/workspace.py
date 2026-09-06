@@ -635,8 +635,51 @@ class Workspace:
                 add("memory", memory.get("id"), memory.get("title"), memory.get("created_at"), memory.get("kind"), {"id": memory.get("id"), "kind": memory.get("kind")})
 
         results.sort(key=lambda item: item.get("at") or "", reverse=True)
-        results = results[:limit]
-        return {"term": term, "total": len(results), "results": results}
+
+        # A plain newest-first truncation let one busy layer consume the whole
+        # budget: a host with many recent chat messages hid every matching
+        # operation, finding and report, which defeats the purpose of a
+        # cross-layer search. Each layer keeps a fair share first, then any
+        # remaining budget is filled newest-first.
+        matched_layers = list(dict.fromkeys(item["layer"] for item in results))
+        total_matched = len(results)
+        if total_matched > limit and len(matched_layers) > 1:
+            share = max(1, limit // len(matched_layers))
+            selected: list[dict[str, Any]] = []
+            seen: set[int] = set()
+            for layer in matched_layers:
+                for item in results:
+                    if item["layer"] != layer or id(item) in seen:
+                        continue
+                    selected.append(item)
+                    seen.add(id(item))
+                    if sum(1 for chosen in selected if chosen["layer"] == layer) >= share:
+                        break
+            for item in results:
+                if len(selected) >= limit:
+                    break
+                if id(item) not in seen:
+                    selected.append(item)
+                    seen.add(id(item))
+            selected.sort(key=lambda item: item.get("at") or "", reverse=True)
+            results = selected[:limit]
+        else:
+            results = results[:limit]
+
+        by_layer: dict[str, int] = {}
+        for item in results:
+            by_layer[item["layer"]] = by_layer.get(item["layer"], 0) + 1
+        # ``total`` is the number of returned rows; ``total_matched`` reports how
+        # many records actually matched so a truncated search is never mistaken
+        # for a complete one.
+        return {
+            "term": term,
+            "total": len(results),
+            "total_matched": total_matched,
+            "truncated": total_matched > len(results),
+            "by_layer": by_layer,
+            "results": results,
+        }
 
     def enrich_engagement(self, item: dict[str, Any] | None) -> dict[str, Any] | None:
         if not item:

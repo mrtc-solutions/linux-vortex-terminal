@@ -292,7 +292,11 @@
     if (key === 'search') {
       const results = value?.results || [];
       const layers = [...new Set(results.map(r => r.layer))];
-      return `${results.length} result(s)${layers.length ? ' across ' + layers.join(', ') : ''}`;
+      // Say so when the match set was larger than the returned page, otherwise
+      // a truncated search reads as a complete one.
+      const matched = value?.total_matched;
+      const shown = value?.truncated && matched ? `${results.length} of ${matched} match(es)` : `${results.length} result(s)`;
+      return `${shown}${layers.length ? ' across ' + layers.join(', ') : ''}`;
     }
     if (key === 'history') return `${(value || []).length} operation(s)`;
     if (key === 'sessions') return `${(value || []).length} session(s)`;
@@ -425,8 +429,16 @@
         return;
       }
       const byType = Object.entries(summary.by_type || {}).map(([type, count]) => `<span class="badge badge-muted">${esc(type)} ${esc(count)}</span>`).join(' ');
-      const nodeRows = nodes.map(n => `<li><strong>${esc(n.label)}</strong><span class="badge badge-muted">${esc(n.type)}</span>${n.severity ? `<span class="badge ${n.severity === 'critical' || n.severity === 'high' ? 'badge-red' : 'badge-amber'}">${esc(n.severity)}</span>` : ''}<small>${esc(n.count)} record(s)</small></li>`).join('');
-      const edgeRows = edges.map(e => `<li><code>${esc(e.source)}</code> <span>${esc(e.relationship)}</span> <code>${esc(e.target)}</code></li>`).join('');
+      // The graph can legitimately hold hundreds of observed nodes. Building a
+      // list item for every one of them froze the view on a busy host, so the
+      // rendered rows are capped and the remainder is reported honestly rather
+      // than silently dropped.
+      const ROW_CAP = 100;
+      const more = (items, rendered) => items.length > rendered
+        ? `<li>… ${esc(items.length - rendered)} more not shown — refine the engagement scope or query /api/assets/graph directly.</li>`
+        : '';
+      const nodeRows = nodes.slice(0, ROW_CAP).map(n => `<li><strong>${esc(n.label)}</strong><span class="badge badge-muted">${esc(n.type)}</span>${n.severity ? `<span class="badge ${n.severity === 'critical' || n.severity === 'high' ? 'badge-red' : 'badge-amber'}">${esc(n.severity)}</span>` : ''}<small>${esc(n.count)} record(s)</small></li>`).join('') + more(nodes, ROW_CAP);
+      const edgeRows = edges.slice(0, ROW_CAP).map(e => `<li><code>${esc(e.source)}</code> <span>${esc(e.relationship)}</span> <code>${esc(e.target)}</code></li>`).join('') + more(edges, ROW_CAP);
       el.innerHTML = `<div class="audit-strip"><span class="status-dot"></span> ${esc(nodes.length)} node(s) · ${esc(edges.length)} edge(s) · ${byType}</div><div class="grid-row"><section class="panel"><div class="panel-head"><div><span class="panel-kicker">ASSET NODES</span><h2>Observed entities</h2></div></div><ul class="plan-notes">${nodeRows}</ul></section><section class="panel"><div class="panel-head"><div><span class="panel-kicker">RELATIONSHIPS</span><h2>Observed edges</h2></div></div><ul class="plan-notes">${edgeRows || '<li>No observed relationships.</li>'}</ul></section></div>`;
     } catch (e) { toast(e.message, true); }
   }

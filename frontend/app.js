@@ -434,7 +434,14 @@ function streamSession(sessionId) {
         if (!data.session || !['starting', 'running'].includes(status)) { es.close(); delete state.sessionStreams[sessionId]; }
       } catch (_) { /* keep listening */ }
     };
-    es.onerror = () => { es.close(); delete state.sessionStreams[sessionId]; };
+    es.onerror = () => {
+      es.close();
+      delete state.sessionStreams[sessionId];
+      // The polling timer stands down while a stream is serving this session.
+      // If the stream drops while the PTY is still alive, nothing would fetch
+      // its output again, so restart the fallback poll here.
+      if (state.sessions.some(session => session.id === sessionId && session.status === 'running')) pollSessions();
+    };
     return true;
   } catch (_) { return false; }
 }
