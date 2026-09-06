@@ -1021,3 +1021,42 @@ class SearchFairnessTests(unittest.TestCase):
         result = self.workspace.search_all("   ")
         self.assertEqual(result["total"], 0)
         self.assertEqual(result["results"], [])
+
+
+class ReportRenameTests(unittest.TestCase):
+    """Reports can be retitled without disturbing evidence or the audit chain."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["VORTEX_HOME"] = self.tmp.name
+        self.store = Store(Path(self.tmp.name) / "vortex.db")
+        self.workspace = Workspace(self.store)
+        self.report = self.workspace.save_report({
+            "kind": "task", "title": "Original", "body": {"summary": "evidence"}, "formats": ["md"],
+        })
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_rename_changes_only_the_title(self):
+        renamed = self.workspace.rename_report(self.report["id"], "New Title")
+        self.assertEqual(renamed["title"], "New Title")
+        stored = self.workspace.get_report(self.report["id"])
+        self.assertEqual(stored["title"], "New Title")
+        # Everything that constitutes the finding itself is preserved.
+        self.assertEqual(stored["body"], {"summary": "evidence"})
+        self.assertEqual(stored["formats"], ["md"])
+        self.assertEqual(stored["created_at"], self.report["created_at"])
+        self.assertEqual(stored["kind"], self.report["kind"])
+
+    def test_blank_title_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.workspace.rename_report(self.report["id"], "   ")
+        self.assertEqual(self.workspace.get_report(self.report["id"])["title"], "Original")
+
+    def test_unknown_report_returns_none(self):
+        self.assertIsNone(self.workspace.rename_report("does-not-exist", "New Title"))
+
+    def test_title_is_clamped(self):
+        renamed = self.workspace.rename_report(self.report["id"], "A" * 500)
+        self.assertEqual(len(renamed["title"]), 200)

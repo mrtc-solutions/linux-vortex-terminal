@@ -33,6 +33,11 @@ assert.ok(workspace.includes("item.method === 'apt' ? 'INSTALL' : 'REVIEW'"), 'd
 // conversation renames its reports; next steps are one-click follow-ups; a
 // canvas failure can never kill app wiring.
 assert.ok(workspace.includes('data-report-preview') && workspace.includes('data-report-delete'), 'report cards carry PREVIEW and DELETE actions');
+// Reports are renameable in place, mirroring the conversation rename flow.
+assert.ok(workspace.includes('data-report-rename'), 'report cards carry a RENAME action');
+assert.ok(workspace.includes('/rename'), 'report rename posts to the rename route');
+assert.ok(workspace.includes('data-report-rename-save') && workspace.includes('data-report-rename-cancel'), 'report rename offers SAVE and CANCEL');
+assert.ok(workspace.includes('data-rename-conversation'), 'conversation cards carry a RENAME action');
 assert.ok(workspace.includes("api(`/api/reports/${encodeURIComponent(btn.dataset.reportDelete)}/delete`"), 'report DELETE posts to the real route');
 assert.ok(workspace.includes('async function previewReport') && workspace.includes("download?format=md"), 'report preview loads the real markdown');
 assert.ok(backend.includes('delete_report'), 'report delete route is served');

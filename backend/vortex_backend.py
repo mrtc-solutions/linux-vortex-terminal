@@ -4160,6 +4160,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
                 return self._json(200, {"task": task})
+            if path.startswith("/api/reports/") and path.endswith("/rename"):
+                item = self.workspace.rename_report(path.split("/")[-2], self._text(body, "title") or "")
+                if not item:
+                    return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
+                return self._json(200, {"report": item})
             if path.startswith("/api/reports/") and path.endswith("/delete"):
                 report_id = path.split("/")[-2]
                 if not self.workspace.delete_report(report_id):

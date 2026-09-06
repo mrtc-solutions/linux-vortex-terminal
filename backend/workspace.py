@@ -469,6 +469,22 @@ class Workspace:
     def get_report(self, report_id: str) -> dict[str, Any] | None:
         return next((item for item in self.list_reports() if item["id"] == report_id), None)
 
+    def rename_report(self, report_id: str, title: str) -> dict[str, Any] | None:
+        """Retitle a derived report.
+
+        Only the presentation title changes: the report body, its formats, the
+        originating task/operation and the audit chain are left untouched, so a
+        rename can never alter what was actually observed.
+        """
+        title = (title or "").strip()[:200]
+        if not title:
+            raise ValueError("title is required")
+        with self.store.lock, self.store.connect() as db:
+            cursor = db.execute("UPDATE reports SET title=? WHERE id=?", (title, report_id))
+            if cursor.rowcount == 0:
+                return None
+        return self.get_report(report_id)
+
     def delete_report(self, report_id: str) -> bool:
         """Remove a derived report. History, operations, and the audit chain are untouched."""
         with self.store.lock, self.store.connect() as db:
