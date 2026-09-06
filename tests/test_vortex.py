@@ -73,7 +73,12 @@ class VortexCoreTests(unittest.TestCase):
         if not any(probe_executable(name)['state'] == 'installed' for name in ('docker', 'podman')):
             self.assertEqual(plan['status'], 'unavailable')
             self.assertEqual(plan['commands'], [])
-            self.assertIn('TOOL MISSING', ' '.join(plan['notes']))
+            notes = ' '.join(plan['notes'])
+            # A runtime present in an untrusted PATH directory is reported as
+            # BLOCKED, not MISSING, so the operator is not told to reinstall
+            # software that is already on the host.
+            blocked = any(probe_executable(name)['state'] == 'blocked' for name in ('docker', 'podman'))
+            self.assertIn('TOOL BLOCKED' if blocked else 'TOOL MISSING', notes)
         else:
             self.assertEqual(plan['commands'][0]['adapter_id'], 'linux.containers.inspect')
             self.assertEqual(plan['commands'][0]['network_class'], 'loopback-only')
@@ -690,3 +695,65 @@ The following packages will be upgraded:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContainerRuntimeHonestyTests(unittest.TestCase):
+    """Regressions from manual testing: Docker reported as absent when it is
+    actually installed but blocked, and the daemon-down diagnosis being lost."""
+
+    def test_blocked_runtime_is_not_reported_as_missing(self):
+        from unittest.mock import patch
+
+        def fake_probe(name, **kwargs):
+            if name == 'docker':
+                return {'name': name, 'state': 'blocked', 'path': '/home/op/.local/bin/docker',
+                        'version': None, 'security_flags': ['unsafe-path-directory']}
+            return {'name': name, 'state': 'absent', 'path': None, 'version': None}
+
+        with patch.object(vtx_backend, 'probe_executable', side_effect=fake_probe):
+            state = vtx_backend.container_runtime_state()
+
+        self.assertIsNone(state['runtime'])
+        self.assertIn('TOOL BLOCKED', state['note'])
+        self.assertIn('/home/op/.local/bin/docker', state['note'])
+        # docker is present, so it must not be advertised as an install target.
+        self.assertNotIn('docker', state['missing'])
+        self.assertIn('podman', state['missing'])
+
+    def test_absent_runtime_still_reports_missing(self):
+        from unittest.mock import patch
+
+        def fake_probe(name, **kwargs):
+            return {'name': name, 'state': 'absent', 'path': None, 'version': None}
+
+        with patch.object(vtx_backend, 'probe_executable', side_effect=fake_probe):
+            state = vtx_backend.container_runtime_state()
+
+        self.assertIn('TOOL MISSING', state['note'])
+        self.assertEqual(sorted(state['missing']), ['docker', 'podman'])
+
+    def test_unreachable_daemon_survives_a_failed_exit_code(self):
+        """`docker info` exits non-zero when the daemon is down; the specific
+        service-inspection follow-up must still be offered."""
+        from replan import evaluate_objective
+
+        commands = [
+            {'stdout': 'Docker version 27.0.3', 'stderr': ''},
+            {'stdout': '', 'stderr': 'ERROR: Cannot connect to the Docker daemon. Is the docker daemon running?'},
+        ]
+        result = evaluate_objective(
+            {'kind': 'container_diagnose', 'status': 'planned', 'request': 'docker is broken'},
+            {'status': 'failed', 'commands': commands},
+        )
+        self.assertTrue(result['replan'])
+        self.assertEqual(result['next_request'], 'inspect service docker.service')
+
+    def test_generic_failure_is_unchanged(self):
+        from replan import evaluate_objective
+
+        result = evaluate_objective(
+            {'kind': 'processes', 'status': 'planned', 'request': 'show processes'},
+            {'status': 'failed', 'commands': [{'stdout': '', 'stderr': 'boom'}]},
+        )
+        self.assertTrue(result['replan'])
+        self.assertEqual(result['next_request'], 'show processes')

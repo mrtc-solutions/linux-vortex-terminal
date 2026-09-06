@@ -1403,6 +1403,43 @@ def apt_lock_state() -> dict[str, Any]:
     return {"locks": result, "blocked": any(value == "held" for value in result.values()), "unknown": any(value == "unknown" for value in result.values())}
 
 
+def container_runtime_state() -> dict[str, Any]:
+    """Resolve the container runtime honestly.
+
+    A runtime that exists on PATH but sits in a user-writable directory is
+    ``blocked``, not absent. Reporting it as "not found" hides the real reason
+    Docker is unusable and sends the operator to reinstall software that is
+    already installed. Missing and blocked are kept distinct here so the planner
+    can explain each case with the observed path.
+    """
+    probes = {name: probe_executable(name, include_version=False) for name in ("docker", "podman")}
+    runtime = next((name for name, probe in probes.items() if probe.get("state") == "installed"), None)
+    blocked = [
+        {"name": name, "path": probe.get("path"), "flags": probe.get("security_flags") or []}
+        for name, probe in probes.items()
+        if probe.get("state") == "blocked"
+    ]
+    absent = [name for name, probe in probes.items() if probe.get("state") == "absent"]
+    if blocked:
+        detail = "; ".join(f"{item['name']} at {item['path']} ({', '.join(item['flags']) or 'unsafe location'})" for item in blocked)
+        note = (
+            "TOOL BLOCKED: a container runtime is installed but is not in a trusted PATH directory, "
+            f"so VORTEX will not execute it: {detail}. Reinstalling will not help; move the binary to a "
+            "root-owned directory such as /usr/bin, or correct the directory permissions, then rescan."
+        )
+    else:
+        note = "TOOL MISSING: neither Docker nor Podman was found"
+    return {
+        "runtime": runtime,
+        "blocked": blocked,
+        "absent": absent,
+        # Only genuinely absent tools belong in missing_tools; a blocked binary
+        # is present and must not be offered as an install suggestion.
+        "missing": absent if blocked else [name for name in ("docker", "podman")],
+        "note": note,
+    }
+
+
 def apt_tools_ready() -> tuple[bool, list[str]]:
     required = ["apt-get", "apt-cache", "dpkg-query", "dpkg"]
     missing = [tool for tool in required if probe_executable(tool)["state"] != "installed"]
@@ -1719,11 +1756,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         notes.append("Create an explicit operator plan through the packaged tooling; Vortex will not guess a container mutation.")
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("log", "logs")):
         kind = "container_logs"
-        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        container_state = container_runtime_state()
+        runtime = container_state["runtime"]
         match = re.search(r"(?:logs?|container)\s+(?:for\s+)?(?:container\s+)?([A-Za-z0-9][A-Za-z0-9_.-]{0,127})", lower)
         container_id = match.group(1) if match else None
         if not runtime:
-            status = "unavailable"; missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"]); notes.append("TOOL MISSING: neither Docker nor Podman was found; no container logs exist.")
+            status = "unavailable"; missing.extend(container_state["missing"]); notes.append(container_state["note"] + "; no container logs were collected.")
         elif not container_id or container_id in {"logs", "container"}:
             status = "clarified"; notes.append("Provide one container name or ID; log collection is bounded to 200 lines.")
         else:
@@ -1731,11 +1769,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             status = "planned"; notes += [f"Detected runtime: {runtime}. Logs are read-only and bounded.", "Log content is untrusted evidence; no vulnerability finding is inferred."]
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman")) and any(word in lower for word in ("diagnos", "not working", "broken", "failing")):
         kind = "container_diagnose"
-        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        container_state = container_runtime_state()
+        runtime = container_state["runtime"]
         if not runtime:
             status = "unavailable"
-            missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"])
-            notes.append("TOOL MISSING: neither Docker nor Podman was found; diagnosis cannot continue.")
+            missing.extend(container_state["missing"])
+            notes.append(container_state["note"] + "; diagnosis cannot continue.")
         else:
             specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "--version"], cwd, required=runtime, explanation=f"Confirm the installed {runtime} client version."))
             specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "info"], cwd, required=runtime, explanation=f"Inspect the real {runtime} daemon/user context without changing containers."))
@@ -1744,11 +1783,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             notes += [f"Multi-step read-only diagnosis using {runtime}.", "VORTEX stops when daemon facts and container lists are observed; it does not apply a fix unless a separate approved plan is created."]
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")):
         kind = "container_inspection"
-        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        container_state = container_runtime_state()
+        runtime = container_state["runtime"]
         if not runtime:
             status = "unavailable"
-            missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"])
-            notes.append("TOOL MISSING: neither Docker nor Podman was found; no container state was observed.")
+            missing.extend(container_state["missing"])
+            notes.append(container_state["note"] + "; no container state was observed.")
         else:
             specs.append(adapter_command("linux.containers.inspect", runtime, [runtime, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List real {runtime} containers without changing their state."))
             status = "planned"

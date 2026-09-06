@@ -252,29 +252,50 @@ function setupMatrix() {
     canvas.width=innerWidth;canvas.height=innerHeight;
     columns=Array(Math.ceil(canvas.width/16)).fill(0).map(()=>({y:Math.random()*-70,speed:.55+Math.random()*.85,idx:Math.floor(Math.random()*GLYPH_SET.length),head:true}));
   }
+  // matchMedia() is resolved once and observed, not re-queried every frame.
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let cleared = false;
   function tick(){
-    if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; }
+    // Nothing is drawn while the decoration is disabled or the tab/window is
+    // hidden. Previously the canvas kept repainting every frame in the
+    // background, which is what made the whole app feel like it was dragging.
+    if (state.matrix === 'off' || state.plain || reduceMotion.matches || document.hidden) {
+      if (!cleared) { ctx.clearRect(0,0,canvas.width,canvas.height); cleared = true; }
+      return;
+    }
+    cleared = false;
     if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 3 : 2)) !== 0) return;
     ctx.globalAlpha=1; ctx.shadowBlur=0;
     ctx.fillStyle='rgba(8,9,11,.12)';ctx.fillRect(0,0,canvas.width,canvas.height);
     ctx.font='13px "JetBrains Mono",ui-monospace,monospace';ctx.textBaseline='top';
+    // Draw in three passes so the expensive shadow/alpha/fillStyle state is set
+    // once per pass instead of three times per column. Setting shadowBlur per
+    // glyph forced a fresh blur allocation for every character on screen.
+    ctx.globalAlpha=.95; ctx.shadowColor='rgba(0,212,170,.95)'; ctx.shadowBlur=state.matrix==='high'?14:8;
+    ctx.fillStyle='rgba(0,212,170,1)';
+    for (let i=0;i<columns.length;i++) ctx.fillText(GLYPH_SET[columns[i].idx],i*16,columns[i].y*16);
+    ctx.shadowBlur=0;
+    ctx.globalAlpha=.42; ctx.fillStyle='rgba(0,212,170,.42)';
+    for (let i=0;i<columns.length;i++) ctx.fillText(GLYPH_SET[(columns[i].idx+1)%GLYPH_SET.length],i*16,(columns[i].y-1)*16);
+    ctx.globalAlpha=.16; ctx.fillStyle='rgba(0,212,170,.16)';
+    for (let i=0;i<columns.length;i++) ctx.fillText(GLYPH_SET[(columns[i].idx+2)%GLYPH_SET.length],i*16,(columns[i].y-2)*16);
     for (let i=0;i<columns.length;i++) {
       const col=columns[i];
-      const glyph=GLYPH_SET[col.idx];
-      // bright head with a soft glow, then a short dimmer tail for a smooth stream.
-      ctx.globalAlpha=.95; ctx.shadowColor='rgba(0,212,170,.95)'; ctx.shadowBlur=state.matrix==='high'?14:8;
-      ctx.fillStyle='rgba(0,212,170,1)'; ctx.fillText(glyph,i*16,col.y*16);
-      ctx.shadowBlur=0; ctx.fillStyle='rgba(0,212,170,.42)'; ctx.globalAlpha=.42;
-      ctx.fillText(GLYPH_SET[(col.idx+1)%GLYPH_SET.length],i*16,(col.y-1)*16);
-      ctx.fillStyle='rgba(0,212,170,.16)'; ctx.globalAlpha=.16;
-      ctx.fillText(GLYPH_SET[(col.idx+2)%GLYPH_SET.length],i*16,(col.y-2)*16);
       col.y+=col.speed;
       if (Math.random()>.985){ col.idx=Math.floor(Math.random()*GLYPH_SET.length); col.speed=.55+Math.random()*.85; }
       if (col.y*16>canvas.height+64 || Math.random()>.985) { col.y=Math.random()*-70; col.idx=Math.floor(Math.random()*GLYPH_SET.length); col.speed=.55+Math.random()*.85; }
     }
     ctx.globalAlpha=1; ctx.shadowBlur=0;
   }
-  resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
+  let resizePending = false;
+  const onResize = () => {
+    // Reallocating the column array on every resize event thrashed the GC while
+    // a window was being dragged; coalesce to one rebuild per frame.
+    if (resizePending) return;
+    resizePending = true;
+    requestAnimationFrame(() => { resizePending = false; resize(); });
+  };
+  resize();addEventListener('resize',onResize);(function loop(){tick();requestAnimationFrame(loop)})(); }
 function terminalMetrics() {
   const host = $('terminal-panes');
   const width = (host && host.clientWidth) || Math.max(640, innerWidth - 280);
@@ -400,8 +421,15 @@ function streamSession(sessionId) {
     es.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
+        const before = state.sessions.map(s => `${s.id}:${s.status}:${s.name}`).join('|');
         applySessionPayload(sessionId, data);
-        state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();
+        state.session = activeSession();
+        // A PTY emits many output chunks per second. Only the terminal text
+        // needs to update that often; rebuilding the tab strip, the pane grid
+        // and the toolbar on every chunk was pure wasted layout work.
+        if (state.sessions.map(s => `${s.id}:${s.status}:${s.name}`).join('|') !== before) {
+          renderSessionTabs(); renderSessionPanes(); renderSessionState();
+        }
         const status = data.session?.status;
         if (!data.session || !['starting', 'running'].includes(status)) { es.close(); delete state.sessionStreams[sessionId]; }
       } catch (_) { /* keep listening */ }
@@ -425,6 +453,10 @@ async function pollSessions() {
       } catch (e) { toast(e.message, true); }
     }
     state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();
+    // When every running session is already served by an SSE stream there is
+    // nothing left for this timer to fetch, and re-arming it only rebuilt the
+    // tab strip and pane grid several times a second for no reason.
+    if (!live.length && state.sessions.some(session => session.status === 'running')) return;
     if (state.sessions.some(session => session.status === 'running')) state.sessionTimer = setTimeout(tick, 220);
   };
   await tick();

@@ -318,11 +318,33 @@
     const keys = ['history','sessions','findings','artifacts','reports','tasks','engagements','search','dashboard','model'];
     const rows = keys.filter(k => data[k] !== undefined).map(k => `<li><strong>${esc(k)}</strong> · ${esc(paletteRow(k, data[k]))}</li>`);
     el.className = 'plan-card';
+    // The backend returns the reviewed command list for an unknown or
+    // incomplete command. Dropping it left a mistyped slash command as a dead
+    // end with no way to discover the valid ones.
+    const available = Array.isArray(meta.available) && meta.available.length
+      ? `<div class="suggestion-row"><small>AVAILABLE COMMANDS</small>${meta.available
+          .map(cmd => `<button class="suggestion-chip" data-palette-command="${esc(cmd)}">${esc(cmd)}</button>`).join('')}</div>`
+      : '';
     if (!rows.length) {
-      el.innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>PALETTE / ${esc((meta.command || '').replace('/', '').toUpperCase() || 'CMD')}</span>${esc(meta.message || meta.args || '')}</div></div>`;
+      el.innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>PALETTE / ${esc((meta.command || '').replace('/', '').toUpperCase() || 'CMD')}</span>${esc(meta.message || meta.args || '')}</div></div>${available}`;
+      bindPaletteChips(el);
       return;
     }
-    el.innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>PALETTE / ${esc((meta.command || '').replace('/', '').toUpperCase() || 'CMD')}</span>${esc(meta.args || '')}</div></div><ul class="plan-notes">${rows.join('')}</ul>`;
+    el.innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>PALETTE / ${esc((meta.command || '').replace('/', '').toUpperCase() || 'CMD')}</span>${esc(meta.args || '')}</div></div><ul class="plan-notes">${rows.join('')}</ul>${available}`;
+    bindPaletteChips(el);
+  }
+
+  // A palette command needs an argument placeholder stripped ("/explain <command>")
+  // before it can be re-sent, and it must go back through makePlan so the
+  // normal busy-state and error handling still apply.
+  function bindPaletteChips(el) {
+    el.querySelectorAll('[data-palette-command]').forEach(btn => btn.addEventListener('click', () => {
+      const command = String(btn.dataset.paletteCommand || '').replace(/\s*<[^>]*>\s*/g, '').trim();
+      if (!command) return;
+      const input = $('request-input');
+      if (input) input.value = command;
+      if (typeof window.makePlan === 'function') window.makePlan(command);
+    }));
   }
 
   async function submitPalette(command) {
@@ -452,6 +474,10 @@
     try {
       if (text.startsWith('/')) {
         await submitPalette(text);
+        // A palette command is not persisted as a conversation message, so the
+        // optimistic echo is never replaced by refreshChat() and would pile up
+        // in the thread on every slash command. Drop it once the result shows.
+        if (thread) thread.querySelectorAll('.local-echo').forEach(node => node.remove());
         return;
       }
       const payload = { request: text, cwd: state.doctor?.cwd || undefined, conversation_id: state.conversationId, offline: !!state.settings.offline };

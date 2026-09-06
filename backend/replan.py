@@ -26,18 +26,22 @@ def evaluate_objective(plan: dict[str, Any], operation: dict[str, Any] | None) -
         }
     if status in {"cancelled", "interrupted"}:
         return {"achieved": False, "replan": False, "reason": "The operator stopped execution.", "next_request": None}
+    # An unreachable Docker daemon makes `docker info` exit non-zero, so this
+    # check must run before the generic failure branch. Otherwise the single
+    # most useful diagnosis -- "the client works, the daemon is down" -- is
+    # discarded and the operator is told only that "a command failed".
+    if kind == "container_diagnose" and status in {"succeeded", "failed", "timed_out"}:
+        joined = "\n".join((item.get("stdout") or "") + (item.get("stderr") or "") for item in commands).lower()
+        if "cannot connect" in joined or "is the docker daemon running" in joined:
+            return {
+                "achieved": False,
+                "replan": True,
+                "reason": "The client is installed but the daemon was not reachable. A service-inspection plan can be created if systemd is available.",
+                "next_request": "inspect service docker.service",
+            }
     if status in {"failed", "timed_out"}:
         return {"achieved": False, "replan": True, "reason": "A command did not complete successfully. A fresh plan is required.", "next_request": plan.get("request")}
     if status == "succeeded" or (not operation and plan.get("status") == "planned"):
-        if kind == "container_diagnose":
-            joined = "\n".join((item.get("stdout") or "") + (item.get("stderr") or "") for item in commands).lower()
-            if "cannot connect" in joined or "is the docker daemon running" in joined:
-                return {
-                    "achieved": False,
-                    "replan": True,
-                    "reason": "The client is installed but the daemon was not reachable. A service-inspection plan can be created if systemd is available.",
-                    "next_request": "inspect service docker.service",
-                }
         if kind in ACHIEVED_KINDS or kind in {"container_inspection", "container_logs", "container_diagnose", "authorized_engagement", "ssh_diagnostics", "package_operation", "systemd_mutation"}:
             if status == "succeeded":
                 return {"achieved": True, "replan": False, "reason": "Observed commands completed; the declared adapter objective was met.", "next_request": None}

@@ -118,6 +118,23 @@ body.electron-shell .surface-window{top:var(--native-titlebar-height)}
 .terminal-window::before { content:""; position:absolute; inset:auto 0 0 0; height:1px; z-index:3; pointer-events:none;
   background:linear-gradient(90deg,transparent,rgba(0,212,170,.65),transparent); animation:vortex-bar 7s linear infinite; }
 @media(prefers-reduced-motion:reduce){ .brand-mark,.status-dot,.pulse,.hero-art,.eyebrow-line,.panel::after,.terminal-window::before { animation:none; } }
+/* Only the panels the operator can actually see are animated. Every view stays
+   in the DOM, so the decorative sweep was previously repainting the panels of
+   all fourteen hidden views on every frame -- a continuous full-page repaint
+   that made the whole workbench feel sluggish. Hidden views cost nothing now. */
+.view:not(.active) .panel::after,
+.view:not(.active) .terminal-window::before,
+.view:not(.active) .brand-mark,
+.view:not(.active) .status-dot,
+.view:not(.active) .pulse,
+.view:not(.active) .hero-art,
+.view:not(.active) .eyebrow-line { animation:none; }
+/* Skip layout/paint entirely for off-screen views. */
+.view:not(.active) { content-visibility:hidden; }
+/* A surface window (Help/About/Dependencies) covers the page; stop the
+   decoration underneath it from competing for frames. */
+body:has(.surface-window:not([hidden])) .panel::after,
+body:has(.surface-window:not([hidden])) .terminal-window::before { animation:none; }
 
 
 /* ============================================================
@@ -281,3 +298,120 @@ body.electron-shell .surface-window{top:var(--native-titlebar-height)}
   .about-section-full { grid-column: 1; }
   .about-attr-row { flex-wrap: wrap; }
 }
+
+/* ============================================================
+   BUTTON CONTENT COLLISION FIXES
+   ------------------------------------------------------------
+   Buttons across the app are flex rows whose labels, icons, and
+   badges had no shrink/wrap protection. At narrower widths the
+   text outgrew the button box and collided with the icon or the
+   neighbouring control. These rules constrain the content to the
+   button instead of changing any layout, colour, or behaviour.
+   ============================================================ */
+
+/* A button is a flow-root for its own content: it may shrink, but
+   its label must never spill outside the painted box. */
+button, .secondary-button, .text-button, .primary-button,
+.terminal-button, .suggestion-chip, .approve-button {
+  max-width: 100%;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+/* Multi-part buttons (icon + label + arrow) need an explicit gap and
+   a shrinkable middle so the arrow cannot sit on top of the text. */
+.quick-actions button { gap: 10px; min-width: 0; }
+.quick-actions button > span { min-width: 0; }
+.quick-actions b,
+.quick-actions small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qa-icon, .qa-arrow { flex: none; }
+
+/* Icons inside window/traffic controls must never be squeezed. */
+.window-control > span,
+.nav-icon,
+.setting-icon,
+.empty-icon,
+.tab-led,
+.status-dot,
+.pulse { flex: none; }
+
+/* Sidebar navigation: keep the icon fixed and clip only the label. */
+.nav-item { min-width: 0; gap: 12px; }
+.nav-item > span:not(.nav-icon) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toolbars and headings that hold several buttons: allow wrapping and
+   add real spacing so adjacent controls cannot visually touch. */
+.section-heading { gap: 16px; flex-wrap: wrap; }
+.section-heading > div:last-child {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.panel-head { gap: 14px; }
+.panel-head > div:last-child {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.panel-head > div:last-child > .badge,
+.panel-head > div:last-child > button { flex: none; }
+
+/* Top bar actions: the label may clip, the status dot may not. */
+.top-actions > * { flex: none; }
+.backend-status { min-width: 0; }
+#backend-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Terminal toolbar: the session controls sit between a fixed tab and a
+   fixed right-hand readout, so only the middle group may shrink. */
+.terminal-toolbar { gap: 10px; flex-wrap: nowrap; }
+.terminal-tab { flex: none; }
+.toolbar-right { flex: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-controls { min-width: 0; flex-wrap: wrap; }
+.session-controls .terminal-button { flex: none; }
+
+/* Results/plan action rows introduced with the analysis panel. */
+.results-actions > div,
+.suggestion-row,
+.approval {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.approval small { min-width: 0; flex: 1 1 220px; }
+.approve-button { flex: none; }
+
+/* Absolutely positioned tool-card badge: reserve the space it occupies so
+   the heading text cannot run underneath it. */
+.tool-card h3 { padding-right: 88px; overflow-wrap: anywhere; }
+.tool-card .badge { max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Dependency rows and asset lists mix text with trailing buttons. */
+.dep-row { gap: 12px; }
+.dep-row > *:not(:first-child) { flex: none; }
+.dep-row strong, .dep-row small { overflow-wrap: anywhere; }
+
+/* Engagement cards: the detail row ends with links/buttons. */
+.engagement-details { flex-wrap: wrap; gap: 10px 20px; align-items: center; }
+.engagement-card header { gap: 12px; align-items: flex-start; }
+.engagement-card header .badge { flex: none; }
+
+/* Setting cards keep their trailing control on one line. */
+.setting-card { gap: 14px; flex-wrap: wrap; }
+.setting-card > div { min-width: 0; }
+
+/* Help/about navigation buttons. */
+.help-nav-item { overflow: hidden; text-overflow: ellipsis; }
