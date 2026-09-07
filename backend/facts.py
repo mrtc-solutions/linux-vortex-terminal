@@ -115,17 +115,50 @@ def parse_journal(text: str, exit_code: int | None = 0) -> dict[str, Any]:
     return {"state": "observed" if exit_code in (None, 0) else "tool_error", "line_count": len(lines), "failure_line_count": len(failures), "failure_lines": failures[:20]}
 
 
+def parse_package_observation(text: str, exit_code: int | None) -> dict[str, Any]:
+    """Parse the fixed dpkg-query status/version/architecture format."""
+    cleaned = clean(text).strip()
+    if exit_code == 1:
+        return {"state": "absent", "installed": False, "version": None, "architecture": None}
+    if exit_code != 0:
+        return {"state": "tool_error", "installed": None, "version": None, "architecture": None}
+    line = cleaned.splitlines()[0].strip() if cleaned else ""
+    match = re.fullmatch(r"install ok installed\s+(\S+)\s+(\S+)", line)
+    if not match:
+        return {"state": "unexpected_output", "installed": None, "version": None, "architecture": None}
+    return {"state": "installed", "installed": True, "version": match.group(1)[:160], "architecture": match.group(2)[:80]}
+
+
 def parse_package_facts(results: list[dict[str, Any]]) -> dict[str, Any]:
-    facts: dict[str, Any] = {"state": "observed", "dpkg": None, "held": [], "policy": None, "metadata": None, "preflight": None, "impact": {"upgraded": 0, "newly_installed": 0, "removed": 0, "not_upgraded": 0}}
+    facts: dict[str, Any] = {"state": "observed", "dpkg": None, "held": [], "policy": None, "metadata": None, "preflight": None, "package_before": None, "verification": None, "impact": {"upgraded": 0, "newly_installed": 0, "removed": 0, "not_upgraded": 0}}
     for item in results:
         argv = item.get("argv", [])
         output = item.get("stdout", "") + item.get("stderr", "")
         exit_code = item.get("exit_code")
         if item.get("status") != "succeeded": facts["state"] = "tool_error"
-        if item.get("executable") == "dpkg" and "--audit" in argv: facts["dpkg"] = parse_dpkg_audit(output, exit_code)
+        if item.get("executable") == "dpkg" and "--audit" in argv:
+            facts["dpkg"] = parse_dpkg_audit(output, exit_code)
+            if item.get("package_observation") == "after":
+                facts["verification"] = {
+                    "state": "consistent" if not facts["dpkg"]["incomplete"] else "incomplete",
+                    "expected": "consistent", "verified": not facts["dpkg"]["incomplete"],
+                }
+                if not facts["verification"]["verified"]:
+                    facts["state"] = "verification_failed"
         elif item.get("executable") == "apt-mark" and "showhold" in argv: facts["held"] = [line.strip() for line in output.splitlines() if line.strip()][:100]
         elif item.get("executable") == "apt-cache" and "policy" in argv: facts["policy"] = parse_apt_policy(output, exit_code)
         elif item.get("executable") == "apt-cache" and "show" in argv: facts["metadata"] = parse_apt_show(output, exit_code)
+        elif item.get("executable") == "dpkg-query" and "-W" in argv:
+            observation = parse_package_observation(output, exit_code)
+            if item.get("package_observation") == "after":
+                expected = item.get("expected_package_state")
+                observation["expected"] = expected
+                observation["verified"] = observation.get("state") == expected
+                facts["verification"] = observation
+                if not observation["verified"]:
+                    facts["state"] = "verification_failed"
+            else:
+                facts["package_before"] = observation
         elif item.get("executable") == "apt-get" and "-s" in argv:
             facts["preflight"] = parse_apt_preflight(output, exit_code)
             for key in facts["impact"]: facts["impact"][key] = facts["preflight"].get(key, 0)

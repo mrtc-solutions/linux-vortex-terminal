@@ -24,6 +24,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from ..fileio import atomic_write, read_owner_text
+except ImportError:  # pragma: no cover - direct module import
+    from fileio import atomic_write, read_owner_text  # type: ignore
+
 CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Well-known Kali / Debian-security tools. Presence is probed; absence stays
@@ -179,7 +184,7 @@ def load_snapshot() -> dict[str, Any]:
     if not path.is_file():
         return {"names": [], "at": None}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(read_owner_text(path, max_bytes=2 * 1024 * 1024))
         if isinstance(data, dict) and isinstance(data.get("names"), list):
             return data
     except (OSError, ValueError):
@@ -190,13 +195,7 @@ def load_snapshot() -> dict[str, Any]:
 def save_snapshot(names: list[str]) -> None:
     path = _snapshot_path()
     payload = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "names": sorted(set(names))}
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    try:
-        tmp.chmod(0o600)
-    except OSError:
-        pass
-    os.replace(tmp, path)
+    atomic_write(path, json.dumps(payload, sort_keys=True, indent=2) + "\n", mode=0o600)
 
 
 def _is_executable_file(entry: os.DirEntry[str]) -> bool:

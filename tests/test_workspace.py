@@ -1,6 +1,8 @@
 import json
 import os
+import pty
 import tempfile
+import termios
 import time
 import unittest
 from pathlib import Path
@@ -93,6 +95,18 @@ class WorkspaceTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)
+
+    def test_global_search_uses_one_bounded_message_query_and_escapes_wildcards(self):
+        conversation = self.workspace.create_conversation("Search test")
+        self.workspace.add_message(conversation["id"], "user", "literal 100%_done marker")
+        self.workspace.add_message(conversation["id"], "user", "other message")
+        with patch.object(self.workspace, "list_messages", side_effect=AssertionError("N+1 message query")):
+            found = self.workspace.search_all("100%_done")
+            absent = self.workspace.search_all("100Xdone")
+        message_hits = [item for item in found["results"] if item["layer"] == "messages"]
+        self.assertEqual(len(message_hits), 1)
+        self.assertEqual(message_hits[0]["data"]["content"], "literal 100%_done marker")
+        self.assertFalse(any(item["layer"] == "messages" for item in absent["results"]))
 
     def test_setup_checks_are_live(self):
         from backend.health import setup_checks
@@ -427,6 +441,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(tasks)
         task = tasks[0]
         self.assertTrue(task.get("operation_id"))
+        self.assertEqual(task["state"], "COMPLETED", "one-shot CLI must finalize its task before returning")
         for _ in range(150):
             operation = self.store.get_operation(task["operation_id"])
             if operation and operation["status"] not in ("started", "running"):
@@ -435,6 +450,18 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(operation["status"], "succeeded")
         self.assertTrue((operation["commands"][0].get("stdout") or "").strip())
 
+    def test_cli_run_saved_workspace_plan_finalizes_bound_task(self):
+        from cli import vortex as vortex_cli
+        plan = build_plan(self.store, "whoami", self.tmp.name)
+        task = self.workspace.create_task("whoami")
+        self.workspace.update_task(task["id"], plan_id=plan["id"], state="WAITING_FOR_APPROVAL")
+        root_flag = ["--allow-root"] if ALLOW_ROOT else []
+        code = vortex_cli.main(["--json", "--yes", *root_flag, "run", plan["id"]])
+        self.assertEqual(code, 0)
+        final = self.workspace.get_task(task["id"])
+        self.assertEqual(final["state"], "COMPLETED")
+        self.assertTrue(final.get("operation_id"))
+
     def test_cli_turn_yes_safe_profile_still_executes(self):
         from cli import vortex as vortex_cli
         root_flag = ["--allow-root"] if ALLOW_ROOT else []
@@ -442,6 +469,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(code, 0)
         task = self.workspace.list_tasks()[0]
         self.assertTrue(task.get("operation_id"))
+        self.assertEqual(task["state"], "COMPLETED", "safe-profile CLI turn must not leave an OBSERVING task")
         for _ in range(150):
             operation = self.store.get_operation(task["operation_id"])
             if operation and operation["status"] not in ("started", "running"):
@@ -612,6 +640,15 @@ class WorkspaceTests(unittest.TestCase):
         rejected = self.workspace.reject_task_plan(plan["id"], task["id"])
         self.assertTrue(rejected["rejected"])
         self.assertEqual(rejected["task"]["state"], "CANCELLED")
+
+    def test_cancelled_operation_preserves_operator_requested_pause(self):
+        from backend.orchestrate import finish_task
+        plan = build_plan(self.store, "whoami", self.tmp.name)
+        task = self.workspace.create_task("whoami")
+        self.workspace.update_task(task["id"], plan_id=plan["id"], operation_id="paused-op", state="PAUSED")
+        operation = {"id": "paused-op", "plan_id": plan["id"], "status": "cancelled", "commands": [], "artifacts": []}
+        finish_task(self.workspace, task["id"], operation, plan)
+        self.assertEqual(self.workspace.get_task(task["id"])["state"], "PAUSED")
 
     def test_task_lifecycle_cancels_live_operation_before_reuse(self):
         calls = []

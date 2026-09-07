@@ -1,9 +1,12 @@
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.replan import evaluate_objective
 from backend.security.guardian import evaluate
@@ -78,6 +81,17 @@ class VortexSecurityTests(unittest.TestCase):
         self.assertFalse(result["replan"])
         self.assertIn("missing", result["reason"].lower())
 
+    def test_safe_file_root_check_uses_path_boundary_not_string_prefix(self):
+        allowed = Path(self.tmp.name) / "allowed"
+        sibling = Path(self.tmp.name) / "allowed-evil"
+        allowed.mkdir(); sibling.mkdir()
+        inside = allowed / "inside.txt"; inside.write_text("ok", encoding="utf-8")
+        outside = sibling / "outside.txt"; outside.write_text("no", encoding="utf-8")
+        with patch.object(__import__("backend.vortex_backend", fromlist=["x"]), "_READABLE_FILE_ROOTS", (str(allowed),)):
+            from backend.vortex_backend import safe_file_target
+            self.assertEqual(safe_file_target(str(inside)), inside.resolve())
+            self.assertIsNone(safe_file_target(str(outside)))
+
     def test_artifact_path_traversal_rejected(self):
         from backend.artifacts import ArtifactError, analyze_path
         with self.assertRaises(ArtifactError):
@@ -104,9 +118,21 @@ class VortexSecurityTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "safe")
 
-    def test_plugin_manifests_stay_inside_tree(self):
-        from backend.plugins.loader import list_manifests
-        items = list_manifests()
+    def test_plugin_manifests_stay_inside_tree_and_are_bounded_regular_files(self):
+        from backend.plugins import loader
+        root = Path(self.tmp.name) / "plugins"
+        valid = root / "valid" / "manifest.json"
+        valid.parent.mkdir(parents=True)
+        valid.write_text(json.dumps({"id": "safe", "kind": "metadata", "name": "Safe"}))
+        linked = root / "linked" / "manifest.json"
+        linked.parent.mkdir(parents=True)
+        linked.symlink_to(valid)
+        oversized = root / "oversized" / "manifest.json"
+        oversized.parent.mkdir(parents=True)
+        oversized.write_bytes(b"{" + (b" " * (loader._MAX_MANIFEST_BYTES + 1)) + b"}")
+        with patch.object(loader, "ROOT", root):
+            items = loader.list_manifests()
+        self.assertEqual([item["id"] for item in items], ["safe"])
         self.assertTrue(all(item.get("executable") is False for item in items))
         self.assertTrue(all(".." not in str(item.get("source") or "") for item in items))
 
@@ -218,6 +244,141 @@ class VortexSecurityTests(unittest.TestCase):
                 os.environ.pop("XDG_CONFIG_HOME", None)
             else:
                 os.environ["XDG_CONFIG_HOME"] = previous
+
+    def test_settings_and_secret_updates_are_atomic_and_serialized(self):
+        from backend.config import load_settings, save_settings, settings_path
+        from backend.secretstore import put, status
+        config_home = Path(self.tmp.name) / "atomic-config"
+        config_home.mkdir()
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}):
+            barrier = threading.Barrier(3)
+            errors = []
+
+            def update(body):
+                try:
+                    barrier.wait(timeout=2)
+                    save_settings(body)
+                except Exception as exc:  # pragma: no cover - assertion reports detail
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=update, args=({"model_primary": "acme/primary:1"},)),
+                threading.Thread(target=update, args=({"model_planner": "acme/planner:1"},)),
+            ]
+            for thread in threads:
+                thread.start()
+            barrier.wait(timeout=2)
+            for thread in threads:
+                thread.join(timeout=3)
+            self.assertFalse(errors)
+            settings = load_settings()
+            self.assertEqual(settings["model_primary"], "acme/primary:1")
+            self.assertEqual(settings["model_planner"], "acme/planner:1")
+            self.assertEqual(settings_path().stat().st_mode & 0o777, 0o600)
+
+            secret_threads = [
+                threading.Thread(target=put, args=("ollama_token", "secret-value-alpha")),
+                threading.Thread(target=put, args=("openai_api_key", "secret-value-beta")),
+                threading.Thread(target=put, args=("anthropic_api_key", "secret-value-gamma")),
+            ]
+            for thread in secret_threads:
+                thread.start()
+            for thread in secret_threads:
+                thread.join(timeout=3)
+            self.assertEqual(set(status()["configured"]), {"ollama_token", "openai_api_key", "anthropic_api_key"})
+            self.assertNotIn("secret-value-alpha", str(status()))
+
+    def test_settings_updates_are_serialized_across_processes(self):
+        from backend.config import load_settings, settings_path
+        config_home = Path(self.tmp.name) / "process-config"
+        config_home.mkdir()
+        marker = Path(self.tmp.name) / "start-writers"
+        updates = {
+            "developer_mode": True,
+            "ai_enabled": False,
+            "model_primary": "process/primary:1",
+            "model_planner": "process/planner:1",
+            "model_fast": "process/fast:1",
+            "first_run_complete": True,
+            "host_tool_access": True,
+            "privacy_mode": "hybrid",
+        }
+        code = (
+            "import json,sys,time; from pathlib import Path; "
+            "marker=Path(sys.argv[1]); "
+            "exec('while not marker.exists():\\n time.sleep(0.005)'); "
+            "from backend.config import save_settings; "
+            "save_settings({sys.argv[2]: json.loads(sys.argv[3])})"
+        )
+        env = dict(os.environ, XDG_CONFIG_HOME=str(config_home))
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-c", code, str(marker), key, json.dumps(value)],
+                cwd=str(Path(__file__).resolve().parent.parent), env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            for key, value in updates.items()
+        ]
+        marker.touch()
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=15)
+            self.assertEqual(process.returncode, 0, stderr or stdout)
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}):
+            settings = load_settings()
+            self.assertEqual({key: settings[key] for key in updates}, updates)
+            self.assertEqual(settings_path().stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(settings_path().parent.glob(".settings.json.*")), [])
+
+    def test_atomic_writer_preserves_destination_and_cleans_temp_on_replace_failure(self):
+        from backend.fileio import atomic_write
+        path = Path(self.tmp.name) / "atomic" / "state.json"
+        path.parent.mkdir()
+        path.write_text("original", encoding="utf-8")
+        with patch("backend.fileio.os.replace", side_effect=OSError("simulated interruption")):
+            with self.assertRaisesRegex(OSError, "simulated interruption"):
+                atomic_write(path, "replacement")
+        self.assertEqual(path.read_text(encoding="utf-8"), "original")
+        self.assertEqual(list(path.parent.glob(".state.json.*")), [])
+
+    def test_database_backup_refuses_symlink_even_with_overwrite(self):
+        backup_dir = Path(self.tmp.name) / "backup-symlink"
+        backup_dir.mkdir()
+        victim = Path(self.tmp.name) / "backup-victim"
+        victim.write_text("unchanged", encoding="utf-8")
+        destination = backup_dir / "snapshot.db"
+        destination.symlink_to(victim)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            self.store.backup(destination, overwrite=True)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "unchanged")
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(list(backup_dir.glob(".snapshot.db.*.backup")), [])
+
+    def test_settings_lock_refuses_symlink(self):
+        from backend.config import save_settings, settings_path
+        config_home = Path(self.tmp.name) / "lock-symlink-config"
+        config_home.mkdir()
+        victim = Path(self.tmp.name) / "lock-victim"
+        victim.write_text("unchanged", encoding="utf-8")
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}):
+            lock = settings_path().with_name("settings.json.lock")
+            lock.symlink_to(victim)
+            with self.assertRaises(OSError):
+                save_settings({"profile": "standard"})
+        self.assertEqual(victim.read_text(encoding="utf-8"), "unchanged")
+
+    def test_atomic_settings_replace_does_not_follow_destination_symlink(self):
+        from backend.config import save_settings, settings_path
+        config_home = Path(self.tmp.name) / "symlink-config"
+        config_home.mkdir()
+        victim = Path(self.tmp.name) / "victim.txt"
+        victim.write_text("unchanged", encoding="utf-8")
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(config_home)}):
+            path = settings_path()
+            path.symlink_to(victim)
+            save_settings({"profile": "standard"})
+            self.assertEqual(victim.read_text(encoding="utf-8"), "unchanged")
+            self.assertTrue(path.is_file())
+            self.assertFalse(path.is_symlink())
 
 
 class GuardianScopeGateRegressionTests(unittest.TestCase):

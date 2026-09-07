@@ -6,6 +6,7 @@ proposal-only until the operator installs them outside VORTEX.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Distro package names for tools VORTEX can actually plan through linux.packages.apt.
@@ -110,6 +111,56 @@ EXTRA_RUNTIME_DEPENDENCIES: tuple[dict[str, Any], ...] = (
     },
 )
 OLLAMA_SOURCE = "https://ollama.com/download"
+_PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]{0,127}(?::[a-z0-9]{1,32})?$")
+_RESERVED_PACKAGES = {
+    "all", "container", "containers", "everything", "flatpak", "image", "images",
+    "network", "package", "packages", "pkg", "process", "processes", "program",
+    "service", "snap", "unit", "volume",
+}
+
+
+def custom_package_proposal(raw_name: str) -> dict[str, Any]:
+    """Create a typed apt proposal for an exact operator-entered package name.
+
+    This deliberately accepts only a Debian package identifier—not a command,
+    URL, repository, PPA, local .deb, or installer script. Candidate/version
+    and dependency impact are observed by the existing apt preflight before the
+    separately approved root mutation.
+    """
+    if not isinstance(raw_name, str):
+        raise ValueError("package name must be a string")
+    name = raw_name.strip().lower()
+    if not _PACKAGE_RE.fullmatch(name) or name in _RESERVED_PACKAGES:
+        raise ValueError("enter one exact Debian/Kali package name (for example `ripgrep`)")
+    return {
+        "id": f"custom:package:{name}",
+        "kind": "package",
+        "name": name,
+        "title": name,
+        "state": "operator-requested",
+        "installed": False,
+        "required": False,
+        "method": "apt",
+        "apt_package": name,
+        "auto_install": False,
+        "requires_root": True,
+        "source": "configured Debian/Kali apt repositories",
+        "license": "distro package metadata (review before approval)",
+        "permissions": ["root-required", "apt-network", "no-password-capture"],
+        "commands": [
+            f"apt-cache policy {name}",
+            f"apt-cache show {name}",
+            f"apt-get -s --no-remove install {name}",
+            f"apt-get --assume-yes --no-remove install {name}",
+        ],
+        "plan_request": f"install package {name}",
+        "message": (
+            f"VORTEX will create a reviewed apt plan for `{name}`. It first checks package metadata, "
+            "installed/candidate versions, holds, and dependency impact. The mutation requires OS-level "
+            "root approval; VORTEX never captures a sudo password. After success, refresh/rescan discovers "
+            "new safe-PATH executables so they can appear in Tools and remain Guardian-gated."
+        ),
+    }
 
 
 def _probe_name(name: str) -> dict[str, Any]:

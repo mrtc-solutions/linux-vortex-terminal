@@ -5,6 +5,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from .fileio import atomic_write, exclusive_file_lock, read_owner_text
+except ImportError:  # pragma: no cover - direct module import
+    from fileio import atomic_write, exclusive_file_lock, read_owner_text  # type: ignore
+
 ALLOWED = ("ollama_token", "openai_api_key", "anthropic_api_key")
 
 
@@ -21,8 +26,8 @@ def status() -> dict[str, Any]:
     configured = []
     if path.is_file():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            configured = [key for key in ALLOWED if data.get(key)]
+            data = json.loads(read_owner_text(path, max_bytes=64 * 1024))
+            configured = [key for key in ALLOWED if isinstance(data, dict) and data.get(key)]
         except (OSError, ValueError):
             configured = []
     return {"slots": ALLOWED, "configured": configured, "values": None}
@@ -32,19 +37,17 @@ def put(slot: str, value: str) -> dict[str, Any]:
     if slot not in ALLOWED:
         raise ValueError("unknown secret slot")
     path = _path()
-    data = {}
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = {}
-    if value:
-        data[slot] = value[:4096]
-    else:
-        data.pop(slot, None)
-    path.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    with exclusive_file_lock(path):
+        data = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(read_owner_text(path, max_bytes=64 * 1024))
+                data = loaded if isinstance(loaded, dict) else {}
+            except (OSError, ValueError):
+                data = {}
+        if value:
+            data[slot] = value[:4096]
+        else:
+            data.pop(slot, None)
+        atomic_write(path, json.dumps(data, sort_keys=True), mode=0o600)
     return status()

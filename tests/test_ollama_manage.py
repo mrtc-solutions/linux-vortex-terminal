@@ -7,6 +7,7 @@ validation, loopback-only) without ever downloading anything.
 """
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -54,9 +55,13 @@ class OllamaManagerTests(unittest.TestCase):
         os.environ["XDG_CONFIG_HOME"] = str(config_home)
 
     def tearDown(self):
+        manager.shutdown(timeout=2)
         with manager._LOCK:
             manager._INSTALL.update({"status": "idle", "error": None, "percent": 0.0, "step": ""})
+            for key in ("cancel_event", "thread", "response", "started_mono"):
+                manager._INSTALL.pop(key, None)
             manager._JOBS.clear()
+            manager._REMOVING.clear()
             proc = manager._SERVER.get("proc")
             manager._SERVER.update({"proc": None, "state": "stopped", "logs": __import__("collections").deque(maxlen=200)})
         if proc is not None:
@@ -81,9 +86,45 @@ class OllamaManagerTests(unittest.TestCase):
         self.assertIn("platform", status)
         self.assertIsInstance(status["platform"]["supported_arch"], bool)
 
+    def test_runtime_status_uses_configured_loopback_endpoint_even_offline(self):
+        from backend.config import save_settings
+        save_settings({"ollama_endpoint": "http://127.0.0.1:11459", "offline": True})
+        with patch("backend.models.manager.ollama_status", return_value={"state": "healthy", "models": [], "version": "test"}) as status_probe:
+            status = manager.runtime_status()
+        status_probe.assert_called_once_with("http://127.0.0.1:11459", offline=True)
+        self.assertEqual(status["endpoint"], "http://127.0.0.1:11459")
+        self.assertEqual(status["api_state"], "healthy")
+        self.assertTrue(status["platform"]["offline"])
+        self.assertEqual(manager._server_env()["OLLAMA_HOST"], "127.0.0.1:11459")
+
+    def test_activate_model_requires_live_exact_tag_and_persists_role(self):
+        with patch("backend.models.manager._ollama_tags", return_value=["acme/local:7b"]):
+            preference = manager.activate_model("acme/local:7b", "primary")
+        self.assertEqual(preference, {"role": "primary", "setting": "model_primary", "model": "acme/local:7b", "state": "active"})
+        from backend.config import load_settings
+        self.assertEqual(load_settings()["model_primary"], "acme/local:7b")
+        with patch("backend.models.manager._ollama_tags", return_value=["other:latest"]):
+            with self.assertRaisesRegex(PolicyError, "not installed"):
+                manager.activate_model("acme/local:7b", "planner")
+
+    def test_routing_preferences_report_active_family_fallback_and_unavailable(self):
+        status = {"models": [{"name": "phi4-mini:latest"}, {"name": "custom:1"}]}
+        preferences = manager.routing_preferences(status, {
+            "model_primary": "phi4-mini:3.8b", "model_planner": "custom:1",
+            "model_fast": "missing:1", "model_specialist": "missing:2",
+        })
+        self.assertEqual(preferences["primary"]["resolved"], "phi4-mini:latest")
+        self.assertTrue(preferences["primary"]["family_fallback"])
+        self.assertEqual(preferences["planner"]["state"], "active")
+        self.assertEqual(preferences["fast"]["state"], "unavailable")
+
     def test_install_requires_confirmation(self):
         with self.assertRaises(PermissionError):
             manager.install_ollama(confirm=False)
+
+    def test_unreadable_settings_fail_closed_for_network_mutations(self):
+        with patch("backend.models.manager.load_settings", side_effect=OSError("unreadable")):
+            self.assertTrue(manager._offline())
 
     def test_install_is_blocked_in_offline_mode(self):
         with patch("backend.models.manager._offline", return_value=True):
@@ -118,6 +159,38 @@ class OllamaManagerTests(unittest.TestCase):
         with patch("backend.models.manager._locate_binary", return_value=None):
             with self.assertRaises(PolicyError):
                 manager.remove_model("phi4-mini:3.8b")
+
+    def test_remove_is_serialized_against_remove_and_pull(self):
+        entered = threading.Event()
+        release = threading.Event()
+        result = []
+
+        def blocked_run(*_args, **_kwargs):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        def remove():
+            try:
+                result.append(manager.remove_model("test/model:1"))
+            except Exception as exc:  # pragma: no cover - asserted below
+                result.append(exc)
+
+        with patch("backend.models.manager._locate_binary", return_value="/bin/true"), \
+             patch("backend.models.manager.subprocess.run", side_effect=blocked_run):
+            thread = threading.Thread(target=remove)
+            thread.start()
+            self.assertTrue(entered.wait(2))
+            with self.assertRaisesRegex(PolicyError, "already being removed"):
+                manager.remove_model("test/model:1")
+            with patch("backend.models.manager._offline", return_value=False):
+                with self.assertRaisesRegex(PolicyError, "being removed"):
+                    manager.pull_model("test/model:1")
+            release.set()
+            thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result, [{"name": "test/model:1", "removed": True}])
+        self.assertNotIn("test/model:1", manager._REMOVING)
 
     def test_catalog_merges_curated_pool_with_state(self):
         with patch("backend.models.manager.ollama_status", return_value={"state": "healthy", "reason": None, "version": "0.9.9", "models": [{"name": "phi4-mini:3.8b", "size": 1}]}):
@@ -177,6 +250,58 @@ class OllamaManagerTests(unittest.TestCase):
         # The resolved targets must all be accepted as inside the install root.
         self.assertEqual(len(manager._safe_extract_targets(root, members)), 2)
 
+    def test_safe_tar_members_rejects_extraction_bomb(self):
+        import tarfile
+        oversized = tarfile.TarInfo("lib/oversized.bin")
+        oversized.size = manager._MAX_RUNTIME_EXTRACT_BYTES + 1
+        with self.assertRaisesRegex(RuntimeError, "allowed size"):
+            manager._safe_tar_members(iter([oversized]))
+
+    def test_runtime_download_uses_unique_temp_and_does_not_follow_predictable_symlink(self):
+        import io
+
+        class Response:
+            def __init__(self, payload):
+                self.headers = {"Content-Length": str(len(payload))}
+                self.stream = io.BytesIO(payload)
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self, size=-1): return self.stream.read(size)
+
+        directory = Path(self.tmp.name) / "download"
+        directory.mkdir()
+        destination = directory / "runtime.tgz"
+        victim = Path(self.tmp.name) / "victim"
+        victim.write_bytes(b"unchanged")
+        predictable = destination.with_name(destination.name + ".part")
+        predictable.symlink_to(victim)
+        payload = b"verified archive bytes"
+        job = {"cancel_event": threading.Event(), "downloaded_bytes": 0}
+        with patch("backend.models.manager.urllib.request.urlopen", return_value=Response(payload)):
+            digest = manager._download_to("https://github.com/ollama/ollama/releases/download/v-test/ollama-linux-amd64.tgz", destination, job)
+        self.assertEqual(destination.read_bytes(), payload)
+        self.assertEqual(victim.read_bytes(), b"unchanged")
+        self.assertTrue(predictable.is_symlink())
+        self.assertEqual(len(digest), 64)
+        self.assertEqual(list(directory.glob(".runtime.tgz.*.part")), [])
+
+    def test_runtime_download_rejects_oversized_content_length_and_cleans_temp(self):
+        class Response:
+            headers = {"Content-Length": "5"}
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self, _size=-1): return b"12345"
+
+        directory = Path(self.tmp.name) / "bounded-download"
+        destination = directory / "runtime.tgz"
+        job = {"cancel_event": threading.Event()}
+        with patch.object(manager, "_MAX_RUNTIME_ARCHIVE_BYTES", 4), \
+             patch("backend.models.manager.urllib.request.urlopen", return_value=Response()):
+            with self.assertRaisesRegex(PolicyError, "allowed download size"):
+                manager._download_to("https://github.com/ollama/ollama/releases/download/v-test/ollama-linux-amd64.tgz", destination, job)
+        self.assertFalse(destination.exists())
+        self.assertEqual(list(directory.glob(".*.part")), [])
+
     def test_safe_extract_targets_rejects_sibling_prefix_escape(self):
         import tarfile
         root = Path(self.tmp.name) / "ollama"
@@ -227,22 +352,219 @@ class OllamaManagerTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_binary_lookup_ignores_ambient_writable_path(self):
+        ambient = Path(self.tmp.name) / "ambient-bin"
+        ambient.mkdir()
+        malicious = ambient / "ollama"
+        malicious.write_text("#!/bin/sh\nexit 0\n")
+        malicious.chmod(0o755)
+        with patch.dict(os.environ, {"PATH": str(ambient)}):
+            located = manager._locate_binary()
+        self.assertNotEqual(located, str(malicious.resolve()))
+
+    def test_managed_binary_must_be_regular_owner_only_executable(self):
+        managed = Path(self.tmp.name) / "managed-ollama"
+        victim = Path(self.tmp.name) / "other-binary"
+        victim.write_text("binary")
+        victim.chmod(0o755)
+        managed.symlink_to(victim)
+        self.assertIsNone(manager._trusted_executable(managed, managed=True))
+        managed.unlink()
+        managed.write_text("binary")
+        managed.chmod(0o775)
+        self.assertIsNone(manager._trusted_executable(managed, managed=True))
+        managed.chmod(0o755)
+        self.assertEqual(manager._trusted_executable(managed, managed=True), str(managed.resolve()))
+
+    def test_ollama_api_json_reader_rejects_oversized_response(self):
+        class Response:
+            headers = {"Content-Length": str(65 * 1024)}
+            def read(self, _size=-1):
+                raise AssertionError("oversized announced body must not be read")
+        with self.assertRaisesRegex(ValueError, "allowed size"):
+            manager._read_json_response(Response(), limit=64 * 1024)
+
+    def test_latest_runtime_asset_requires_exact_official_sha256_metadata(self):
+        import io
+
+        class Response:
+            def __init__(self, payload):
+                self.headers = {"Content-Length": str(len(payload))}
+                self.stream = io.BytesIO(payload)
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self, size=-1): return self.stream.read(size)
+            def geturl(self): return manager._RELEASE_API
+
+        asset = {
+            "name": "ollama-linux-amd64.tar.zst",
+            "browser_download_url": "https://github.com/ollama/ollama/releases/download/v1.2.3/ollama-linux-amd64.tar.zst",
+            "digest": "sha256:" + ("a" * 64), "size": 1234,
+        }
+        payload = json.dumps({"draft": False, "prerelease": False, "assets": [asset]}).encode()
+        with patch("backend.models.manager.urllib.request.urlopen", return_value=Response(payload)):
+            selected = manager._latest_runtime_asset("amd64")
+        self.assertEqual(selected["name"], asset["name"])
+        self.assertEqual(selected["sha256"], "a" * 64)
+        self.assertEqual(selected["size"], 1234)
+
+        asset["digest"] = None
+        malformed = json.dumps({"draft": False, "prerelease": False, "assets": [asset]}).encode()
+        with patch("backend.models.manager.urllib.request.urlopen", return_value=Response(malformed)):
+            with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                manager._latest_runtime_asset("amd64")
+
+    def test_runtime_download_rejects_unreviewed_redirect_and_truncation(self):
+        import io
+
+        class Response:
+            def __init__(self, payload, final_url, content_length=None):
+                self.headers = {} if content_length is None else {"Content-Length": str(content_length)}
+                self.stream = io.BytesIO(payload)
+                self.final_url = final_url
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self, size=-1): return self.stream.read(size)
+            def geturl(self): return self.final_url
+
+        destination = Path(self.tmp.name) / "downloads" / "runtime.tgz"
+        source_url = "https://github.com/ollama/ollama/releases/download/v-test/ollama-linux-amd64.tgz"
+        job = {"cancel_event": threading.Event()}
+        redirected = Response(b"secret", "http://169.254.169.254/latest/meta-data")
+        with patch("backend.models.manager.urllib.request.urlopen", return_value=redirected):
+            with self.assertRaisesRegex(PolicyError, "redirected"):
+                manager._download_to(source_url, destination, job)
+        self.assertFalse(destination.exists())
+
+        truncated = Response(b"abc", source_url)
+        with patch("backend.models.manager.urllib.request.urlopen", return_value=truncated):
+            with self.assertRaisesRegex(RuntimeError, "ended before"):
+                manager._download_to(source_url, destination, job, expected_size=4)
+        self.assertFalse(destination.exists())
+
+    def test_reviewed_runtime_install_verifies_extracts_publishes_and_rescans(self):
+        import hashlib
+        import io
+        import shutil
+        import tarfile
+
+        source = Path(self.tmp.name) / "official.tgz"
+        binary_payload = b"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'ollama version test'; exit 0; fi\nsleep 30\n"
+        with tarfile.open(source, "w:gz") as tar:
+            info = tarfile.TarInfo("bin/ollama")
+            info.size = len(binary_payload)
+            info.mode = 0o755
+            tar.addfile(info, io.BytesIO(binary_payload))
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        asset = {
+            "name": "ollama-linux-amd64.tgz",
+            "url": "https://github.com/ollama/ollama/releases/download/v-test/ollama-linux-amd64.tgz",
+            "sha256": digest, "size": source.stat().st_size,
+        }
+
+        def download(_url, destination, _job, *, expected_size=None):
+            self.assertEqual(expected_size, source.stat().st_size)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            return digest
+
+        with patch("backend.models.manager._locate_binary", return_value=None), \
+             patch("backend.models.manager._latest_runtime_asset", return_value=asset), \
+             patch("backend.models.manager._download_to", side_effect=download), \
+             patch("backend.models.manager.start_server", return_value={"state": "running"}), \
+             patch("backend.models.manager._wait_for_api", return_value="test-api"):
+            manager.install_ollama(confirm=True)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and manager._INSTALL.get("status") not in {"completed", "failed"}:
+                time.sleep(0.02)
+        status = manager._public_install()
+        self.assertEqual(status["status"], "completed", status)
+        self.assertIs(status["checksum_verified"], True)
+        self.assertEqual(status["api_verified"], "test-api")
+        published = Path(self.tmp.name) / "ollama" / "bin" / "ollama"
+        self.assertTrue(published.is_file())
+        self.assertIn("ollama version test", manager._short_timeout_versions(str(published)) or "")
+        with patch("backend.models.manager.ollama_status", return_value={"state": "healthy", "reason": None, "models": [], "version": "test-api"}):
+            rescanned = manager.runtime_status()
+        self.assertTrue(rescanned["installed"])
+        self.assertEqual(rescanned["path"], str(published.resolve()))
+        self.assertEqual(list(Path(self.tmp.name).glob(".ollama-install-*")), [])
+
+    def test_runtime_checksum_failure_never_replaces_existing_install(self):
+        managed = Path(self.tmp.name) / "ollama"
+        (managed / "bin").mkdir(parents=True)
+        existing = managed / "bin" / "ollama"
+        existing.write_bytes(b"existing verified runtime")
+        asset = {
+            "name": "ollama-linux-amd64.tgz",
+            "url": "https://github.com/ollama/ollama/releases/download/v-test/ollama-linux-amd64.tgz",
+            "sha256": "a" * 64, "size": 3,
+        }
+
+        def download(_url, destination, _job, **_kwargs):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"bad")
+            return "b" * 64
+
+        with patch("backend.models.manager._locate_binary", return_value=None), \
+             patch("backend.models.manager._latest_runtime_asset", return_value=asset), \
+             patch("backend.models.manager._download_to", side_effect=download), \
+             patch("backend.models.manager._extract_runtime_archive") as extract:
+            manager.install_ollama(confirm=True)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and manager._INSTALL.get("status") not in {"completed", "failed"}:
+                time.sleep(0.02)
+        self.assertEqual(manager._INSTALL["status"], "failed")
+        self.assertIs(manager._INSTALL["checksum_verified"], False)
+        extract.assert_not_called()
+        self.assertEqual(existing.read_bytes(), b"existing verified runtime")
+
     def test_install_network_failure_is_classified(self):
-        def boom(url, destination, job):
+        def boom(url, destination, job, **_kwargs):
             raise urllib.error.URLError("network down")
 
-        with patch("backend.models.manager._download_to", side_effect=boom):
+        asset = {"name": "ollama-linux-amd64.tgz", "url": "https://github.com/ollama/ollama/releases/download/v-test/ollama-linux-amd64.tgz", "sha256": "a" * 64, "size": 1024}
+        with patch("backend.models.manager._latest_runtime_asset", return_value=asset), \
+             patch("backend.models.manager._download_to", side_effect=boom):
             manager.install_ollama(confirm=True)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            with manager._LOCK:
-                status = manager._INSTALL.get("status")
-            if status == "failed":
-                break
-            time.sleep(0.05)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                with manager._LOCK:
+                    status = manager._INSTALL.get("status")
+                if status == "failed":
+                    break
+                time.sleep(0.05)
         with manager._LOCK:
             self.assertEqual(manager._INSTALL["status"], "failed")
             self.assertEqual(manager._INSTALL["failure_reason"], "network")
+
+    def test_runtime_install_can_cancel_without_leaking_internal_objects(self):
+        entered = threading.Event()
+
+        def blocked(_url, _destination, job, **_kwargs):
+            entered.set()
+            while not job["cancel_event"].is_set():
+                time.sleep(0.01)
+            raise InterruptedError("cancelled")
+
+        asset = {"name": "ollama-linux-amd64.tgz", "url": "https://github.com/ollama/ollama/releases/download/v-test/ollama-linux-amd64.tgz", "sha256": "a" * 64, "size": 1024}
+        with patch("backend.models.manager._locate_binary", return_value=None), \
+             patch("backend.models.manager._latest_runtime_asset", return_value=asset), \
+             patch("backend.models.manager._download_to", side_effect=blocked):
+            started = manager.install_ollama(confirm=True)
+            self.assertTrue(entered.wait(2))
+            self.assertNotIn("cancel_event", started)
+            self.assertNotIn("thread", started)
+            self.assertTrue(manager.cancel_install()["cancelled"])
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                with manager._LOCK:
+                    status = manager._INSTALL.get("status")
+                if status == "cancelled":
+                    break
+                time.sleep(0.02)
+            self.assertEqual(status, "cancelled")
+            json.loads(canonical(manager.runtime_status()))
 
     def _wait_job(self, name, wanted, timeout=6):
         deadline = time.monotonic() + timeout
@@ -254,6 +576,61 @@ class OllamaManagerTests(unittest.TestCase):
             time.sleep(0.05)
         with manager._LOCK:
             return dict(manager._JOBS.get(name) or {})
+
+    def test_pull_start_and_catalog_state_are_json_safe(self):
+        fake = Path(self.tmp.name) / "fake-ollama-json"
+        fake.write_text("#!/bin/sh\nsleep 0.2\necho '{\"status\":\"success\"}' >&2\n")
+        fake.chmod(0o755)
+        with patch("backend.models.manager._locate_binary", return_value=str(fake)), \
+             patch("backend.models.manager._ollama_tags", return_value=["test/json:1"]):
+            started = manager.pull_model("test/json:1")
+            encoded = json.loads(canonical({"download": started, "catalog": manager.catalog()}))
+            self.assertEqual(encoded["download"]["name"], "test/json:1")
+            self.assertNotIn("cancel_event", encoded["download"])
+            self.assertNotIn("thread", encoded["download"])
+            self._wait_job("test/json:1", {"completed", "failed"})
+
+    def test_cancel_terminates_quiet_pull_and_worker(self):
+        fake = Path(self.tmp.name) / "fake-ollama-silent"
+        fake.write_text("#!/bin/sh\nsleep 30\n")
+        fake.chmod(0o755)
+        with patch("backend.models.manager._locate_binary", return_value=str(fake)):
+            manager.pull_model("test/cancel:1")
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                with manager._LOCK:
+                    proc = (manager._JOBS.get("test/cancel:1") or {}).get("proc")
+                if proc is not None:
+                    break
+                time.sleep(0.02)
+            result = manager.cancel_download("test/cancel:1")
+            self.assertTrue(result["cancelled"])
+            job = self._wait_job("test/cancel:1", {"cancelled", "failed"}, timeout=3)
+        self.assertEqual(job.get("status"), "cancelled")
+        thread = job.get("thread")
+        if thread is not None:
+            thread.join(timeout=1)
+            self.assertFalse(thread.is_alive())
+
+    def test_cancel_during_preflight_never_launches_pull_process(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_storage(*_args):
+            entered.set()
+            self.assertTrue(release.wait(3))
+
+        with patch("backend.models.manager._locate_binary", return_value="/bin/true"), \
+             patch("backend.models.manager._check_storage", side_effect=blocked_storage), \
+             patch("backend.models.manager.subprocess.Popen") as popen:
+            manager.pull_model("phi4-mini:3.8b")
+            self.assertTrue(entered.wait(2))
+            result = manager.cancel_download("phi4-mini:3.8b")
+            self.assertTrue(result["cancelled"])
+            release.set()
+            job = self._wait_job("phi4-mini:3.8b", {"cancelled", "failed"}, timeout=3)
+        self.assertEqual(job.get("status"), "cancelled")
+        popen.assert_not_called()
 
     def test_pull_parses_progress_and_verifies(self):
         fake = Path(self.tmp.name) / "fake-ollama"
@@ -277,6 +654,51 @@ class OllamaManagerTests(unittest.TestCase):
         self.assertEqual(job.get("status"), "completed")
         self.assertEqual(job.get("percent"), 100.0)
         self.assertEqual(job.get("total_bytes"), 100)
+
+    def test_malformed_progress_cannot_crash_or_orphan_pull_worker(self):
+        fake = Path(self.tmp.name) / "fake-ollama-malformed"
+        fake.write_text(
+            "#!/bin/sh\n"
+            "echo '[]' >&2\n"
+            "echo '{\"status\":\"downloading\",\"total\":\"not-a-number\",\"completed\":{}}' >&2\n"
+            "echo '{\"status\":\"success\"}' >&2\n"
+        )
+        fake.chmod(0o755)
+        with patch("backend.models.manager._locate_binary", return_value=str(fake)), \
+             patch("backend.models.manager._ollama_tags", return_value=["test/malformed:1"]):
+            manager.pull_model("test/malformed:1")
+            job = self._wait_job("test/malformed:1", {"completed", "failed"})
+        self.assertEqual(job.get("status"), "completed")
+        self.assertNotIn("proc", job)
+        self.assertNotIn("thread", job)
+
+    def test_model_verification_rejects_prefix_collision(self):
+        fake = Path(self.tmp.name) / "fake-ollama-prefix"
+        fake.write_text("#!/bin/sh\necho '{\"status\":\"success\"}' >&2\n")
+        fake.chmod(0o755)
+        with patch("backend.models.manager._locate_binary", return_value=str(fake)), \
+             patch("backend.models.manager._ollama_tags", return_value=["test/model:10"]):
+            manager.pull_model("test/model:1")
+            job = self._wait_job("test/model:1", {"completed", "failed"})
+        self.assertEqual(job.get("status"), "failed")
+        self.assertEqual(job.get("failure_reason"), "verification_failed")
+
+    def test_model_download_concurrency_and_history_are_bounded(self):
+        with manager._LOCK:
+            manager._JOBS.update({
+                "active/one:1": {"status": "downloading"},
+                "active/two:1": {"status": "verifying"},
+            })
+        with patch("backend.models.manager._offline", return_value=False), \
+             patch("backend.models.manager._locate_binary", return_value="/bin/true"):
+            with self.assertRaisesRegex(PolicyError, "already active"):
+                manager.pull_model("active/three:1")
+        with manager._LOCK:
+            manager._JOBS.clear()
+            for index in range(manager._MAX_JOBS + 3):
+                manager._JOBS[f"old/model-{index}:1"] = {"status": "completed"}
+            manager._prune_jobs_locked()
+            self.assertLess(len(manager._JOBS), manager._MAX_JOBS)
 
     def test_server_start_stop_returns_json_safe_summary(self):
         # The HTTP surface serializes the start/stop result with canonical().
@@ -345,10 +767,18 @@ class OllamaHttpRoutesTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.server.server_close()
+        self.handler.executor.shutdown()
         self.handler.sessions.shutdown()
+        try:
+            vtx_backend._load("models.manager").shutdown(timeout=2)
+        except Exception:
+            pass
         with manager._LOCK:
             manager._INSTALL.update({"status": "idle", "error": None, "percent": 0.0, "step": ""})
+            for key in ("cancel_event", "thread", "response", "started_mono"):
+                manager._INSTALL.pop(key, None)
             manager._JOBS.clear()
+            manager._REMOVING.clear()
             proc = manager._SERVER.get("proc")
             manager._SERVER.update({"proc": None, "state": "stopped"})
         if proc is not None:
@@ -392,6 +822,27 @@ class OllamaHttpRoutesTests(unittest.TestCase):
         payload = self._json("POST", "/api/ollama/install", {"confirm": False}, expected=403)
         self.assertIn("confirmation", payload["error"]["message"].lower())
 
+    def test_install_prepares_reviewed_zstd_prerequisite_before_download(self):
+        handler_manager = vtx_backend._load("models.manager")
+        runtime = {
+            "installed": False,
+            "platform": {"zstd_available": False, "offline": False},
+        }
+        with patch.object(handler_manager, "runtime_status", return_value=runtime), \
+             patch.object(handler_manager, "install_ollama") as install:
+            payload = self._json(
+                "POST", "/api/ollama/install",
+                {"confirm": True, "cwd": self.tmp.name}, expected=200,
+            )
+        install.assert_not_called()
+        self.assertTrue(payload["planned"])
+        self.assertEqual(payload["install"]["status"], "dependency_required")
+        self.assertEqual(payload["prerequisite"]["apt_package"], "zstd")
+        self.assertEqual(payload["plan"]["kind"], "package_operation")
+        mutation = payload["plan"]["commands"][-2]
+        self.assertEqual(mutation["argv"], ["apt-get", "--assume-yes", "--no-remove", "install", "zstd"])
+        self.assertEqual(mutation["privilege"], "root-required")
+
     def test_pull_without_name_is_rejected(self):
         payload = self._json("POST", "/api/ollama/models/pull", {}, expected=422)
         self.assertIn("model name", payload["error"]["message"].lower())
@@ -411,6 +862,56 @@ class OllamaHttpRoutesTests(unittest.TestCase):
     def test_cancel_without_name_is_rejected(self):
         payload = self._json("POST", "/api/ollama/models/cancel", {}, expected=422)
         self.assertIn("model name", payload["error"]["message"].lower())
+
+    def test_successful_pull_route_is_json_safe_and_records_custom_role(self):
+        fake = Path(self.tmp.name) / "fake-ollama-pull-http"
+        fake.write_text("#!/bin/sh\nsleep 0.2\necho '{\"status\":\"success\"}' >&2\n")
+        fake.chmod(0o755)
+        handler_manager = vtx_backend._load("models.manager")
+        with patch.object(handler_manager, "_locate_binary", return_value=str(fake)), \
+             patch.object(handler_manager, "_ollama_tags", return_value=["acme/custom:7b"]):
+            payload = self._json("POST", "/api/ollama/models/pull", {"name": "acme/custom:7b", "role": "planner"}, expected=202)
+            self.assertEqual(payload["download"]["name"], "acme/custom:7b")
+            self.assertNotIn("cancel_event", payload["download"])
+            self.assertNotIn("thread", payload["download"])
+            self.assertEqual(payload["preference"], {"role": "planner", "setting": "model_planner", "model": "acme/custom:7b", "state": "pending_verification"})
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                state = handler_manager.downloads().get("acme/custom:7b", {})
+                if state.get("status") in {"completed", "failed"}:
+                    break
+                time.sleep(0.03)
+            self.assertEqual(state.get("status"), "completed")
+            self.assertEqual(state.get("preference_state"), "integrated")
+            from backend.config import load_settings
+            self.assertEqual(load_settings()["model_planner"], "acme/custom:7b")
+
+    def test_activate_installed_model_role_route(self):
+        handler_manager = vtx_backend._load("models.manager")
+        with patch.object(handler_manager, "_ollama_tags", return_value=["acme/custom:7b"]):
+            payload = self._json("POST", "/api/ollama/models/activate", {"name": "acme/custom:7b", "role": "specialist"})
+        self.assertEqual(payload["preference"]["state"], "active")
+        self.assertEqual(payload["preference"]["role"], "specialist")
+        missing = self._json("POST", "/api/ollama/models/activate", {"name": "acme/custom:7b"}, expected=422)
+        self.assertIn("role", missing["error"]["message"])
+
+    def test_invalid_model_role_is_rejected_before_pull_starts(self):
+        handler_manager = vtx_backend._load("models.manager")
+        with patch.object(handler_manager, "pull_model", wraps=handler_manager.pull_model) as pull:
+            payload = self._json("POST", "/api/ollama/models/pull", {"name": "acme/custom:7b", "role": "root"}, expected=422)
+        self.assertIn("model role", payload["error"]["message"])
+        pull.assert_called_once_with("acme/custom:7b", role="root")
+        self.assertNotIn("acme/custom:7b", handler_manager.downloads())
+
+    def test_install_cancel_route_is_json_safe(self):
+        handler_manager = vtx_backend._load("models.manager")
+        with handler_manager._LOCK:
+            handler_manager._INSTALL["status"] = "downloading"
+            handler_manager._INSTALL["cancel_event"] = threading.Event()
+            handler_manager._INSTALL["thread"] = threading.current_thread()
+        payload = self._json("POST", "/api/ollama/install/cancel", {}, expected=200)
+        self.assertTrue(payload["install"]["cancelled"])
+        self.assertEqual(payload["install"]["status"], "cancelling")
 
     def test_server_start_stop_routes_are_json_safe(self):
         # Regression: the start/stop routes previously returned the raw

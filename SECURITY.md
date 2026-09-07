@@ -9,8 +9,10 @@ otherwise verifiable permission and a declared scope.
 
 The product blocks credential attacks, spraying/brute force, exploitation,
 persistence, evasion, malware, phishing, denial of service, exfiltration, raw
-disk writes, unrestricted scanning, firewall/routing/DNS mutation, and network
-installers. An engagement is not a substitute for legal authorization.
+disk writes, unrestricted scanning, firewall/routing/DNS mutation, and
+unreviewed network installers. Reviewed package/runtime downloads require
+explicit confirmation, fixed typed operations, integrity checks, and verification.
+An engagement is not a substitute for legal authorization.
 
 ## Reporting a vulnerability
 
@@ -33,6 +35,7 @@ process environment and redacts common secret forms before storing output. Regex
 redaction is best effort: operators should not put secrets in requests and
 should use the future private-evidence controls for sensitive work.
 
-No cloud model is contacted by default. A local model, when implemented, must
-use a loopback or protected Unix socket transport, be explicitly enabled, and
-receive minimized/redacted context.
+No cloud model is contacted by default. Local Ollama inference is restricted to
+a validated loopback HTTP endpoint, uses bounded responses and proxy-disabled
+connections, and receives minimized/redacted advisory context. Model output
+cannot create commands, approve a plan, or override Guardian.

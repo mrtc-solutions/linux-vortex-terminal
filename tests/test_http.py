@@ -6,7 +6,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,8 +35,11 @@ class HttpApiTests(unittest.TestCase):
         handler.executor.workspace = handler.workspace
         handler.frontend = Path(__file__).resolve().parent.parent / "frontend"
         handler.token = None
+        handler.allow_remote_host = False
+        with handler.browser_sessions_lock:
+            handler.browser_sessions.clear()
         self.handler = handler
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.server = vtx_backend.BoundedThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -44,7 +47,12 @@ class HttpApiTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.server.server_close()
+        self.thread.join(timeout=2)
+        self.handler.executor.shutdown()
         self.handler.sessions.shutdown()
+        self.handler.token = None
+        with self.handler.browser_sessions_lock:
+            self.handler.browser_sessions.clear()
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)
         if self._previous_config_home is None:
@@ -68,6 +76,226 @@ class HttpApiTests(unittest.TestCase):
                 return payload
             finally:
                 exc.close()
+
+    def _raw(self, method, path, *, body=None, headers=None):
+        request = urllib.request.Request(self.base + path, data=body, method=method, headers=headers or {})
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                return response.status, response.headers, response.read()
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, exc.headers, exc.read()
+            finally:
+                exc.close()
+
+    def _exchange_browser_session(self, token="t" * 64):
+        self.handler.token = token
+        status, headers, body = self._raw(
+            "POST", "/api/auth/session", body=b"{}",
+            headers={"Content-Type": "application/json", "X-Vortex-Token": token},
+        )
+        self.assertEqual(status, 200, body)
+        cookie_header = headers.get("Set-Cookie") or ""
+        cookie = cookie_header.split(";", 1)[0]
+        self.assertTrue(cookie.startswith("Vortex-Session="), cookie_header)
+        return cookie, headers, json.loads(body)
+
+    def test_http_rejects_dns_rebinding_and_cross_origin_browser_requests(self):
+        status, headers, _body = self._raw("GET", "/api/sessions", headers={"Host": "attacker.example", "Origin": "http://attacker.example"})
+        self.assertEqual(status, 421)
+        self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+
+        status, headers, _body = self._raw("GET", "/api/sessions", headers={"Origin": "null"})
+        self.assertEqual(status, 403)
+        self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+
+        status, _headers, _body = self._raw("GET", "/api/sessions", headers={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 403)
+
+    def test_http_requires_json_media_type_for_mutations(self):
+        status, _headers, body = self._raw("POST", "/api/settings", body=b'{"offline":true}', headers={"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
+        self.assertEqual(json.loads(body)["error"]["code"], "unsupported_media_type")
+
+        status, headers, _body = self._raw("POST", "/api/settings", body=b"{}", headers={"Content-Type": "application/json", "Origin": self.base})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), self.base)
+
+    def test_authenticated_null_origin_is_narrowly_allowed(self):
+        token = "t" * 64
+        self.handler.token = token
+        try:
+            status, headers, _body = self._raw("GET", "/api/sessions", headers={"Origin": "null", "X-Vortex-Token": token})
+            self.assertEqual(status, 200)
+            self.assertEqual(headers.get("Access-Control-Allow-Origin"), "null")
+            status, headers, _body = self._raw("GET", "/api/sessions", headers={"Origin": "null"})
+            self.assertEqual(status, 403)
+            self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+        finally:
+            self.handler.token = None
+
+    def test_capability_protects_api_but_leaves_bootstrap_assets_public(self):
+        self.handler.token = "b" * 64
+        for method, route in (("GET", "/"), ("GET", "/index.html"), ("GET", "/assets/app.js"), ("HEAD", "/assets/styles.css")):
+            status, _headers, body = self._raw(method, route)
+            self.assertEqual(status, 200, f"{method} {route}: {body[:200]!r}")
+        for method, route in (("GET", "/api/health"), ("HEAD", "/api/health"), ("GET", "/api/reports/system?format=json")):
+            status, _headers, body = self._raw(method, route)
+            self.assertEqual(status, 401, f"{method} {route}: {body[:200]!r}")
+            if method != "HEAD":
+                self.assertEqual(json.loads(body)["error"]["code"], "unauthorized")
+
+    def test_browser_capability_exchange_issues_http_only_fixed_session(self):
+        token = "c" * 64
+        wrong_status, wrong_headers, wrong_body = self._raw(
+            "POST", "/api/auth/session", body=b"{}",
+            headers={"Content-Type": "application/json", "X-Vortex-Token": "x" * 64},
+        )
+        # No token is configured yet, so an exchange is always denied rather
+        # than creating a meaningless cookie on an unprotected sidecar.
+        self.assertEqual(wrong_status, 401)
+        self.assertIsNone(wrong_headers.get("Set-Cookie"))
+        self.assertEqual(json.loads(wrong_body)["error"]["code"], "unauthorized")
+
+        cookie, headers, payload = self._exchange_browser_session(token)
+        set_cookie = headers.get("Set-Cookie") or ""
+        self.assertTrue(payload["authenticated"])
+        self.assertEqual(payload["expires_in"], 28800)
+        self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("SameSite=Strict", set_cookie)
+        self.assertIn("Path=/", set_cookie)
+        self.assertIn("Max-Age=28800", set_cookie)
+        self.assertNotIn(token, set_cookie + json.dumps(payload))
+        wrong_status, wrong_headers, _wrong_body = self._raw(
+            "POST", "/api/auth/session", body=b"{}",
+            headers={"Content-Type": "application/json", "X-Vortex-Token": "x" * 64},
+        )
+        self.assertEqual(wrong_status, 401)
+        self.assertIsNone(wrong_headers.get("Set-Cookie"))
+
+        status, _headers, body = self._raw("GET", "/api/health", headers={"Cookie": cookie})
+        self.assertEqual(status, 200, body)
+        # A browser session cannot renew or mint another browser session. The
+        # fixed eight-hour lifetime can only be replaced with the capability.
+        status, headers, body = self._raw(
+            "POST", "/api/auth/session", body=b"{}",
+            headers={"Content-Type": "application/json", "Cookie": cookie},
+        )
+        self.assertEqual(status, 401, body)
+        self.assertIsNone(headers.get("Set-Cookie"))
+
+    def test_browser_session_expiry_rotation_and_malformed_cookies_fail_closed(self):
+        token = "d" * 64
+        cookie, _headers, _payload = self._exchange_browser_session(token)
+        session_id = cookie.split("=", 1)[1]
+        with self.handler.browser_sessions_lock:
+            expiry, fingerprint = self.handler.browser_sessions[session_id]
+            self.assertGreater(expiry, time.monotonic())
+            self.handler.browser_sessions[session_id] = (time.monotonic() - 1, fingerprint)
+        status, _headers, _body = self._raw("GET", "/api/health", headers={"Cookie": cookie})
+        self.assertEqual(status, 401)
+        with self.handler.browser_sessions_lock:
+            self.assertNotIn(session_id, self.handler.browser_sessions)
+
+        cookie, _headers, _payload = self._exchange_browser_session(token)
+        session_id = cookie.split("=", 1)[1]
+        self.handler.token = "e" * 64
+        status, _headers, _body = self._raw("GET", "/api/health", headers={"Cookie": cookie})
+        self.assertEqual(status, 401, "sessions must be bound to the capability that issued them")
+        with self.handler.browser_sessions_lock:
+            self.assertNotIn(session_id, self.handler.browser_sessions)
+
+        malformed = (
+            "Vortex-Session=",
+            "Vortex-Session=" + "a" * 63,
+            "Vortex-Session=" + "g" * 64,
+            "Vortex-Session=not-a-session; other=value",
+            'Vortex-Session="unterminated',
+            "other=value; Vortex-Session",
+        )
+        for raw_cookie in malformed:
+            status, _headers, body = self._raw("GET", "/api/health", headers={"Cookie": raw_cookie})
+            self.assertEqual(status, 401, (raw_cookie, body[:200]))
+
+    def test_browser_session_retention_is_bounded_and_evicts_oldest(self):
+        token = "f" * 64
+        issued = []
+        for _ in range(vtx_backend.BROWSER_SESSION_LIMIT + 8):
+            cookie, _headers, _payload = self._exchange_browser_session(token)
+            issued.append(cookie)
+        with self.handler.browser_sessions_lock:
+            self.assertEqual(len(self.handler.browser_sessions), vtx_backend.BROWSER_SESSION_LIMIT)
+            retained = set(self.handler.browser_sessions)
+        self.assertNotIn(issued[0].split("=", 1)[1], retained)
+        self.assertIn(issued[-1].split("=", 1)[1], retained)
+        old_status, _headers, _body = self._raw("GET", "/api/health", headers={"Cookie": issued[0]})
+        new_status, _headers, body = self._raw("GET", "/api/health", headers={"Cookie": issued[-1]})
+        self.assertEqual(old_status, 401)
+        self.assertEqual(new_status, 200, body)
+
+    def test_browser_sessions_are_thread_safe_and_duplicate_cookies_fail_closed(self):
+        token = "7" * 64
+        self.handler.token = token
+
+        def exchange(_index):
+            return self._raw(
+                "POST", "/api/auth/session", body=b"{}",
+                headers={"Content-Type": "application/json", "X-Vortex-Token": token},
+            )
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            issued = list(pool.map(exchange, range(96)))
+        self.assertTrue(all(status == 200 for status, _headers, _body in issued))
+        cookie_values = [headers.get("Set-Cookie", "").split(";", 1)[0].split("=", 1)[1] for _status, headers, _body in issued]
+        self.assertEqual(len(cookie_values), len(set(cookie_values)))
+        with self.handler.browser_sessions_lock:
+            retained = tuple(self.handler.browser_sessions)
+        self.assertEqual(len(retained), vtx_backend.BROWSER_SESSION_LIMIT)
+
+        def authorized(session_id):
+            return self._raw("GET", "/api/health", headers={"Cookie": f"Vortex-Session={session_id}"})[0]
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            statuses = list(pool.map(authorized, retained * 4))
+        self.assertTrue(all(status == 200 for status in statuses))
+        duplicate = f"Vortex-Session={retained[0]}; Vortex-Session={'0' * 64}"
+        status, _headers, _body = self._raw("GET", "/api/health", headers={"Cookie": duplicate})
+        self.assertEqual(status, 401)
+
+    def test_browser_session_authorizes_downloads_and_reconnect_streams(self):
+        cookie, _headers, _payload = self._exchange_browser_session("r" * 64)
+        denied, _headers, _body = self._raw("GET", "/api/reports/system?format=json")
+        self.assertEqual(denied, 401)
+        status, headers, body = self._raw("GET", "/api/reports/system?format=json", headers={"Cookie": cookie})
+        self.assertEqual(status, 200, body[:200])
+        self.assertIn("attachment", headers.get("Content-Disposition", ""))
+
+        session_id = "remote-reconnect"
+        at = vtx_backend.now_iso()
+        self.store.save_session({
+            "id": session_id, "name": "reconnect", "shell": "/bin/sh", "cwd": self.tmp.name,
+            "command": ["/bin/sh"], "pid": None, "cols": 80, "rows": 24,
+            "status": "exited", "started_at": at, "ended_at": at, "last_activity": at,
+            "exit_code": 0, "signal": None, "termination_reason": "exit",
+        })
+        self.store.save_session_event(session_id, {"seq": 1, "at": at, "stream": "pty", "data": "remote"})
+        status, headers, body = self._raw("GET", f"/api/sessions/{session_id}/stream?since=0", headers={"Cookie": cookie})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        self.assertIn(b'"data": "remote"', body)
+
+    def test_http_security_headers_and_query_safe_logging(self):
+        import contextlib
+        import io
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured):
+            status, headers, _body = self._raw("GET", "/api/dependencies/proposal?id=query-secret-value")
+        self.assertEqual(status, 200)
+        self.assertIn("frame-ancestors 'none'", headers.get("Content-Security-Policy", ""))
+        self.assertEqual(headers.get("X-Frame-Options"), "DENY")
+        self.assertEqual(headers.get("Referrer-Policy"), "no-referrer")
+        self.assertNotIn("query-secret-value", captured.getvalue())
+        self.assertIn("/api/dependencies/proposal", captured.getvalue())
 
     def test_workspace_turn_creates_task_and_conversation(self):
         payload = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": self.tmp.name})
@@ -116,6 +344,31 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(report["report"]["engagement"]["id"], eng_id)
         denied = self._json("GET", f"/api/reports/assessment/{eng_id}?format=exe", expected=422)
         self.assertEqual(denied["error"]["code"], "invalid_plan")
+
+    def test_invalid_engagement_scope_does_not_leave_partial_authorization(self):
+        before = len(self.store.list_engagements())
+        denied = self._json("POST", "/api/engagements", {
+            "name": "must-not-persist", "targets": ["lab.example.test"],
+            "excluded_targets": [42],
+        }, expected=422)
+        self.assertIn("excluded_targets", denied["error"]["message"])
+        self.assertEqual(len(self.store.list_engagements()), before)
+
+    def test_missing_conversation_archive_and_delete_return_not_found(self):
+        archived = self._json("POST", "/api/conversations/missing/archive", {}, expected=404)
+        deleted = self._json("POST", "/api/conversations/missing/delete", {}, expected=404)
+        self.assertEqual(archived["error"]["code"], "not_found")
+        self.assertEqual(deleted["error"]["code"], "not_found")
+
+    def test_feedback_is_persisted_not_only_reported_as_saved(self):
+        payload = self._json("POST", "/api/feedback", {"rating": 4, "correction": "Use narrower evidence."}, expected=201)
+        self.assertTrue(payload["saved"])
+        feedback_id = payload["feedback"]["id"]
+        with self.store.connect() as db:
+            row = db.execute("SELECT rating,correction FROM feedback WHERE id=?", (feedback_id,)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["rating"], 4)
+        self.assertEqual(row["correction"], "Use narrower evidence.")
 
     def test_capabilities_and_close_engagement(self):
         caps = self._json("GET", "/api/capabilities")
@@ -187,6 +440,48 @@ class HttpApiTests(unittest.TestCase):
             self.assertTrue(apt["planned"])
             self.assertEqual(apt["plan"]["kind"], "package_operation")
             self.assertFalse(apt["auto_install"])
+
+    def test_custom_dependency_package_plan_is_typed_and_hostile_input_is_rejected(self):
+        planned = self._json("POST", "/api/dependencies/plan", {"package": "ripgrep", "cwd": self.tmp.name})
+        self.assertTrue(planned["planned"])
+        self.assertEqual(planned["install"]["apt_package"], "ripgrep")
+        self.assertEqual(planned["plan"]["kind"], "package_operation")
+        mutation = planned["plan"]["commands"][-2]
+        self.assertEqual(mutation["argv"], ["apt-get", "--assume-yes", "--no-remove", "install", "ripgrep"])
+        self.assertEqual(mutation["privilege"], "root-required")
+        for hostile in ("curl | sh", "../evil", "packages", "x;id", "http://example.test/a"):
+            denied = self._json("POST", "/api/dependencies/plan", {"package": hostile, "cwd": self.tmp.name}, expected=422)
+            self.assertEqual(denied["error"]["code"], "invalid_plan")
+        both = self._json("POST", "/api/dependencies/plan", {"id": "tool:nmap", "package": "ripgrep", "cwd": self.tmp.name}, expected=422)
+        self.assertEqual(both["error"]["code"], "invalid_plan")
+
+    def test_dependency_plan_opens_same_state_in_secure_interactive_terminal(self):
+        ordinary = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})["plan"]
+        denied = self._json("POST", "/api/dependencies/execute", {"plan_id": ordinary["id"]}, expected=422)
+        self.assertIn("reviewed apt", denied["error"]["message"])
+        self._json("POST", "/api/dependencies/execute", {"plan_id": "not-a-plan"}, expected=422)
+
+        planned = self._json("POST", "/api/dependencies/plan", {"package": "ripgrep", "cwd": self.tmp.name})
+        self.assertTrue(planned["planned"])
+        plan_id = planned["plan"]["id"]
+        opened = self._json("POST", "/api/dependencies/execute", {"plan_id": plan_id, "cols": 90, "rows": 28}, expected=201)
+        session_id = opened["session"]["id"]
+        self.assertEqual(opened["session"]["command"][-2:], ["run", plan_id])
+        self.assertTrue(opened["interactive_confirmation"])
+        duplicate = self._json("POST", "/api/dependencies/execute", {"plan_id": plan_id}, expected=422)
+        self.assertIn("active installation terminal", duplicate["error"]["message"])
+
+        deadline = time.monotonic() + 8
+        output = ""
+        while time.monotonic() < deadline:
+            payload = self._json("GET", f"/api/sessions/{session_id}/events?since=0")
+            output = "".join(item.get("data", "") for item in payload.get("events", []))
+            if "Approve this exact plan" in output or payload.get("session", {}).get("status") != "running":
+                break
+            time.sleep(0.05)
+        self.assertIn("Approve this exact plan", output, output)
+        self.assertIn(plan_id, output)
+        self._json("POST", f"/api/sessions/{session_id}/kill", {}, expected=202)
 
     def test_turn_includes_observation_and_episode_route(self):
         turn = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": self.tmp.name})
@@ -342,6 +637,25 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(negative["error"]["code"], "invalid_plan")
         huge = self._json("GET", "/api/sessions/deadbeef/events?since=" + ("9" * 17), expected=422)
         self.assertEqual(huge["error"]["code"], "invalid_plan")
+        stream_denied = self._json("GET", "/api/sessions/deadbeef/stream?since=abc", expected=422)
+        self.assertEqual(stream_denied["error"]["code"], "invalid_plan")
+
+    def test_session_stream_resumes_after_requested_sequence(self):
+        session_id = "stream-replay"
+        at = vtx_backend.now_iso()
+        self.store.save_session({
+            "id": session_id, "name": "replay", "shell": "/bin/sh", "cwd": self.tmp.name,
+            "command": ["/bin/sh"], "pid": None, "cols": 80, "rows": 24,
+            "status": "exited", "started_at": at, "ended_at": at, "last_activity": at,
+            "exit_code": 0, "signal": None, "termination_reason": "exit",
+        })
+        self.store.save_session_event(session_id, {"seq": 1, "at": at, "stream": "pty", "data": "first"})
+        self.store.save_session_event(session_id, {"seq": 2, "at": at, "stream": "pty", "data": "second"})
+        status, headers, body = self._raw("GET", f"/api/sessions/{session_id}/stream?since=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        event = json.loads(body.decode().split("data: ", 1)[1].split("\n\n", 1)[0])
+        self.assertEqual([item["seq"] for item in event["events"]], [2])
 
     def test_http_rejects_unknown_report_format(self):
         denied = self._json("GET", "/api/reports/system?format=exe", expected=422)
@@ -377,14 +691,46 @@ class HttpApiTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             body = response.read()
             self.assertGreater(len(body), 1000)
+            self.assertEqual(len(body), int(response.headers["Content-Length"]))
+            self.assertEqual(len(body), built["apk"]["size_bytes"])
             self.assertTrue(response.headers.get("Content-Type", "").startswith("application/vnd.android.package-archive"))
             self.assertEqual(body[:4], b"PK\x03\x04")
 
-    def test_complete_task_requires_bound_task(self):
+    def test_desktop_deb_sync_then_download(self):
+        built = self._json("POST", "/api/desktop/deb", {}, expected=201, timeout=30)
+        self.assertTrue(built["deb"]["ok"])
+        request = urllib.request.Request(self.base + "/api/desktop/deb/download")
+        with urllib.request.urlopen(request, timeout=20) as response:
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(len(body), int(response.headers["Content-Length"]))
+            self.assertEqual(len(body), built["deb"]["size_bytes"])
+            self.assertTrue(response.headers.get("Content-Type", "").startswith("application/vnd.debian.binary-package"))
+            self.assertTrue(body.startswith(b"!<arch>\n"))
+
+    def test_complete_task_requires_bound_terminal_operation(self):
         denied = self._json("POST", "/api/operations/missing/complete-task", {"task_id": "VTX-none"}, expected=404)
         self.assertEqual(denied["error"]["code"], "not_found")
         missing_id = self._json("POST", "/api/operations/missing/complete-task", {}, expected=422)
         self.assertEqual(missing_id["error"]["code"], "invalid_plan")
+
+        planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})["plan"]
+        task = self.handler.workspace.create_task("whoami")
+        operation = {
+            "id": "active-completion-test", "plan_id": planned["id"], "started_at": vtx_backend.now_iso(),
+            "ended_at": None, "status": "running", "commands": [], "workers": [],
+        }
+        self.store.save_operation(operation)
+        self.handler.workspace.update_task(task["id"], plan_id=planned["id"], operation_id=operation["id"], state="EXECUTING")
+        active = self._json("POST", f"/api/operations/{operation['id']}/complete-task", {"task_id": task["id"]}, expected=422)
+        self.assertIn("active operation", active["error"]["message"])
+
+        operation["status"] = "failed"
+        operation["ended_at"] = vtx_backend.now_iso()
+        self.store.update_operation(operation)
+        unbound = self.handler.workspace.create_task("other")
+        mismatch = self._json("POST", f"/api/operations/{operation['id']}/complete-task", {"task_id": unbound["id"]}, expected=422)
+        self.assertIn("not bound", mismatch["error"]["message"])
 
 
 if __name__ == "__main__":

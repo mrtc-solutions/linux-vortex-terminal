@@ -161,13 +161,15 @@ class Workspace:
             )
         return self.get_conversation(conversation_id)
 
-    def archive_conversation(self, conversation_id: str) -> None:
+    def archive_conversation(self, conversation_id: str) -> bool:
         with self.store.lock, self.store.connect() as db:
-            db.execute("UPDATE conversations SET status='archived', updated_at=? WHERE id=?", (now_iso(), conversation_id))
+            cursor = db.execute("UPDATE conversations SET status='archived', updated_at=? WHERE id=? AND status!='deleted'", (now_iso(), conversation_id))
+            return cursor.rowcount > 0
 
-    def delete_conversation(self, conversation_id: str) -> None:
+    def delete_conversation(self, conversation_id: str) -> bool:
         with self.store.lock, self.store.connect() as db:
-            db.execute("UPDATE conversations SET status='deleted', updated_at=? WHERE id=?", (now_iso(), conversation_id))
+            cursor = db.execute("UPDATE conversations SET status='deleted', updated_at=? WHERE id=? AND status!='deleted'", (now_iso(), conversation_id))
+            return cursor.rowcount > 0
 
     def add_message(self, conversation_id: str, role: str, content: str, meta: dict[str, Any] | None = None) -> dict[str, Any]:
         if role not in {"user", "vortex", "system"}:
@@ -181,6 +183,27 @@ class Workspace:
     def list_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         with self.store.connect() as db:
             rows = db.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at", (conversation_id,)).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["meta"] = json.loads(item.pop("meta_json"))
+            result.append(item)
+        return result
+
+    def search_messages(self, query: str, limit: int = 500) -> list[dict[str, Any]]:
+        """Search messages in one bounded SQL query instead of one query per conversation."""
+        safe = (query or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{safe}%"
+        limit = max(1, min(int(limit), 500))
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT m.*, c.title AS conversation_title FROM messages m "
+                "JOIN conversations c ON c.id=m.conversation_id "
+                "WHERE c.status!='deleted' AND (m.content LIKE ? ESCAPE '\\' OR m.id LIKE ? ESCAPE '\\' "
+                "OR m.role LIKE ? ESCAPE '\\' OR m.meta_json LIKE ? ESCAPE '\\') "
+                "ORDER BY m.created_at DESC LIMIT ?",
+                (pattern, pattern, pattern, pattern, limit),
+            ).fetchall()
         result = []
         for row in rows:
             item = dict(row)
@@ -467,7 +490,14 @@ class Workspace:
         return result
 
     def get_report(self, report_id: str) -> dict[str, Any] | None:
-        return next((item for item in self.list_reports() if item["id"] == report_id), None)
+        with self.store.connect() as db:
+            row = db.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["formats"] = json.loads(item.pop("formats_json"))
+        item["body"] = json.loads(item.pop("body_json"))
+        return item
 
     def delete_report(self, report_id: str) -> bool:
         """Remove a derived report. History, operations, and the audit chain are untouched."""
@@ -485,7 +515,9 @@ class Workspace:
         return item
 
     def get_report_by_operation(self, operation_id: str) -> dict[str, Any] | None:
-        return next((item for item in self.list_reports() if item.get("operation_id") == operation_id), None)
+        with self.store.connect() as db:
+            row = db.execute("SELECT id FROM reports WHERE operation_id=? ORDER BY created_at DESC LIMIT 1", (operation_id,)).fetchone()
+        return self.get_report(row["id"]) if row else None
 
     def export_conversation(self, conversation_id: str) -> dict[str, Any]:
         item = self.get_conversation(conversation_id)
@@ -553,6 +585,15 @@ class Workspace:
             rows = db.execute("SELECT agent_id, COUNT(*) AS runs, SUM(CASE WHEN state='responded' THEN 1 ELSE 0 END) AS useful, AVG(latency_ms) AS avg_ms FROM agent_runs GROUP BY agent_id").fetchall()
         return [dict(row) for row in rows]
 
+    def create_engagement(self, item: dict[str, Any], excluded: list[str] | None, environment: str | None = None, owner: str | None = None) -> None:
+        """Persist authorization and its exclusion scope in one transaction."""
+        with self.store.lock, self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("INSERT INTO engagements VALUES (?,?,?,?,?,?,?,?)", (item["id"], item["created_at"], item["expires_at"], item["name"], item["authorization"], canonical(item["targets"]), canonical(item["classes"]), item["status"]))
+            db.execute("INSERT INTO engagement_scope VALUES (?,?,?,?)", (item["id"], canonical(excluded or []), (environment or "")[:80], (owner or "")[:80]))
+            db.execute("COMMIT")
+        self.store.append_audit("engagement_created", {"engagement_id": item["id"], "targets": item["targets"]})
+
     def save_engagement_scope(self, engagement_id: str, excluded: list[str] | None, environment: str | None = None, owner: str | None = None) -> None:
         with self.store.lock, self.store.connect() as db:
             db.execute("INSERT OR REPLACE INTO engagement_scope VALUES (?,?,?,?)", (engagement_id, canonical(excluded or []), (environment or "")[:80], (owner or "")[:80]))
@@ -606,9 +647,8 @@ class Workspace:
         for conversation in self.list_conversations():
             if matches(conversation):
                 add("conversations", conversation.get("id"), conversation.get("title"), conversation.get("updated_at"), conversation.get("status"), {"id": conversation.get("id"), "title": conversation.get("title"), "status": conversation.get("status")})
-            for message in self.list_messages(conversation["id"]):
-                if matches(message):
-                    add("messages", message.get("id"), f"{conversation.get('title')} · {message.get('role')}", message.get("created_at"), message.get("content")[:240], {"conversation_id": conversation.get("id"), "role": message.get("role"), "content": message.get("content")[:400]})
+        for message in self.search_messages(term, limit=limit * 5):
+            add("messages", message.get("id"), f"{message.get('conversation_title')} · {message.get('role')}", message.get("created_at"), message.get("content")[:240], {"conversation_id": message.get("conversation_id"), "role": message.get("role"), "content": message.get("content")[:400]})
 
         for finding in self.list_findings():
             if matches(finding):

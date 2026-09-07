@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -54,6 +55,14 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
 }
 _STATUS_CACHE: dict[str, Any] = {"at": 0.0, "key": None, "value": None}
 _STATUS_TTL_SECONDS = 5.0
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?$|^[A-Za-z0-9][A-Za-z0-9._-]*(?::[A-Za-z0-9._-]+)?$")
+_MAX_OLLAMA_STATUS_BYTES = 2 * 1024 * 1024
+_MAX_OLLAMA_CHAT_BYTES = 4 * 1024 * 1024
+
+
+def invalidate_status_cache() -> None:
+    """Make model activation/removal visible to the next advisory immediately."""
+    _STATUS_CACHE.update({"at": 0.0, "key": None, "value": None})
 
 
 def loopback_http_endpoint(raw: str | None, default: str = DEFAULT_OLLAMA) -> str:
@@ -192,7 +201,7 @@ def _candidate_catalog(installed_models: list[dict[str, Any]]) -> tuple[list[dic
         found_name = None
         family = meta["family"]
         for normalized, raw in normalized_lookup.items():
-            if normalized == _normalize_model_key(canonical_name) or normalized.startswith(family):
+            if normalized == _normalize_model_key(canonical_name) or normalized.startswith(_normalize_model_key(family) + ":"):
                 found_name = raw
                 matched_normalized.add(normalized)
                 break
@@ -229,25 +238,31 @@ def _candidate_catalog(installed_models: list[dict[str, Any]]) -> tuple[list[dic
 def _ollama_json(endpoint: str, path: str, *, method: str = "GET", body: dict[str, Any] | None = None, timeout: float = 0.8) -> dict[str, Any]:
     headers = {"Content-Type": "application/json"}
     payload = json.dumps(body, sort_keys=True).encode("utf-8") if body is not None else None
+    if payload is not None and len(payload) > 1024 * 1024:
+        raise ValueError("Ollama request exceeds the advisory payload limit")
     request = urllib.request.Request(endpoint + path, data=payload, method=method, headers=headers)
+    limit = _MAX_OLLAMA_CHAT_BYTES if path == "/api/chat" else _MAX_OLLAMA_STATUS_BYTES
     with _opener().open(request, timeout=timeout) as response:
-        raw = response.read().decode("utf-8", "replace") or "{}"
+        announced = response.headers.get("Content-Length")
+        if announced:
+            try:
+                announced_size = int(announced)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid Ollama response Content-Length") from exc
+            if announced_size < 0 or announced_size > limit:
+                raise ValueError("Ollama response exceeds the allowed size")
+        raw_bytes = response.read(limit + 1)
+        if len(raw_bytes) > limit:
+            raise ValueError("Ollama response exceeds the allowed size")
+        raw = raw_bytes.decode("utf-8", "replace") or "{}"
     parsed = json.loads(raw)
     return parsed if isinstance(parsed, dict) else {}
 
 
 def ollama_status(endpoint: str | None = None, offline: bool = False) -> dict[str, Any]:
-    if offline is True:
-        return {
-            "provider": "ollama",
-            "state": "disabled",
-            "reason": "offline mode",
-            "models": [],
-            "endpoint": None,
-            "candidates": [],
-            "extras": [],
-            "resources": hardware_profile(),
-        }
+    # Offline mode forbids downloads and non-loopback network adapters, not
+    # local inference. Ollama endpoints are constrained to loopback below, so
+    # probing and using an already-installed model remains genuinely offline.
     url = _endpoint(endpoint)
     if not url:
         return {
@@ -263,7 +278,7 @@ def ollama_status(endpoint: str | None = None, offline: bool = False) -> dict[st
     version = None
     try:
         version_payload = _ollama_json(url, "/api/version", timeout=0.6)
-        version = version_payload.get("version") if isinstance(version_payload.get("version"), str) else None
+        version = version_payload.get("version")[:120] if isinstance(version_payload.get("version"), str) else None
     except (urllib.error.URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError):
         version = None
     try:
@@ -281,13 +296,18 @@ def ollama_status(endpoint: str | None = None, offline: bool = False) -> dict[st
             "resources": hardware_profile(),
         }
     models = []
-    for item in payload.get("models") or []:
-        name = item.get("name")
-        if isinstance(name, str) and name:
+    raw_models = payload.get("models")
+    if not isinstance(raw_models, list):
+        raw_models = []
+    for item in raw_models[:2048]:
+        name = item.get("name") if isinstance(item, dict) else None
+        if isinstance(name, str) and len(name) <= 160 and _MODEL_NAME_RE.fullmatch(name):
+            size = item.get("size")
+            modified = item.get("modified_at")
             models.append({
-                "name": name[:120],
-                "size": item.get("size"),
-                "modified_at": item.get("modified_at"),
+                "name": name,
+                "size": size if isinstance(size, int) and not isinstance(size, bool) and size >= 0 else None,
+                "modified_at": modified[:80] if isinstance(modified, str) else None,
             })
     resources = hardware_profile()
     candidates, extras = _candidate_catalog(models)
@@ -378,14 +398,47 @@ def model_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     return value
 
 
+def _model_family(name: str) -> str:
+    normalized = _normalize_model_key(name)
+    prefix, slash, leaf = normalized.rpartition("/")
+    family_leaf = leaf.split(":", 1)[0]
+    return f"{prefix}/{family_leaf}" if slash else family_leaf
+
+
 def _pick_available(name: str | None, available: list[str]) -> str | None:
     if not name:
         return None
     wanted = _normalize_model_key(name)
+    wanted_family = _model_family(wanted)
+    # Prefer the exact configured tag before a same-family compatibility tag,
+    # regardless of the order returned by Ollama.
     for item in available:
-        if _normalize_model_key(item) == wanted or _normalize_model_key(item).startswith(wanted.split(":", 1)[0]):
+        if _normalize_model_key(item) == wanted:
+            return item
+    for item in available:
+        if _model_family(_normalize_model_key(item)) == wanted_family:
             return item
     return None
+
+
+def _preference_status(settings: dict[str, Any], available: list[str]) -> dict[str, dict[str, Any]]:
+    configured = {
+        "primary": settings.get("model_primary"),
+        "planner": settings.get("model_planner"),
+        "fast": settings.get("model_fast"),
+        "specialist": settings.get("model_specialist"),
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for role, name in configured.items():
+        requested = str(name or "")
+        resolved = _pick_available(requested, available)
+        result[role] = {
+            "configured": requested,
+            "resolved": resolved,
+            "state": "active" if resolved else "unavailable",
+            "family_fallback": bool(resolved and _normalize_model_key(requested) != _normalize_model_key(resolved)),
+        }
+    return result
 
 
 def choose_route(request: str, plan: dict[str, Any] | None = None, operation: dict[str, Any] | None = None, *, phase: str = "conversation", settings: dict[str, Any] | None = None, status: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -393,7 +446,21 @@ def choose_route(request: str, plan: dict[str, Any] | None = None, operation: di
     status = status or model_status(settings)
     local = status.get("local") or {}
     resources = local.get("resources") or hardware_profile()
-    available = [str(name) for name in local.get("installed_candidates") or []]
+    available = [
+        str(item.get("installed_name"))
+        for item in (local.get("candidates") or [])
+        if isinstance(item, dict) and item.get("installed") and item.get("installed_name")
+    ]
+    # Older/caller-supplied status snapshots may expose only the canonical list.
+    if not available:
+        available = [str(name) for name in local.get("installed_candidates") or []]
+    # Operator-downloaded models outside the curated catalog are valid advisory
+    # choices when explicitly selected in settings. Keep curated defaults first
+    # and append extras without allowing duplicates.
+    for item in local.get("extras") or []:
+        name = str(item.get("name") or "")
+        if name and name not in available:
+            available.append(name)
     if not available:
         available = [str(item.get("name")) for item in (local.get("models") or []) if item.get("name")][:4]
     complex_task = phase in {"interpret", "report", "verify", "plan"}
@@ -414,6 +481,12 @@ def choose_route(request: str, plan: dict[str, Any] | None = None, operation: di
     preferred_plan = settings.get("model_planner") or local.get("recommended", {}).get("planner") or "qwen3:4b"
     preferred_analysis = settings.get("model_primary") or local.get("recommended", {}).get("analysis") or "phi4-mini:3.8b"
     preferred_special = settings.get("model_specialist") or local.get("recommended", {}).get("specialist") or "gemma3:4b"
+    preference_status = _preference_status({
+        "model_primary": preferred_analysis,
+        "model_planner": preferred_plan,
+        "model_fast": preferred_fast,
+        "model_specialist": preferred_special,
+    }, available)
     if phase == "conversation" and not complex_task:
         primary = _pick_available(preferred_fast, available) or _pick_available(preferred_analysis, available) or available[:1][0] if available else None
         verifier = None
@@ -440,11 +513,15 @@ def choose_route(request: str, plan: dict[str, Any] | None = None, operation: di
         seen.add(model)
         sequence.append({"role": role, "model": model})
     synthesizer = primary if primary else (sequence[0]["model"] if sequence else None)
+    requested_primary = preferred_fast if phase == "conversation" and not complex_task else (preferred_plan if phase == "plan" else preferred_analysis)
     return {
         "phase": phase,
         "resource_mode": resources.get("mode") or "unknown",
-        "strategy": "multi-sequential" if len(sequence) > 1 else "single-model",
+        "strategy": "multi-parallel" if len(sequence) > 1 else "single-model",
         "selected": sequence,
+        "preferences": preference_status,
+        "requested_primary": requested_primary,
+        "selection_fallback": bool(requested_primary and _normalize_model_key(primary or "") != _normalize_model_key(requested_primary)),
         "primary": primary,
         "verifier": verifier if len(sequence) > 1 else None,
         "critic": critic if len(sequence) > 2 else None,
@@ -480,7 +557,7 @@ def evidence_payload(request: str, plan: dict[str, Any] | None = None, operation
             "kind": item.get("kind"),
             "state": item.get("state"),
             "summary": _trim_text(item.get("summary"), 220),
-            "observations": (item.get("observations") or [])[:5],
+            "observations": [_trim_text(observation, 180) for observation in (item.get("observations") or [])[:5]],
         })
     return {
         "schema": "vortex-local-ai-advisory-v1",
@@ -684,7 +761,9 @@ def _deterministic_synthesis(route: dict[str, Any], responses: list[dict[str, An
         "unknowns": " ".join(unknown_parts[:2]).strip(),
         "next_steps": next_steps,
         "caution": " ".join(caution_parts[:2]).strip(),
-        "model": route.get("synthesizer") or primary.get("model"),
+        # If the selected primary failed but a verifier answered, never label
+        # the verifier's synthesis as output from the failed model.
+        "model": primary.get("model"),
     }
 
 
@@ -798,6 +877,23 @@ def advise(request: str, *, plan: dict[str, Any] | None = None, operation: dict[
     if synthesis.get("unknowns"):
         parts.append("Unknowns: " + str(synthesis["unknowns"]).strip())
     message = " ".join(part for part in parts if part).strip()
+    responded = [item for item in responses if item.get("state") == "responded"]
+    selected_primary = str((selected[0] if selected else {}).get("model") or "")
+    effective_model = str((responded[0] if responded else {}).get("model") or "")
+    call_fallback = bool(effective_model and selected_primary and effective_model != selected_primary)
+    selection_fallback = route.get("selection_fallback") is True
+    fallback = {
+        "used": call_fallback or selection_fallback,
+        "configured_model": route.get("requested_primary"),
+        "selected_model": selected_primary or None,
+        "effective_model": effective_model or None,
+        "reason": (
+            "selected primary call failed; another routed local model responded" if call_fallback
+            else "configured model was unavailable; a compatible installed model was selected" if selection_fallback
+            else "selected local model responded" if responded
+            else "no routed local model responded"
+        ),
+    }
     return {
         "provider": "ollama",
         "phase": phase,
@@ -807,6 +903,7 @@ def advise(request: str, *, plan: dict[str, Any] | None = None, operation: dict[
         "responses": responses,
         "fuzzy": fuzzy,
         "synthesis": synthesis,
+        "fallback": fallback,
         "message": message,
     }
 

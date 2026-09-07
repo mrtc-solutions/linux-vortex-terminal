@@ -29,15 +29,22 @@ import struct
 import subprocess
 import sys
 import termios
+import tempfile
 import threading
 import time
 import urllib.parse
 from collections import deque
 from datetime import datetime, timezone
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+try:
+    from .fileio import atomic_write, exclusive_file_lock, open_owner_binary, read_owner_text
+except ImportError:  # pragma: no cover - direct script execution
+    from fileio import atomic_write, exclusive_file_lock, open_owner_binary, read_owner_text  # type: ignore
 
 _BACKEND_DIR = Path(__file__).resolve().parent
 if str(_BACKEND_DIR) not in sys.path:
@@ -53,14 +60,14 @@ def _load(name: str):
 try:
     from .adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from .artifacts import ArtifactError, analyze_operation_http, analyze_path
-    from .facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
+    from .facts import parse_container_logs, parse_package_facts, parse_package_observation, parse_ssh_connection, parse_systemd_facts
     from .knowledge import retrieve as knowledge_retrieve
     from .network import resolve_targets, resolution_digest
     from .probe_cache import TTLCache
 except ImportError:  # direct `python backend/vortex_backend.py`
     from adapter_registry import ADAPTER_MANIFESTS, TOOL_CATALOG
     from artifacts import ArtifactError, analyze_operation_http, analyze_path
-    from facts import parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_facts
+    from facts import parse_container_logs, parse_package_facts, parse_package_observation, parse_ssh_connection, parse_systemd_facts
     from knowledge import retrieve as knowledge_retrieve
     from network import resolve_targets, resolution_digest
     from probe_cache import TTLCache
@@ -74,7 +81,7 @@ ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-_
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 BIDI_RE = re.compile(r"[\u202a-\u202e\u2066-\u2069]")
 UNIT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@:-]*\.service$")
-PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?$")
+PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]{0,127}(?::[a-z0-9]{1,32})?$")
 HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
 
 EXIT_CODES = {
@@ -92,6 +99,21 @@ EXIT_CODES = {
 }
 
 CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# PTY output is durable enough for reconnects, but it must not turn a noisy
+# interactive process into an unbounded memory or SQLite allocation. A single
+# read is at most 64 KiB; these limits therefore bound the normal-case live ring
+# to 4 MiB and each retained session replay to 8 MiB (sanitisation can expand a
+# pathological bidi-heavy chunk slightly, but both event counts remain fixed).
+PTY_READ_BYTES = 64 * 1024
+PTY_MEMORY_EVENTS = 64
+PTY_PERSISTED_EVENTS = 128
+PTY_REPLAY_SESSIONS = 20
+
+# stdout and stderr reader threads may get ahead of the executor, but by no
+# more than this many 64 KiB chunks. The evidence cap bounds retained output;
+# this queue bound separately caps transient producer/consumer buffering.
+EXECUTION_OUTPUT_QUEUE_CHUNKS = 8
 
 # Aggregate host probes are expensive when many tools/agents are listed by the
 # UI or tests. These caches are deliberately short-lived and do not change the
@@ -214,12 +236,12 @@ def data_root() -> Path:
     override = os.environ.get("VORTEX_DATA_DIR")
     if override:
         root = Path(override).expanduser()
-    elif os.getuid() == 0 and os.environ.get("SUDO_USER"):
-        try:
-            invoking_user = pwd.getpwnam(os.environ["SUDO_USER"])
-            root = Path(os.environ.get("XDG_DATA_HOME", Path(invoking_user.pw_dir) / ".local" / "share")).expanduser() / "vortex"
-        except KeyError:
-            root = xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share") / "vortex"
+    elif os.getuid() == 0:
+        # Never infer an invoking sudo user's state directory. Opening that
+        # user's WAL database as UID 0 can leave root-owned sidecars and lock
+        # the application out. Privileged mutations use the narrow sudo broker
+        # while VORTEX itself remains the invoking user.
+        root = Path(pwd.getpwuid(0).pw_dir) / ".local" / "share" / "vortex"
     else:
         root = xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share") / "vortex"
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -231,7 +253,13 @@ def data_root() -> Path:
 
 
 def config_root() -> Path:
-    root = xdg_dir("XDG_CONFIG_HOME", Path.home() / ".config") / "vortex"
+    override = os.environ.get("VORTEX_CONFIG_DIR")
+    if override:
+        root = Path(override).expanduser()
+    elif os.getuid() == 0:
+        root = Path(pwd.getpwuid(0).pw_dir) / ".config" / "vortex"
+    else:
+        root = xdg_dir("XDG_CONFIG_HOME", Path.home() / ".config") / "vortex"
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         root.chmod(0o700)
@@ -247,8 +275,12 @@ def secure_path(path: Path) -> Path:
 
 
 def runtime_root() -> Path:
-    base = Path(os.environ.get("XDG_RUNTIME_DIR", str(data_root() / "runtime"))).expanduser()
-    root = base / "vortex"
+    override = os.environ.get("VORTEX_RUNTIME_DIR")
+    if override:
+        root = Path(override).expanduser()
+    else:
+        base = data_root() / "runtime" if os.getuid() == 0 else Path(os.environ.get("XDG_RUNTIME_DIR", str(data_root() / "runtime"))).expanduser()
+        root = base / "vortex"
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try: root.chmod(0o700)
     except OSError: pass
@@ -257,10 +289,7 @@ def runtime_root() -> Path:
 
 def write_runtime_metadata(host: str, port: int, token: str | None) -> Path:
     path = runtime_root() / "sidecar.json"
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temp.write_text(canonical({"pid": os.getpid(), "host": host, "port": port, "token": token, "created_at": now_iso()}), encoding="utf-8")
-    temp.chmod(0o600)
-    os.replace(temp, path)
+    atomic_write(path, canonical({"pid": os.getpid(), "host": host, "port": port, "token": token, "created_at": now_iso()}), mode=0o600)
     return path
 
 
@@ -394,8 +423,49 @@ def probe_executable(name: str, *, include_version: bool = True) -> dict[str, An
         return {"name": name, "state": "blocked", "path": str(path), "error": str(exc), "version": None}
 
 
+def trusted_privilege_broker() -> dict[str, Any]:
+    """Identify the fixed, root-owned sudo broker used by interactive CLI runs.
+
+    General managed executables reject set-ID files. This is the one narrow
+    exception: an operator starts foreground ``sudo -v`` themselves, then the
+    unprivileged execution manager uses only ``sudo -n --`` for an already
+    typed root-required argv. Renderer/HTTP execution never enables this path.
+    """
+    for candidate in (Path("/usr/bin/sudo"), Path("/bin/sudo")):
+        try:
+            real = candidate.resolve(strict=True)
+            st = real.stat()
+            mode = stat.S_IMODE(st.st_mode)
+            if real not in {Path("/usr/bin/sudo"), Path("/bin/sudo")}:
+                continue
+            parent_st = real.parent.stat()
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or mode & 0o022
+                    or parent_st.st_uid != 0 or stat.S_IMODE(parent_st.st_mode) & 0o022
+                    or not os.access(real, os.X_OK)):
+                continue
+            sha = hashlib.sha256()
+            with real.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    sha.update(chunk)
+            return {
+                "state": "installed", "realpath": str(real), "device": st.st_dev,
+                "inode": st.st_ino, "owner_uid": st.st_uid, "mode": oct(mode),
+                "sha256": sha.hexdigest(),
+            }
+        except OSError:
+            continue
+    return {"state": "unavailable", "reason": "trusted /usr/bin/sudo was not found"}
+
+
 def minimal_env(tty: bool, additions: dict[str, str] | None = None) -> dict[str, str]:
-    allowed = {"HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "PATH"}
+    # Preserve the sidecar's already-selected owner-local state roots so a
+    # reviewed CLI launched inside a managed PTY opens the same plan database
+    # and can rescan the same running sidecar after dependency installation.
+    allowed = {
+        "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "PATH",
+        "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+        "VORTEX_DATA_DIR", "VORTEX_CONFIG_DIR", "VORTEX_RUNTIME_DIR",
+    }
     if tty:
         allowed.add("TERM")
     env = {key: value for key, value in os.environ.items() if key in allowed}
@@ -539,7 +609,14 @@ def safe_file_target(raw: str) -> Path | None:
         return None
     if _SENSITIVE_FILE_RE.search(str(resolved)):
         return None
-    return resolved if str(resolved).startswith(_READABLE_FILE_ROOTS) else None
+    for root_text in _READABLE_FILE_ROOTS:
+        root = Path(root_text)
+        try:
+            resolved.relative_to(root)
+            return resolved
+        except ValueError:
+            continue
+    return None
 
 
 def safe_directory_target(raw: str) -> Path | None:
@@ -713,20 +790,22 @@ class Store:
             return event_id
 
     def verify_audit(self) -> dict[str, Any]:
-        with self.connect() as db:
-            rows = db.execute("SELECT * FROM audit_events ORDER BY sequence").fetchall()
         previous = "0" * 64
-        for row in rows:
-            try:
-                payload = json.loads(row["payload_json"])
-            except (TypeError, ValueError):
-                return {"valid": False, "checked": row["sequence"], "error": "audit payload is not valid JSON"}
-            body = {"event_id": row["event_id"], "at": row["at"], "event_type": row["event_type"], "payload": payload, "previous_hash": previous}
-            expected = hashlib.sha256((previous + canonical(body)).encode()).hexdigest()
-            if row["previous_hash"] != previous or row["event_hash"] != expected:
-                return {"valid": False, "checked": row["sequence"], "error": "audit hash mismatch"}
-            previous = row["event_hash"]
-        return {"valid": True, "checked": len(rows), "head": previous}
+        checked = 0
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM audit_events ORDER BY sequence")
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"])
+                except (TypeError, ValueError):
+                    return {"valid": False, "checked": row["sequence"], "error": "audit payload is not valid JSON"}
+                body = {"event_id": row["event_id"], "at": row["at"], "event_type": row["event_type"], "payload": payload, "previous_hash": previous}
+                expected = hashlib.sha256((previous + canonical(body)).encode()).hexdigest()
+                if row["previous_hash"] != previous or row["event_hash"] != expected:
+                    return {"valid": False, "checked": row["sequence"], "error": "audit hash mismatch"}
+                previous = row["event_hash"]
+                checked += 1
+        return {"valid": True, "checked": checked, "head": previous}
 
     def save_plan(self, plan: dict[str, Any]) -> None:
         with self.lock, self.connect() as db:
@@ -778,6 +857,15 @@ class Store:
             rows = db.execute("SELECT result_json FROM operations ORDER BY COALESCE(ended_at, started_at) DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def save_feedback(self, operation_id: str | None, rating: int, correction: str) -> dict[str, Any]:
+        if operation_id and self.get_operation(operation_id) is None:
+            raise ValueError("feedback operation was not found")
+        item = {"id": secrets.token_hex(16), "operation_id": operation_id, "rating": max(1, min(int(rating), 5)), "correction": correction[:2000], "created_at": now_iso()}
+        with self.lock, self.connect() as db:
+            db.execute("INSERT INTO feedback(id,operation_id,rating,correction,created_at) VALUES (?,?,?,?,?)", (item["id"], operation_id, item["rating"], item["correction"], item["created_at"]))
+        self.append_audit("feedback_recorded", {"feedback_id": item["id"], "operation_id": operation_id, "rating": item["rating"]})
+        return item
+
     def integrity_check(self) -> dict[str, Any]:
         with self.connect() as db:
             row = db.execute("PRAGMA integrity_check").fetchone()
@@ -786,46 +874,87 @@ class Store:
         return {"sqlite": result, "sqlite_valid": result.lower() == "ok", "audit": audit, "valid": result.lower() == "ok" and audit.get("valid", False)}
 
     def backup(self, destination: str | Path, overwrite: bool = False) -> Path:
-        dest = Path(destination).expanduser()
-        if not dest.is_absolute():
-            dest = Path.cwd() / dest
-        dest = dest.resolve()
+        requested = Path(destination).expanduser()
+        if not requested.is_absolute():
+            requested = Path.cwd() / requested
+        if not requested.name:
+            raise ValueError("backup filename is required")
+        requested.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        parent = requested.parent.resolve(strict=True)
+        parent_stat = parent.stat()
+        if not parent.is_dir() or (os.getuid() != 0 and parent_stat.st_uid != os.getuid()):
+            raise PermissionError("backup parent directory is not operator-owned")
+        dest = parent / requested.name
         if dest == self.db_path.resolve():
             raise ValueError("backup destination must differ from the active database")
-        if dest.parent.exists():
-            parent_stat = dest.parent.stat()
-            if not dest.parent.is_dir() or (os.getuid() != 0 and parent_stat.st_uid != os.getuid()):
-                raise PermissionError("backup parent directory is not operator-owned")
-        else:
-            dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if dest.exists() and not overwrite:
-            raise FileExistsError("backup destination exists; use --force to replace it")
-        if dest.exists() and dest.is_symlink():
-            raise ValueError("backup destination symlink is not accepted")
         self.append_audit("database_backup_requested", {"destination": redact(str(dest))})
-        source = self._connection()
-        target = sqlite3.connect(dest)
+        temp: Path | None = None
         try:
-            source.backup(target)
-            target.commit()
+            with exclusive_file_lock(dest):
+                if os.path.lexists(dest):
+                    if dest.is_symlink():
+                        raise ValueError("backup destination symlink is not accepted")
+                    if not overwrite:
+                        raise FileExistsError("backup destination exists; use --force to replace it")
+                fd, temp_name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".backup", dir=str(parent))
+                temp = Path(temp_name)
+                try:
+                    os.fchmod(fd, 0o600)
+                finally:
+                    os.close(fd)
+                source = self._connection()
+                target: sqlite3.Connection | None = None
+                try:
+                    target = sqlite3.connect(temp)
+                    source.backup(target)
+                    target.commit()
+                finally:
+                    if target is not None:
+                        target.close()
+                    source.close()
+                with temp.open("rb") as handle:
+                    os.fsync(handle.fileno())
+                os.replace(temp, dest)
+                temp = None
+                try:
+                    directory_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                except OSError:
+                    pass
+            return dest
         finally:
-            target.close()
-            source.close()
-        try:
-            dest.chmod(0o600)
-        except OSError:
-            pass
-        return dest
+            if temp is not None:
+                try:
+                    temp.unlink()
+                except FileNotFoundError:
+                    pass
 
-    def save_session_event(self, session_id: str, event: dict[str, Any], keep: int = 5000) -> None:
+    def save_session_event(self, session_id: str, event: dict[str, Any], keep: int = PTY_PERSISTED_EVENTS) -> None:
+        keep = max(1, min(int(keep), PTY_PERSISTED_EVENTS))
         with self.lock, self.connect() as db:
             db.execute("INSERT OR REPLACE INTO session_events(session_id,seq,at,stream,data) VALUES (?,?,?,?,?)", (session_id, event["seq"], event["at"], event.get("stream", "pty"), event.get("data", "")))
             db.execute("DELETE FROM session_events WHERE session_id=? AND seq <= (SELECT MAX(seq)-? FROM session_events WHERE session_id=?)", (session_id, keep, session_id))
 
     def list_session_events(self, session_id: str, since: int = 0) -> list[dict[str, Any]]:
         with self.connect() as db:
-            rows = db.execute("SELECT seq,at,stream,data FROM session_events WHERE session_id=? AND seq>? ORDER BY seq LIMIT 5000", (session_id, max(0, int(since)))).fetchall()
+            rows = db.execute("SELECT seq,at,stream,data FROM session_events WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?", (session_id, max(0, int(since)), PTY_PERSISTED_EVENTS)).fetchall()
         return [{"seq": row["seq"], "at": row["at"], "stream": row["stream"], "data": row["data"]} for row in rows]
+
+    def prune_session_event_history(self, keep_sessions: int = PTY_REPLAY_SESSIONS) -> int:
+        """Keep bounded replay for recent and currently-running PTYs only."""
+        keep_sessions = max(1, min(int(keep_sessions), 100))
+        with self.lock, self.connect() as db:
+            before = db.total_changes
+            db.execute(
+                "DELETE FROM session_events WHERE session_id NOT IN "
+                "(SELECT id FROM sessions ORDER BY started_at DESC LIMIT ?) "
+                "AND session_id NOT IN (SELECT id FROM sessions WHERE status IN ('starting','running'))",
+                (keep_sessions,),
+            )
+            return db.total_changes - before
 
     def prune(self, history_days: int = 90, output_days: int = 30) -> dict[str, Any]:
         history_days = max(1, min(int(history_days), 3650)); output_days = max(1, min(int(output_days), 3650))
@@ -849,8 +978,10 @@ class Store:
                 db.executemany("DELETE FROM operations WHERE id=?", [(item,) for item in old_ops])
             db.execute("DELETE FROM plans WHERE id NOT IN (SELECT plan_id FROM operations) AND created_at < ?", (history_cutoff,))
             db.execute("DELETE FROM session_events WHERE at < ?", (history_cutoff,))
+            old_sessions = db.execute("SELECT COUNT(*) FROM sessions WHERE COALESCE(ended_at,started_at) < ?", (history_cutoff,)).fetchone()[0]
+            db.execute("DELETE FROM sessions WHERE COALESCE(ended_at,started_at) < ?", (history_cutoff,))
             db.execute("COMMIT")
-        result = {"history_deleted": len(old_ops), "operation_outputs_redacted": output_pruned, "history_days": history_days, "output_days": output_days}
+        result = {"history_deleted": len(old_ops), "sessions_deleted": old_sessions, "operation_outputs_redacted": output_pruned, "history_days": history_days, "output_days": output_days}
         self.append_audit("retention_pruned", result)
         return result
 
@@ -868,7 +999,13 @@ class Store:
         return [{"id": r["id"], "name": r["name"], "shell": r["shell"], "cwd": r["cwd"], "command": json.loads(r["command_json"]), "pid": r["pid"], "cols": r["cols"], "rows": r["rows"], "status": r["status"], "started_at": r["started_at"], "ended_at": r["ended_at"], "last_activity": r["last_activity"], "exit_code": r["exit_code"], "signal": r["signal"], "termination_reason": r["termination_reason"]} for r in rows]
 
     def get_session_record(self, session_id: str) -> dict[str, Any] | None:
-        return next((item for item in self.list_sessions() if item["id"] == session_id), None)
+        # Point lookups must not inherit list_sessions()'s UI-oriented 100-row
+        # limit; old session IDs still need honest status and replay semantics.
+        with self.connect() as db:
+            r = db.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if not r:
+            return None
+        return {"id": r["id"], "name": r["name"], "shell": r["shell"], "cwd": r["cwd"], "command": json.loads(r["command_json"]), "pid": r["pid"], "cols": r["cols"], "rows": r["rows"], "status": r["status"], "started_at": r["started_at"], "ended_at": r["ended_at"], "last_activity": r["last_activity"], "exit_code": r["exit_code"], "signal": r["signal"], "termination_reason": r["termination_reason"]}
 
 
     def save_artifact(self, artifact: dict[str, Any], operation_id: str | None = None) -> None:
@@ -889,13 +1026,19 @@ class Store:
             db.execute("INSERT INTO engagements VALUES (?,?,?,?,?,?,?,?)", (item["id"], item["created_at"], item["expires_at"], item["name"], item["authorization"], canonical(item["targets"]), canonical(item["classes"]), item["status"]))
         self.append_audit("engagement_created", {"engagement_id": item["id"], "targets": item["targets"]})
 
+    @staticmethod
+    def _engagement_row(r: sqlite3.Row) -> dict[str, Any]:
+        return {"id": r["id"], "created_at": r["created_at"], "expires_at": r["expires_at"], "name": r["name"], "authorization": r["authorization"], "targets": json.loads(r["targets_json"]), "classes": json.loads(r["classes_json"]), "status": r["status"]}
+
     def list_engagements(self) -> list[dict[str, Any]]:
         with self.connect() as db:
-            rows = db.execute("SELECT * FROM engagements ORDER BY created_at DESC").fetchall()
-        return [{"id": r["id"], "created_at": r["created_at"], "expires_at": r["expires_at"], "name": r["name"], "authorization": r["authorization"], "targets": json.loads(r["targets_json"]), "classes": json.loads(r["classes_json"]), "status": r["status"]} for r in rows]
+            rows = db.execute("SELECT * FROM engagements ORDER BY created_at DESC LIMIT 500").fetchall()
+        return [self._engagement_row(r) for r in rows]
 
     def get_engagement(self, engagement_id: str) -> dict[str, Any] | None:
-        return next((x for x in self.list_engagements() if x["id"] == engagement_id), None)
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM engagements WHERE id=?", (engagement_id,)).fetchone()
+        return self._engagement_row(row) if row else None
 
     def close_engagement(self, engagement_id: str) -> bool:
         with self.lock, self.connect() as db:
@@ -926,8 +1069,8 @@ class SessionManager:
         self.max_sessions = max_sessions if max_sessions is not None else self._env_int("VORTEX_MAX_SESSIONS", 8, 1, 32)
         self.sessions: dict[str, dict[str, Any]] = {}
         self.events: dict[str, deque[dict[str, Any]]] = {}
-        self.conditions: dict[str, threading.Condition] = {}
         self.reader_done: dict[str, threading.Event] = {}
+        self.workers: dict[str, tuple[threading.Thread, threading.Thread]] = {}
         self.lock = threading.RLock()
         self._stop = threading.Event()
         self._reaper = threading.Thread(target=self._reap_idle, name="vortex-session-reaper", daemon=True)
@@ -944,6 +1087,33 @@ class SessionManager:
         except (TypeError, ValueError) as exc:
             raise PolicyError("terminal size must be an integer") from exc
         return max(2, min(value, 500))
+
+    def _abort_startup(self, session_id: str, session: dict[str, Any], pid: int, master: int) -> None:
+        """Reap a PTY child if persistence/auditing fails during creation."""
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            os.close(master)
+        except OSError:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except (ChildProcessError, OSError):
+            pass
+        session["status"] = "failed"
+        session["termination_reason"] = "startup_error"
+        session["ended_at"] = now_iso()
+        try:
+            self.store.update_session(session)
+        except (OSError, sqlite3.Error):
+            pass
+        with self.lock:
+            self.sessions.pop(session_id, None)
+            self.events.pop(session_id, None)
+            self.reader_done.pop(session_id, None)
+            self.workers.pop(session_id, None)
 
     def _shell_path(self, requested: str | None) -> str:
         value = requested or os.environ.get("SHELL") or "/bin/sh"
@@ -999,21 +1169,33 @@ class SessionManager:
                     try: os.write(2, (f"Vortex session exec failed: {exc}\n").encode("utf-8", "replace"))
                     except OSError: pass
                     os._exit(127)
-            os.set_blocking(master, False)
-            session["pid"] = pid
-            session["status"] = "running"
-            session["_pid"] = pid
-            session["_master"] = master
-            session["_event_seq"] = 0
-            self.sessions[session_id] = session
-            self.events[session_id] = deque(maxlen=2000)
-            self.conditions[session_id] = threading.Condition(self.lock)
-            self.reader_done[session_id] = threading.Event()
-            self.store.save_session(session)
-        self._resize_fd(master, cols_i, rows_i)
-        threading.Thread(target=self._read_loop, args=(session_id,), name=f"vortex-pty-read-{session_id[:6]}", daemon=True).start()
-        threading.Thread(target=self._wait_loop, args=(session_id,), name=f"vortex-pty-wait-{session_id[:6]}", daemon=True).start()
-        self.store.append_audit("session_started", {"session_id": session_id, "shell": shell_path, "cwd": str(cwd)})
+            try:
+                os.set_blocking(master, False)
+                session["pid"] = pid
+                session["status"] = "running"
+                session["_pid"] = pid
+                session["_master"] = master
+                session["_event_seq"] = 0
+                self.sessions[session_id] = session
+                self.events[session_id] = deque(maxlen=PTY_MEMORY_EVENTS)
+                self.reader_done[session_id] = threading.Event()
+                self.store.save_session(session)
+            except BaseException:
+                self._abort_startup(session_id, session, pid, master)
+                raise
+        try:
+            self._resize_fd(master, cols_i, rows_i)
+            # An interactive shell must not outlive a failed authority audit.
+            self.store.append_audit("session_started", {"session_id": session_id, "shell": shell_path, "cwd": str(cwd)})
+            reader = threading.Thread(target=self._read_loop, args=(session_id,), name=f"vortex-pty-read-{session_id[:6]}", daemon=True)
+            waiter = threading.Thread(target=self._wait_loop, args=(session_id,), name=f"vortex-pty-wait-{session_id[:6]}", daemon=True)
+            with self.lock:
+                self.workers[session_id] = (reader, waiter)
+            reader.start()
+            waiter.start()
+        except BaseException:
+            self._abort_startup(session_id, session, pid, master)
+            raise
         return self.info(session_id)
 
     def _resize_fd(self, fd: int, cols: int, rows: int) -> None:
@@ -1023,7 +1205,7 @@ class SessionManager:
             pass
 
     def _append_event(self, session_id: str, text: str, stream: str = "pty") -> None:
-        text = sanitize_pty(text)
+        text = sanitize_pty(text)[:PTY_READ_BYTES]
         if not text:
             return
         with self.lock:
@@ -1036,7 +1218,6 @@ class SessionManager:
             self.events[session_id].append(event)
             self.store.save_session_event(session_id, event)
             self.store.update_session(session)
-            self.conditions[session_id].notify_all()
 
     def _read_loop(self, session_id: str) -> None:
         try:
@@ -1047,7 +1228,7 @@ class SessionManager:
                 if fd is None:
                     return
                 try:
-                    raw = os.read(fd, 65536)
+                    raw = os.read(fd, PTY_READ_BYTES)
                     if not raw:
                         return
                     self._append_event(session_id, raw.decode("utf-8", errors="replace"))
@@ -1109,7 +1290,16 @@ class SessionManager:
                 self.store.append_audit("session_finished", {"session_id": session_id, "status": session["status"], "exit_code": session["exit_code"], "signal": session["signal"]})
             except (OSError, sqlite3.Error):
                 pass
-            self.conditions[session_id].notify_all()
+            # Completed sessions are durable. Keeping their private process
+            # dictionaries and output deques forever would leak memory on every
+            # open/close cycle; replay now falls through to the bounded store.
+            self.sessions.pop(session_id, None)
+            self.events.pop(session_id, None)
+            self.workers.pop(session_id, None)
+        try:
+            self.store.prune_session_event_history()
+        except (OSError, sqlite3.Error):
+            pass
 
     def info(self, session_id: str) -> dict[str, Any] | None:
         with self.lock:
@@ -1141,10 +1331,12 @@ class SessionManager:
             if session_id not in self.sessions:
                 record = self.store.get_session_record(session_id)
                 events = self.store.list_session_events(session_id, since_i) if record else []
-                return {"session": record, "events": events, "next_seq": events[-1]["seq"] if events else 0, "replay": True} if record else {"session": None, "events": [], "next_seq": 0, "replay": False}
+                return {"session": record, "events": events, "next_seq": events[-1]["seq"] if events else since_i, "replay": True} if record else {"session": None, "events": [], "next_seq": 0, "replay": False}
             session = self.sessions[session_id]
-            events = [event for event in self.events[session_id] if event["seq"] > since_i]
-            return {"session": self.info(session_id), "events": events, "next_seq": session["_event_seq"], "replay": False}
+            buffered = self.events[session_id]
+            replay = bool(buffered and since_i < buffered[0]["seq"] - 1)
+            events = self.store.list_session_events(session_id, since_i) if replay else [event for event in buffered if event["seq"] > since_i]
+            return {"session": self.info(session_id), "events": events, "next_seq": session["_event_seq"], "replay": replay}
 
     def write(self, session_id: str, data: str) -> dict[str, Any]:
         if not isinstance(data, str) or len(data) > 65536 or "\x00" in data:
@@ -1223,9 +1415,22 @@ class SessionManager:
             if not any((self.info(session_id) or {}).get("status") == "running" for session_id in active):
                 break
             time.sleep(.05)
+        # Wake and join the manager-owned reaper rather than leaving a daemon
+        # thread to race test cleanup or interpreter shutdown.
+        if self._reaper is not threading.current_thread():
+            self._reaper.join(timeout=max(0.0, deadline - time.monotonic()) + 0.5)
+        with self.lock:
+            workers = [thread for pair in self.workers.values() for thread in pair]
+        for thread in workers:
+            if thread is not threading.current_thread() and thread.is_alive():
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
 class PolicyError(ValueError):
+    pass
+
+
+class UnsupportedMediaType(ValueError):
     pass
 
 
@@ -1297,26 +1502,58 @@ def target_in_engagement(target: str, engagement: dict[str, Any]) -> bool:
     normalized = normalize_target(target)
     parsed_target = urllib.parse.urlparse(normalized)
     target_host = parsed_target.hostname if parsed_target.scheme else normalized.split("/", 1)[0]
-    target_port = parsed_target.port if parsed_target.scheme else None
+
+    def effective_port(parsed: urllib.parse.ParseResult) -> int | None:
+        if not parsed.scheme:
+            return None
+        return parsed.port or (443 if parsed.scheme == "https" else 80)
+
     for allowed in engagement["targets"]:
         allowed_n = normalize_target(str(allowed))
-        parsed_allowed = urllib.parse.urlparse(allowed_n)
-        allowed_host = parsed_allowed.hostname if parsed_allowed.scheme else allowed_n.split("/", 1)[0]
-        allowed_port = parsed_allowed.port if parsed_allowed.scheme else None
         if normalized == allowed_n:
             return True
-        if target_host != allowed_host:
+        parsed_allowed = urllib.parse.urlparse(allowed_n)
+        allowed_host = parsed_allowed.hostname if parsed_allowed.scheme else allowed_n.split("/", 1)[0]
+
+        # A CIDR authorization covers contained IPs and narrower IP networks,
+        # including an HTTP(S) URL whose literal host is in that network.
+        if not parsed_allowed.scheme and "/" in allowed_n:
+            try:
+                allowed_network = ipaddress.ip_network(allowed_n, strict=False)
+                if not parsed_target.scheme and "/" in normalized:
+                    target_network = ipaddress.ip_network(normalized, strict=False)
+                    if target_network.subnet_of(allowed_network):
+                        return True
+                else:
+                    target_address = ipaddress.ip_address(str(target_host))
+                    if target_address in allowed_network:
+                        return True
+            except (TypeError, ValueError):
+                pass
             continue
-        # An explicitly scoped URL port must remain the same. A bare hostname
-        # intentionally leaves the port open for a declared host assessment.
-        if parsed_target.scheme and parsed_allowed.scheme and target_port != allowed_port:
+
+        # A bare hostname intentionally authorizes that host, its true DNS
+        # subdomains, and any HTTP(S) port. It never authorizes a suffix peer.
+        if not parsed_allowed.scheme:
+            same_host = target_host == allowed_host
+            subdomain = False
+            try:
+                ipaddress.ip_address(str(allowed_host))
+            except ValueError:
+                subdomain = bool(target_host and target_host.endswith("." + str(allowed_host)))
+            if same_host or subdomain:
+                return True
             continue
-        # A declared bare domain authorizes subdomains, but not an unrelated suffix.
-        if not parsed_target.scheme and not parsed_allowed.scheme and target_host.endswith("." + allowed_host):
-            return True
-        if parsed_target.scheme and parsed_allowed.scheme:
-            return True
-        if parsed_target.scheme and not parsed_allowed.scheme:
+
+        # An explicit URL pins scheme, host, and effective port. Its path is an
+        # engagement label for that origin rather than a URL-prefix sandbox.
+        if not parsed_target.scheme:
+            continue
+        if (
+            parsed_target.scheme == parsed_allowed.scheme
+            and target_host == allowed_host
+            and effective_port(parsed_target) == effective_port(parsed_allowed)
+        ):
             return True
     return False
 
@@ -1364,6 +1601,36 @@ def adapter_command(adapter_id: str, executable: str, argv: list[str], cwd: Path
     spec["adapter_limits"] = manifest["limits"]
     spec["privilege"] = privilege or manifest.get("privilege", "user")
     return spec
+
+
+def safe_git_argv(*args: str) -> list[str]:
+    """Build read-only Git argv without hooks, fsmonitor, pagers, or ext-diff."""
+    return [
+        "git", "--no-pager",
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "core.fsmonitor=false",
+        "-c", "diff.external=",
+        *args,
+    ]
+
+
+def local_container_runtime() -> tuple[str, list[str]] | None:
+    """Select a local engine without honoring a remote Docker/Podman context."""
+    if probe_executable("docker")["state"] == "installed":
+        candidates = (Path("/var/run/docker.sock"), Path(f"/run/user/{os.getuid()}/docker.sock"))
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve(strict=True)
+                metadata = resolved.stat()
+            except OSError:
+                continue
+            if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid in {0, os.getuid()}:
+                return "docker", ["docker", "--host", f"unix://{resolved}"]
+    if probe_executable("podman")["state"] == "installed":
+        # Explicitly disable Podman's remote mode; local rootless/system storage
+        # remains available without contacting a configured SSH/API endpoint.
+        return "podman", ["podman", "--remote=false"]
+    return None
 
 
 def parse_package_request(text: str) -> tuple[str, str | None]:
@@ -1718,13 +1985,13 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 if network_facts["state"] != "observed":
                     status = "unavailable"; notes.append("SSH target DNS could not be resolved; no connection was attempted.")
                 else:
-                    specs.append(adapter_command("linux.ssh.connection", "ssh", ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ConnectionAttempts=1", "-o", "StrictHostKeyChecking=yes", "--", target, "true"], cwd, required="ssh", scope=[target], explanation=f"Perform a bounded, non-interactive SSH connectivity check to {target}; no password prompt or host-key bypass is allowed."))
+                    specs.append(adapter_command("linux.ssh.connection", "ssh", ["ssh", "-F", "/dev/null", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ConnectionAttempts=1", "-o", "StrictHostKeyChecking=yes", "-o", "ProxyCommand=none", "-o", "ProxyJump=none", "-o", "PermitLocalCommand=no", "-o", "ClearAllForwardings=yes", "--", target, "true"], cwd, required="ssh", scope=[target], explanation=f"Perform a bounded, non-interactive direct SSH connectivity check to {target}; user/system config, proxies, forwarding, password prompts, local commands, and host-key bypass are disabled."))
                     status = "planned"
                     notes += ["This is an outbound connectivity diagnostic and requires explicit approval.", "BatchMode prevents password capture; StrictHostKeyChecking=yes prevents host-verification bypass."]
         else:
-            specs.append(adapter_command("linux.ssh.config", "ssh", ["ssh", "-G", "--", target], cwd, required="ssh", explanation=f"Resolve the effective SSH configuration for {target}; -G does not open a network connection or authenticate."))
+            specs.append(adapter_command("linux.ssh.config", "ssh", ["ssh", "-F", "/dev/null", "-G", "-o", "ProxyCommand=none", "-o", "ProxyJump=none", "-o", "PermitLocalCommand=no", "-o", "ClearAllForwardings=yes", "--", target], cwd, required="ssh", explanation=f"Resolve OpenSSH's safe built-in defaults for {target} without loading user/system configuration or opening a connection."))
             status = "planned"
-            notes += ["Read-only SSH configuration diagnostics; private key contents, passwords, and agent secrets are not read.", "This adapter does not connect to the target. A real connection requires a separate explicitly approved plan."]
+            notes += ["Safe default SSH diagnostics; -F /dev/null prevents Match exec, ProxyCommand, and other local configuration from launching commands.", "This adapter does not connect to the target or read private keys. A real connection requires a separate explicitly approved plan."]
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("stop", "start", "restart", "remove", "delete", "rm", "prune", "create", "run", "compose")):
         kind = "container_mutation"
         risk = "high"
@@ -1734,38 +2001,41 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         notes.append("Create an explicit operator plan through the packaged tooling; Vortex will not guess a container mutation.")
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("log", "logs")):
         kind = "container_logs"
-        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        runtime_info = local_container_runtime()
+        runtime, runtime_argv = runtime_info if runtime_info else (None, [])
         match = re.search(r"(?:logs?|container)\s+(?:for\s+)?(?:container\s+)?([A-Za-z0-9][A-Za-z0-9_.-]{0,127})", lower)
         container_id = match.group(1) if match else None
         if not runtime:
-            status = "unavailable"; missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"]); notes.append("TOOL MISSING: neither Docker nor Podman was found; no container logs exist.")
+            status = "unavailable"; missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"]); notes.append("TOOL MISSING OR UNSAFE ENDPOINT: no safe local Docker socket or local Podman engine was found; remote contexts are never contacted implicitly.")
         elif not container_id or container_id in {"logs", "container"}:
             status = "clarified"; notes.append("Provide one container name or ID; log collection is bounded to 200 lines.")
         else:
-            specs.append(adapter_command("linux.containers.logs", runtime, [runtime, "logs", "--tail", "200", "--timestamps", container_id], cwd, required=runtime, explanation=f"Collect at most 200 timestamped lines from the real {runtime} container {container_id}; no container state changes."))
+            specs.append(adapter_command("linux.containers.logs", runtime, [*runtime_argv, "logs", "--tail", "200", "--timestamps", container_id], cwd, required=runtime, explanation=f"Collect at most 200 timestamped lines from the local {runtime} container {container_id}; configured remote contexts are disabled and no container state changes."))
             status = "planned"; notes += [f"Detected runtime: {runtime}. Logs are read-only and bounded.", "Log content is untrusted evidence; no vulnerability finding is inferred."]
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman")) and any(word in lower for word in ("diagnos", "not working", "broken", "failing")):
         kind = "container_diagnose"
-        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        runtime_info = local_container_runtime()
+        runtime, runtime_argv = runtime_info if runtime_info else (None, [])
         if not runtime:
             status = "unavailable"
             missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"])
-            notes.append("TOOL MISSING: neither Docker nor Podman was found; diagnosis cannot continue.")
+            notes.append("TOOL MISSING OR UNSAFE ENDPOINT: no safe local Docker socket or local Podman engine was found; remote contexts are never contacted implicitly.")
         else:
-            specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "--version"], cwd, required=runtime, explanation=f"Confirm the installed {runtime} client version."))
-            specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "info"], cwd, required=runtime, explanation=f"Inspect the real {runtime} daemon/user context without changing containers."))
-            specs.append(adapter_command("linux.containers.diagnose", runtime, [runtime, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List real {runtime} containers after daemon facts are observed."))
+            specs.append(adapter_command("linux.containers.diagnose", runtime, [*runtime_argv, "--version"], cwd, required=runtime, explanation=f"Confirm the installed {runtime} client version with remote mode disabled."))
+            specs.append(adapter_command("linux.containers.diagnose", runtime, [*runtime_argv, "info"], cwd, required=runtime, explanation=f"Inspect the local {runtime} daemon/user context without changing containers."))
+            specs.append(adapter_command("linux.containers.diagnose", runtime, [*runtime_argv, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List local {runtime} containers after daemon facts are observed."))
             status = "planned"
             notes += [f"Multi-step read-only diagnosis using {runtime}.", "VORTEX stops when daemon facts and container lists are observed; it does not apply a fix unless a separate approved plan is created."]
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")):
         kind = "container_inspection"
-        runtime = next((name for name in ("docker", "podman") if probe_executable(name)["state"] == "installed"), None)
+        runtime_info = local_container_runtime()
+        runtime, runtime_argv = runtime_info if runtime_info else (None, [])
         if not runtime:
             status = "unavailable"
             missing.extend([name for name in ("docker", "podman") if probe_executable(name)["state"] != "installed"])
-            notes.append("TOOL MISSING: neither Docker nor Podman was found; no container state was observed.")
+            notes.append("TOOL MISSING OR UNSAFE ENDPOINT: no safe local Docker socket or local Podman engine was found; remote contexts are never contacted implicitly.")
         else:
-            specs.append(adapter_command("linux.containers.inspect", runtime, [runtime, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List real {runtime} containers without changing their state."))
+            specs.append(adapter_command("linux.containers.inspect", runtime, [*runtime_argv, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List local {runtime} containers with configured remote contexts disabled and without changing state."))
             status = "planned"
             notes += [f"Detected runtime: {runtime}. The command is read-only and does not start, stop, remove, or prune containers.", "Container daemon output is observed only; no image or vulnerability conclusion is inferred."]
     elif parse_package_request(lower)[0]:
@@ -1798,8 +2068,9 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             if package_name:
                 specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "policy", package_name], cwd, required="apt-cache", explanation=f"Show the installed/candidate version, architecture, and repository policy for {package_name}.", privilege="user"))
                 specs.append(adapter_command("linux.packages.apt", "apt-cache", ["apt-cache", "show", package_name], cwd, required="apt-cache", explanation=f"Show package metadata and declared dependencies for {package_name}.", privilege="user"))
-                specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}; a missing installed package is informational.", privilege="user"))
-                specs[-1]["allow_failure"] = True
+                specs.append(adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Report the locally installed state of {package_name}; exit 1 means the exact package is absent and is an expected observation.", privilege="user"))
+                specs[-1]["success_exit_codes"] = [0, 1]
+                specs[-1]["package_observation"] = "before"
             if probe_executable("apt-mark")["state"] == "installed":
                 specs.append(adapter_command("linux.packages.apt", "apt-mark", ["apt-mark", "showhold"], cwd, required="apt-mark", explanation="Report held packages that may affect the requested operation.", privilege="user"))
             if package_operation == "install":
@@ -1813,6 +2084,17 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 mutation = ["apt-get", "--assume-yes", "--no-remove", "upgrade"]
             specs.append(adapter_command("linux.packages.apt", "apt-get", preflight, cwd, required="apt-get", explanation="Run a fresh apt preflight immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
             specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding preflight and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
+            if package_name:
+                verification = adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Verify the exact post-operation package state for {package_name}; VORTEX reports success only when this observation matches the requested action.", privilege="user")
+                verification["success_exit_codes"] = [0] if package_operation == "install" else [1]
+                verification["package_observation"] = "after"
+                verification["expected_package_state"] = "installed" if package_operation == "install" else "absent"
+                specs.append(verification)
+            else:
+                verification = adapter_command("linux.packages.apt", "dpkg", ["dpkg", "--audit"], cwd, required="dpkg", explanation="Verify that dpkg reports no incomplete package state after the upgrade.", privilege="user")
+                verification["package_observation"] = "after"
+                verification["expected_dpkg_state"] = "consistent"
+                specs.append(verification)
             status = "planned"
             notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
     elif not parse_package_request(lower)[0] and any(phrase in lower for phrase in ("installed packages", "packages installed", "package inventory", "list all packages", "what packages are installed", "list installed packages", "dpkg-query")):
@@ -2003,7 +2285,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 elif tool == "curl":
                     if not all(target.lower().startswith(("http://", "https://")) for target in normalized):
                         raise PolicyError("curl adapter requires an explicit HTTP(S) URL")
-                    args = ["curl", "--fail", "--silent", "--show-error", "--max-time", "15", "--dump-header", "-", "--output", "/dev/null", normalized[0]]
+                    args = ["curl", "--disable", "--fail", "--silent", "--show-error", "--max-time", "15", "--proto", "=http,https", "--dump-header", "-", "--output", "/dev/null", normalized[0]]
                     adapter_id = "security.http.headers"
                     explanation = "Inspect real HTTP response headers without following redirects; any Location target requires a fresh scope check."
                 elif tool == "ping":
@@ -2023,7 +2305,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                     if tool == "nslookup":
                         args = ["nslookup", "-timeout=5", "-retry=1", lookup]
                     else:
-                        args = ["dig", "+short", "+time=5", "+tries=1", lookup]
+                        args = ["dig", "-r", "+short", "+time=5", "+tries=1", lookup]
                     adapter_id = "linux.network.dns"
                     explanation = "Perform one bounded DNS query for the exact scoped host; no zone transfer, brute force, or recursive enumeration is attempted."
                 elif tool == "whois":
@@ -2286,41 +2568,41 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no commit history was observed.")
         else:
-            specs.append(adapter_command("linux.development.git-log", "git", ["git", "log", "--oneline", "--decorate", "-n", "50"], cwd, required="git", explanation="Show at most 50 observed commit summary lines without modifying the repository."))
+            specs.append(adapter_command("linux.development.git-log", "git", safe_git_argv("log", "--oneline", "--decorate", "-n", "50"), cwd, required="git", explanation="Show at most 50 observed commit summary lines with Git hooks, fsmonitor, external diff, and pagers disabled."))
             status = "planned"; notes.append("Read-only Git history; no commit, rebase, reset, push, or network operation is included.")
     elif any(phrase in lower for phrase in ("git branch", "git branches", "list branches", "show branches")):
         kind = "plan"
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no branches were observed.")
         else:
-            specs.append(adapter_command("linux.development.git-branches", "git", ["git", "branch", "--all", "--verbose", "--no-abbrev"], cwd, required="git", explanation="List observed local and remote-tracking branches without modifying the repository."))
+            specs.append(adapter_command("linux.development.git-branches", "git", safe_git_argv("branch", "--all", "--verbose", "--no-abbrev"), cwd, required="git", explanation="List observed local and remote-tracking branches with hooks, fsmonitor, external diff, and pagers disabled."))
             status = "planned"; notes.append("Read-only branch listing; no checkout, create, delete, push, or network operation is included.")
     elif any(phrase in lower for phrase in ("git remote", "git remotes", "show remotes", "list remotes")):
         kind = "plan"
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no remotes were observed.")
         else:
-            specs.append(adapter_command("linux.development.git-status", "git", ["git", "remote", "-v"], cwd, required="git", explanation="List configured Git remote URLs without contacting them."))
+            specs.append(adapter_command("linux.development.git-status", "git", safe_git_argv("remote", "-v"), cwd, required="git", explanation="List configured Git remote URLs without contacting them; hooks, fsmonitor, external diff, and pagers are disabled."))
             status = "planned"; notes.append("Read-only remote configuration; no network operation is performed.")
     elif any(phrase in lower for phrase in ("git stash", "show stash", "list stashes")):
         kind = "plan"
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no stashes were observed.")
         else:
-            specs.append(adapter_command("linux.development.git-status", "git", ["git", "stash", "list"], cwd, required="git", explanation="List observed Git stash entries without applying, dropping, or popping any stash."))
+            specs.append(adapter_command("linux.development.git-status", "git", safe_git_argv("stash", "list"), cwd, required="git", explanation="List observed Git stash entries without applying, dropping, or popping any stash; external execution features are disabled."))
             status = "planned"; notes.append("Read-only stash listing; no stash is applied, popped, dropped, or modified.")
     elif any(phrase in lower for phrase in ("git diff", "repository diff", "show diff", "working tree diff")) or ("changeset" in lower and "git" in lower):
         kind = "plan"
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no diff was observed.")
         else:
-            specs.append(adapter_command("linux.development.git-diff", "git", ["git", "diff", "--stat", "--patch", "--color=never"], cwd, required="git", explanation="Show the observed working-tree diff without staging, committing, or modifying files."))
+            specs.append(adapter_command("linux.development.git-diff", "git", safe_git_argv("diff", "--no-ext-diff", "--no-textconv", "--stat", "--patch", "--color=never"), cwd, required="git", explanation="Show the observed working-tree diff without staging or modifying files; hooks, fsmonitor, external diff/textconv, and pagers are disabled."))
             status = "planned"; notes.append("Read-only unified diff; no file is changed by the observation.")
     elif any(word in lower for word in ("git status", "repository status", "git hygiene", "check my repo")):
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no repository state was observed.")
         else:
-            specs.append(adapter_command("linux.development.git-status", "git", ["git", "status", "--short", "--branch"], cwd, required="git", explanation="Show the current branch and working-tree changes without modifying the repository."))
+            specs.append(adapter_command("linux.development.git-status", "git", safe_git_argv("status", "--short", "--branch"), cwd, required="git", explanation="Show the current branch and working-tree changes with hooks, fsmonitor, external diff, and pagers disabled."))
             status = "planned"; notes.append("Read-only Git status; no hooks, checkout, reset, clean, push, or network operation is included.")
     elif any(word in lower for word in ("disk", "space", "large file", "cache", "inode", "filesystem")) or any(phrase in lower for phrase in ("mounted filesystems", "mounted filesystem", "show mounts", "list mounts")) or lower.strip() in {"df", "df -h", "df -hT", "du"}:
         kind = "plan"
@@ -2701,7 +2983,9 @@ class ExecutionManager:
         self.threads: dict[str, threading.Thread] = {}
         self.cancel_events: dict[str, threading.Event] = {}
         self.processes: dict[str, subprocess.Popen[bytes]] = {}
+        self.privilege_brokers: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
+        self._closing = False
         # This process is the only owner of a live operation thread. Any row
         # still marked running belongs to a previous, now dead sidecar.
         if reconcile:
@@ -2710,7 +2994,10 @@ class ExecutionManager:
             except (OSError, sqlite3.Error):
                 pass
 
-    def start(self, plan: dict[str, Any], confirm: bool, approval_token: str | None = None, allow_root: bool = False, offline: bool = False, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    def start(self, plan: dict[str, Any], confirm: bool, approval_token: str | None = None, allow_root: bool = False, offline: bool = False, settings: dict[str, Any] | None = None, privileged_handoff: bool = False) -> dict[str, Any]:
+        with self.lock:
+            if self._closing:
+                raise PolicyError("execution manager is shutting down")
         if not confirm:
             raise PermissionError("confirmation required")
         # Re-read the canonical row. A caller must not be able to mutate an
@@ -2731,8 +3018,17 @@ class ExecutionManager:
             current_network = resolve_targets([item.get("target") for item in planned_network.get("targets", []) if item.get("target")])
             if current_network.get("state") != "observed" or resolution_digest(current_network) != resolution_digest(planned_network):
                 raise PolicyError("DNS resolution changed or could not be revalidated; create a fresh plan")
-        if any(spec.get("privilege") == "root-required" for spec in plan.get("commands", [])) and os.getuid() != 0:
-            raise PermissionError("this plan requires root; rerun the reviewed plan with sudo vortex --allow-root run <plan-id>")
+        root_specs = [spec for spec in plan.get("commands", []) if spec.get("privilege") == "root-required"]
+        privilege_broker = None
+        if root_specs and os.getuid() != 0:
+            if not privileged_handoff:
+                raise PermissionError("this plan requires the interactive CLI's OS-authenticated privilege handoff")
+            allowed_privileged_adapters = {"linux.packages.apt", "linux.systemd.mutate"}
+            if any(spec.get("adapter_id") not in allowed_privileged_adapters for spec in root_specs):
+                raise PolicyError("this root-required adapter is not eligible for the narrow sudo handoff")
+            privilege_broker = trusted_privilege_broker()
+            if privilege_broker.get("state") != "installed":
+                raise PermissionError(privilege_broker.get("reason") or "trusted sudo broker unavailable")
         if time.time() > datetime.fromisoformat(plan["expires_at"]).timestamp():
             raise TimeoutError("plan expired")
         needs_scope = plan_requires_engagement(plan)
@@ -2775,12 +3071,20 @@ class ExecutionManager:
         self.store.append_audit("plan_approved", {"plan_id": plan["id"], "digest": plan["digest"]})
         op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "network_facts": plan.get("network_facts", {}), "output_digest": None, "analysis": None, "settings_snapshot": model_settings_snapshot(settings, offline=offline)}
         self.store.save_operation(op)
-        self.store.append_audit("operation_started", {"operation_id": op["id"], "plan_id": plan["id"], "digest": plan["digest"], "privilege": "root-override" if allow_root else "user"})
+        privilege_mode = "root-override" if os.getuid() == 0 and allow_root else "sudo-os-authenticated" if privilege_broker else "user"
+        self.store.append_audit("operation_started", {"operation_id": op["id"], "plan_id": plan["id"], "digest": plan["digest"], "privilege": privilege_mode})
         thread = threading.Thread(target=self._run, args=(plan, op, 0), daemon=True)
         with self.lock:
+            event = threading.Event()
+            if privilege_broker:
+                self.privilege_brokers[op["id"]] = privilege_broker
+            if self._closing:
+                # shutdown raced an already-claimed plan; register a cancelled
+                # worker so the durable operation reaches a terminal state.
+                event.set()
             self.threads[op["id"]] = thread
-            self.cancel_events[op["id"]] = threading.Event()
-        thread.start()
+            self.cancel_events[op["id"]] = event
+            thread.start()
         return op
 
     def cancel(self, operation_id: str) -> bool:
@@ -2791,13 +3095,17 @@ class ExecutionManager:
         if not event:
             return False
         operation = self.store.get_operation(operation_id)
+        if operation and operation.get("status") not in ("started", "running", "awaiting_confirmation"):
+            return False
         if operation and operation.get("status") == "awaiting_confirmation":
             event.set()
             operation["status"] = "cancelled"
             operation["ended_at"] = now_iso()
             operation["analysis"] = make_analysis({}, operation)
             self.store.update_operation(operation)
-            with self.lock: self.cancel_events.pop(operation_id, None)
+            with self.lock:
+                self.cancel_events.pop(operation_id, None)
+                self.privilege_brokers.pop(operation_id, None)
             self.store.append_audit("operation_cancelled", {"operation_id": operation_id, "reason": "preflight_declined"})
             return True
         event.set()
@@ -2808,6 +3116,54 @@ class ExecutionManager:
                 pass
         self.store.append_audit("operation_cancel_requested", {"operation_id": operation_id})
         return True
+
+    def shutdown(self, timeout: float = 5.0) -> None:
+        """Cancel, reap, and join every operation owned by this sidecar."""
+        timeout = max(0.5, min(float(timeout), 30.0))
+        with self.lock:
+            self._closing = True
+            operation_ids = list(self.cancel_events)
+        for operation_id in operation_ids:
+            try:
+                self.cancel(operation_id)
+            except (OSError, sqlite3.Error):
+                # Cancellation signalling below must still run if auditing or
+                # persistence is unavailable during shutdown.
+                pass
+        deadline = time.monotonic() + timeout
+        sent_term = False
+        sent_kill = False
+        while time.monotonic() < deadline:
+            with self.lock:
+                threads = list(self.threads.values())
+                processes = list(self.processes.values())
+            if not any(thread.is_alive() for thread in threads):
+                break
+            remaining = deadline - time.monotonic()
+            elapsed = timeout - remaining
+            if elapsed >= min(1.0, timeout / 3) and not sent_term:
+                for proc in processes:
+                    try: os.killpg(proc.pid, signal.SIGTERM)
+                    except ProcessLookupError: pass
+                sent_term = True
+            if elapsed >= min(2.0, timeout * 2 / 3) and not sent_kill:
+                for proc in processes:
+                    try: os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError: pass
+                sent_kill = True
+            for thread in threads:
+                if thread is not threading.current_thread() and thread.is_alive():
+                    thread.join(timeout=min(0.05, max(0.0, remaining)))
+        with self.lock:
+            processes = list(self.processes.values())
+            threads = list(self.threads.values())
+        for proc in processes:
+            if proc.poll() is None:
+                try: os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+        for thread in threads:
+            if thread is not threading.current_thread() and thread.is_alive():
+                thread.join(timeout=0.5)
 
     @staticmethod
     def _has_guarded_mutation(plan: dict[str, Any]) -> bool:
@@ -2867,6 +3223,8 @@ class ExecutionManager:
         if not isinstance(preflight_digest, str) or not preflight_digest or not secrets.compare_digest(preflight_digest, operation.get("preflight_digest", "")):
             raise PolicyError("fresh preflight digest does not match this operation")
         with self.lock:
+            if self._closing:
+                raise PolicyError("execution manager is shutting down")
             if operation_id in self.threads:
                 raise PolicyError("operation is already resuming")
             event = self.cancel_events.get(operation_id)
@@ -2889,6 +3247,23 @@ class ExecutionManager:
         if identity_path:
             execution_argv[0] = identity_path
         record: dict[str, Any] = {"argv": [redact(arg) for arg in argv], "display": redact(spec["display"]), "executable": spec["executable"], "adapter_id": spec.get("adapter_id"), "adapter_version": spec.get("adapter_version"), "cwd": spec["cwd"], "started_at": started, "stdout": "", "stderr": "", "exit_code": None, "signal": None, "termination_reason": None, "status": "running", "version": spec["executable_identity"].get("version"), "evidence_digest": None}
+        for metadata_key in ("package_observation", "expected_package_state", "expected_dpkg_state"):
+            if metadata_key in spec:
+                record[metadata_key] = spec[metadata_key]
+        if spec.get("privilege") == "root-required" and os.getuid() != 0:
+            with self.lock:
+                expected_broker = self.privilege_brokers.get(operation_id)
+            current_broker = trusted_privilege_broker()
+            identity_fields = ("realpath", "device", "inode", "owner_uid", "mode", "sha256")
+            if (not expected_broker or current_broker.get("state") != "installed"
+                    or any(current_broker.get(key) != expected_broker.get(key) for key in identity_fields)
+                    or spec.get("adapter_id") not in {"linux.packages.apt", "linux.systemd.mutate"}):
+                record.update(status="failed", termination_reason="privilege_broker_changed", ended_at=now_iso())
+                return record
+            execution_argv = [str(current_broker["realpath"]), "-n", "--", *execution_argv]
+            record["privilege"] = "sudo-os-authenticated"
+        else:
+            record["privilege"] = "root" if os.getuid() == 0 else "user"
         cancel_event = self.cancel_events.get(operation_id)
         try:
             proc = subprocess.Popen(execution_argv, cwd=spec["cwd"], env=minimal_env(False, spec.get("env_additions")), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, start_new_session=True, close_fds=True)
@@ -2903,7 +3278,7 @@ class ExecutionManager:
         except OSError as exc:
             record.update(status="failed", termination_reason=redact(str(exc)), ended_at=now_iso())
             return record
-        chunks: queue.Queue[tuple[str, bytes]] = queue.Queue()
+        chunks: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=EXECUTION_OUTPUT_QUEUE_CHUNKS)
         def reader(stream: Any, label: str) -> None:
             try:
                 while True:
@@ -2931,11 +3306,13 @@ class ExecutionManager:
             except queue.Empty:
                 label = ""; raw = b""
             if raw:
-                total += len(raw)
-                if total <= spec["output_cap_bytes"]:
-                    text = raw.decode("utf-8", errors="replace")
+                cap = max(0, int(spec["output_cap_bytes"]))
+                remaining = max(0, cap - total)
+                if remaining:
+                    text = raw[:remaining].decode("utf-8", errors="replace")
                     record[label] += redact(text)
-                else:
+                total += len(raw)
+                if len(raw) > remaining:
                     truncated = True
                     try:
                         os.killpg(proc.pid, signal.SIGTERM)
@@ -2957,7 +3334,27 @@ class ExecutionManager:
                 try: os.killpg(proc.pid, signal.SIGKILL)
                 except ProcessLookupError: pass
                 proc.wait()
-        for t in threads: t.join(timeout=1)
+        # A bounded queue can be full when cancellation/output limits stop the
+        # consumer loop. Drain it after process exit so producers can observe
+        # EOF, close both pipe objects, and terminate instead of leaking blocked
+        # daemon threads. Descendants that inherited a pipe are killed with the
+        # original process group after a short grace period.
+        drain_started = time.monotonic()
+        descendants_killed = False
+        while any(t.is_alive() for t in threads) or not chunks.empty():
+            try:
+                chunks.get(timeout=0.05)
+            except queue.Empty:
+                pass
+            elapsed = time.monotonic() - drain_started
+            if elapsed > 0.5 and not descendants_killed and any(t.is_alive() for t in threads):
+                try: os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+                descendants_killed = True
+            if elapsed > 2.0:
+                break
+        for t in threads:
+            t.join(timeout=1)
         with self.lock:
             self.processes.pop(operation_id, None)
         record["exit_code"] = proc.returncode if proc.returncode is not None and proc.returncode >= 0 else None
@@ -2971,11 +3368,15 @@ class ExecutionManager:
             record["status"] = "timed_out"
         elif record["signal"] in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             record["status"] = "interrupted"; record["termination_reason"] = "signal"
-        elif record["exit_code"] == 0:
+        elif record["exit_code"] in spec.get("success_exit_codes", [0]):
             record["status"] = "succeeded"; record["termination_reason"] = "completed"
         else:
             record["status"] = "failed"; record["termination_reason"] = "non_zero_exit"
         record["duration_ms"] = int((time.monotonic() - started_mono) * 1000)
+        # Redact once more across reader-chunk boundaries. A secret marker can
+        # end one 64 KiB chunk while its value starts the next.
+        record["stdout"] = redact(record["stdout"])
+        record["stderr"] = redact(record["stderr"])
         record["evidence_digest"] = hashlib.sha256((record["stdout"] + "\n" + record["stderr"]).encode()).hexdigest()
         return record
 
@@ -2990,7 +3391,11 @@ class ExecutionManager:
             # Install/upgrade preflights explicitly carry --no-remove. If a
             # backend nevertheless reports removals, stop rather than accepting
             # a changed dependency impact after approval.
-            mutation = plan.get("commands", [])[-1].get("argv", [])
+            mutation_spec = next(
+                (spec for spec in plan.get("commands", []) if spec.get("adapter_id") == "linux.packages.apt" and spec.get("privilege") == "root-required"),
+                {},
+            )
+            mutation = mutation_spec.get("argv", [])
             if any(action in mutation for action in ("install", "upgrade")) and preflight.get("removed", 0) > 0:
                 return "fresh apt preflight reported removals; mutation was not run"
             if mutation and "remove" in mutation and preflight.get("removed", 0) == 0:
@@ -3060,6 +3465,21 @@ class ExecutionManager:
                 if self.cancel_events.get(op["id"], threading.Event()).is_set():
                     break
                 result = self._run_one(spec, op["id"])
+                expected_package_state = spec.get("expected_package_state")
+                if expected_package_state and result.get("status") == "succeeded":
+                    observation = parse_package_observation(result.get("stdout", "") + result.get("stderr", ""), result.get("exit_code"))
+                    observation["expected"] = expected_package_state
+                    observation["verified"] = observation.get("state") == expected_package_state
+                    result["package_verification"] = observation
+                    if not observation["verified"]:
+                        result["status"] = "failed"
+                        result["termination_reason"] = "package_verification_failed"
+                if spec.get("expected_dpkg_state") == "consistent" and result.get("status") == "succeeded":
+                    consistent = not (result.get("stdout", "") + result.get("stderr", "")).strip()
+                    result["dpkg_verification"] = {"expected": "consistent", "verified": consistent}
+                    if not consistent:
+                        result["status"] = "failed"
+                        result["termination_reason"] = "dpkg_verification_failed"
                 op["commands"].append(result)
                 self.store.update_operation(op)
                 current_spec = plan["commands"][index]
@@ -3087,12 +3507,16 @@ class ExecutionManager:
                                 self.threads.pop(op["id"], None)
                             return
             statuses = [x["status"] for x in op["commands"]]
+            required_statuses = [
+                result["status"] for spec, result in zip(plan.get("commands", []), op["commands"])
+                if not spec.get("allow_failure", False)
+            ]
             if op.get("execution_gate", {}).get("state") == "blocked": op["status"] = "failed"
             elif self.cancel_events.get(op["id"], threading.Event()).is_set(): op["status"] = "cancelled"
             elif any(s == "timed_out" for s in statuses): op["status"] = "timed_out"
             elif any(s == "interrupted" for s in statuses): op["status"] = "interrupted"
-            elif any(s == "unavailable" for s in statuses): op["status"] = "unavailable"
-            elif all(s == "succeeded" for s in statuses) and statuses: op["status"] = "succeeded"
+            elif any(s == "unavailable" for s in required_statuses): op["status"] = "unavailable"
+            elif all(s == "succeeded" for s in required_statuses) and required_statuses: op["status"] = "succeeded"
             else: op["status"] = "failed"
         except Exception as exc:
             op["status"] = "unknown_after_crash"; op["error"] = redact(str(exc))
@@ -3147,6 +3571,7 @@ class ExecutionManager:
             with self.lock:
                 self.cancel_events.pop(op["id"], None)
                 self.threads.pop(op["id"], None)
+                self.privilege_brokers.pop(op["id"], None)
 
 
 def build_undo_plan(store: Store, operation_id: str) -> dict[str, Any]:
@@ -3432,6 +3857,11 @@ def cancel_task_operation(executor: ExecutionManager, task: dict[str, Any] | Non
         return False
 
 
+BROWSER_SESSION_LIMIT = 32
+BROWSER_SESSION_TTL_SECONDS = 8 * 3600
+MAX_STATIC_ASSET_BYTES = 8 * 1024 * 1024
+
+
 class VortexHandler(BaseHTTPRequestHandler):
     store: Store
     executor: ExecutionManager
@@ -3439,23 +3869,174 @@ class VortexHandler(BaseHTTPRequestHandler):
     workspace: Any
     frontend: Path
     token: str | None = None
+    allow_remote_host = False
     server_version = "VortexSidecar/0.2"
+    # Browser sessions are process-local, bounded, fixed-lifetime capabilities.
+    # The capability fingerprint prevents a session minted for an earlier token
+    # from surviving an in-process sidecar reconfiguration.
+    browser_sessions: dict[str, tuple[float, bytes]] = {}
+    browser_sessions_lock = threading.Lock()
+
+    def setup(self) -> None:
+        super().setup()
+        # Bound slow/incomplete clients. SSE emits every 200 ms, so this does
+        # not shorten healthy event streams.
+        self.connection.settimeout(15.0)
+
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        # BaseHTTPRequestHandler logs the full query string. Queries can contain
+        # operator search text, so log only method + path and never credentials,
+        # prompts, fragments, or bodies.
+        path = urllib.parse.urlsplit(self.path).path
+        sys.stderr.write(f'[vortex-sidecar] "{self.command} {path} {self.request_version}" {code} {size}\n')
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        # Do not log request bodies, prompts, or credentials.
         sys.stderr.write("[vortex-sidecar] " + (fmt % args) + "\n")
+
+    def _capability_authorized(self) -> bool:
+        """Authenticate only the long-lived sidecar capability header."""
+        supplied = self.headers.get("X-Vortex-Token", "")
+        return bool(self.token and secrets.compare_digest(supplied, self.token))
 
     def _authorized(self) -> bool:
         if not self.token:
             return True
-        return secrets.compare_digest(self.headers.get("X-Vortex-Token", ""), self.token)
+        if self._capability_authorized():
+            return True
+        cookie_headers = self.headers.get_all("Cookie") or []
+        if len(cookie_headers) != 1:
+            return False
+        raw_cookie = cookie_headers[0]
+        # Duplicate authentication cookies are ambiguous across user agents
+        # and parsers. Fail closed rather than selecting a first/last value.
+        if len(re.findall(r"(?:^|;)\s*Vortex-Session\s*=", raw_cookie)) != 1:
+            return False
+        try:
+            cookies = SimpleCookie(raw_cookie)
+            morsel = cookies.get("Vortex-Session")
+            session_id = morsel.value if morsel is not None else ""
+        except (TypeError, ValueError, CookieError):
+            return False
+        if not re.fullmatch(r"[0-9a-f]{64}", session_id):
+            return False
+        now = time.monotonic()
+        fingerprint = hashlib.sha256(self.token.encode("utf-8")).digest()
+        sessions = type(self).browser_sessions
+        with type(self).browser_sessions_lock:
+            entry = sessions.get(session_id)
+            if entry is None:
+                return False
+            expiry, issued_for = entry
+            if expiry <= now or not secrets.compare_digest(issued_for, fingerprint):
+                sessions.pop(session_id, None)
+                return False
+            return True
+
+    def _issue_browser_session(self) -> str:
+        if not self.token:
+            raise PermissionError("a configured sidecar capability is required")
+        now = time.monotonic()
+        fingerprint = hashlib.sha256(self.token.encode("utf-8")).digest()
+        session_id = secrets.token_hex(32)
+        sessions = type(self).browser_sessions
+        with type(self).browser_sessions_lock:
+            stale = [
+                key for key, (expiry, issued_for) in sessions.items()
+                if expiry <= now or not secrets.compare_digest(issued_for, fingerprint)
+            ]
+            for key in stale:
+                sessions.pop(key, None)
+            if len(sessions) >= BROWSER_SESSION_LIMIT:
+                oldest = min(sessions, key=lambda key: sessions[key][0])
+                sessions.pop(oldest, None)
+            sessions[session_id] = (now + BROWSER_SESSION_TTL_SECONDS, fingerprint)
+        return session_id
+
+    @staticmethod
+    def _authority(raw: str, scheme: str = "http") -> tuple[str, int] | None:
+        if not raw or any(char in raw for char in "/\\\x00\r\n") or "@" in raw:
+            return None
+        try:
+            parsed = urllib.parse.urlsplit(f"{scheme}://{raw}")
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            return None
+        if not hostname or parsed.username or parsed.password:
+            return None
+        hostname = hostname.rstrip(".").lower()
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            if not HOST_RE.fullmatch(hostname) or ".." in hostname:
+                return None
+        return hostname, port if port is not None else (443 if scheme == "https" else 80)
+
+    def _host_allowed(self) -> bool:
+        authority = self._authority((self.headers.get("Host") or "").strip())
+        if authority is None:
+            return False
+        hostname, _port = authority
+        if hostname == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(hostname).is_loopback or self.allow_remote_host
+        except ValueError:
+            return self.allow_remote_host
+
+    def _browser_context_allowed(self) -> bool:
+        if (self.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site":
+            return False
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True
+        if origin == "null":
+            return bool(self.token and self._authorized())
+        try:
+            parsed = urllib.parse.urlsplit(origin)
+        except ValueError:
+            return False
+        if parsed.scheme not in {"http", "https"} or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            return False
+        origin_authority = self._authority(parsed.netloc, parsed.scheme)
+        host_authority = self._authority((self.headers.get("Host") or "").strip(), parsed.scheme)
+        return origin_authority is not None and secrets.compare_digest(str(origin_authority), str(host_authority))
+
+    def _guard_request(self) -> bool:
+        if not self._host_allowed():
+            self._json(HTTPStatus.MISDIRECTED_REQUEST, {"error": {"code": "invalid_host", "message": "request Host is not accepted by this sidecar"}})
+            return False
+        if not self._browser_context_allowed():
+            self._json(HTTPStatus.FORBIDDEN, {"error": {"code": "cross_origin_denied", "message": "cross-origin browser requests are not accepted"}})
+            return False
+        return True
+
+    def _cors_origin(self) -> str | None:
+        if not self._host_allowed():
+            return None
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return None
+        if origin == "null":
+            return "null" if self.token and self._authorized() else None
+        return origin if self._browser_context_allowed() else None
 
     def _headers(self, content_type: str = "application/json") -> None:
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Access-Control-Allow-Origin", "null")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Vortex-Token")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), usb=(), serial=()")
+        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+        origin = self._cors_origin()
+        if origin is not None:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Vortex-Token")
+            self.send_header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
 
     def _write(self, raw: bytes) -> None:
         try:
@@ -3471,11 +4052,21 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return
             raise
 
-    def _json(self, code: int, payload: dict[str, Any]) -> None:
+    def _json(self, code: int, payload: dict[str, Any], extra_headers: dict[str, str] | None = None) -> None:
         raw = (canonical({"schema_version": SCHEMA_VERSION, **payload}) + "\n").encode()
-        self.send_response(code); self._headers(); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self._write(raw)
+        self.send_response(code)
+        self._headers()
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self._write(raw)
 
     def _read_json(self) -> dict[str, Any]:
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("transfer-encoded request bodies are not accepted")
+        if self.headers.get_content_type().lower() != "application/json":
+            raise UnsupportedMediaType("Content-Type must be application/json")
         raw_len = self.headers.get("Content-Length", "0")
         try:
             length = int(raw_len)
@@ -3511,6 +4102,22 @@ class VortexHandler(BaseHTTPRequestHandler):
         if not isinstance(value, str):
             raise ValueError(f"{key} must be a string")
         return value
+
+    def _dependency_plan(self, body: dict[str, Any], *, item_id: str | None = None, custom_package: str | None = None) -> dict[str, Any]:
+        """Build, but never execute, one reviewed dependency proposal."""
+        if bool(item_id) == bool(custom_package):
+            raise ValueError("provide exactly one dependency id or custom package name")
+        deps = _load("dependencies")
+        proposal = deps.custom_package_proposal(custom_package) if custom_package else deps.proposal_for(item_id or "")
+        if proposal.get("installed") or proposal.get("method") != "apt" or not proposal.get("plan_request"):
+            return {"install": proposal, "planned": False, "auto_install": False}
+        result = _load("orchestrate").run_turn(
+            self.store, self.workspace, self.executor, proposal["plan_request"],
+            cwd=self._optional_str(body, "cwd"), engagement_id=None,
+            conversation_id=self._optional_str(body, "conversation_id"),
+            settings=_load("config").load_settings(),
+        )
+        return {"install": proposal, "planned": True, "auto_install": False, **result}
 
     def _sidecar_url_from_request(self, body: dict[str, Any]) -> str:
         explicit = self._optional_str(body, "sidecar_url")
@@ -3560,7 +4167,11 @@ class VortexHandler(BaseHTTPRequestHandler):
         return max(lo, min(number, hi))
 
     def do_OPTIONS(self) -> None:
-        self.send_response(HTTPStatus.NO_CONTENT); self._headers(); self.end_headers()
+        if not self._guard_request():
+            return
+        if not self._authorized():
+            return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
+        self.send_response(HTTPStatus.NO_CONTENT); self._headers(); self.send_header("Content-Length", "0"); self.end_headers()
 
     def _asset_candidate(self) -> tuple[Path | None, str]:
         parsed = urllib.parse.urlparse(self.path)
@@ -3583,9 +4194,12 @@ class VortexHandler(BaseHTTPRequestHandler):
         return None, mime
 
     def do_HEAD(self) -> None:
+        if not self._guard_request():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
-        if not self._authorized():
+        public_asset = path in {"/", "/index.html"} or path.startswith("/assets/")
+        if not public_asset and not self._authorized():
             return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         if path == "/" or path == "/index.html":
             asset = self.frontend / "index.html"
@@ -3598,20 +4212,25 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
         try:
-            data = asset.read_bytes()
+            details = asset.stat()
+            if not stat.S_ISREG(details.st_mode) or not 0 <= details.st_size <= MAX_STATIC_ASSET_BYTES:
+                raise OSError("static asset is not a bounded regular file")
             self.send_response(200)
             self._headers("text/html; charset=utf-8" if path in ("/", "/index.html") else mime)
-            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Length", str(details.st_size))
             self.end_headers()
-        except OSError:
+        except (OSError, ValueError):
             self.send_response(404)
             self._headers("text/plain")
             self.send_header("Content-Length", "0")
             self.end_headers()
 
     def do_GET(self) -> None:
-        if not self._authorized(): return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
+        if not self._guard_request(): return
         parsed = urllib.parse.urlparse(self.path); path = parsed.path
+        public_asset = path in {"/", "/index.html"} or path.startswith("/assets/")
+        if not public_asset and not self._authorized():
+            return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         try:
             if path == "/api/health":
                 try:
@@ -3646,7 +4265,9 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"model": model_status(load_settings())})
             if path == "/api/ollama":
                 manager = _load("models.manager")
-                return self._json(200, {"ollama": manager.runtime_status(), "models": manager.catalog()})
+                settings = _load("config").load_settings()
+                runtime = manager.runtime_status()
+                return self._json(200, {"ollama": runtime, "models": manager.catalog(runtime, settings)})
             if path == "/api/settings":
                 load_settings = _load("config").load_settings
                 return self._json(200, {"settings": load_settings()})
@@ -3678,8 +4299,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/operations/") and path.endswith("/stream"):
                 op_id = path.split("/")[-2]
                 self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-store")
+                self._headers("text/event-stream")
                 self.send_header("X-Accel-Buffering", "no")
                 self.end_headers()
                 for _ in range(300):
@@ -3850,18 +4470,16 @@ class VortexHandler(BaseHTTPRequestHandler):
                     builder = _load("mobile.apkbuild")
                     status = builder.apk_status()
                     apk_path = Path(status["path"]) if status.get("built") else None
-                    if not apk_path or not apk_path.is_file():
+                    if not apk_path:
                         return self._json(404, {"error": {"code": "not_found", "message": "APK has not been synced yet. POST /api/mobile/apk first."}})
-                    data = apk_path.read_bytes()
+                    return self._download_owner_file(
+                        apk_path, "application/vnd.android.package-archive", "vortex.apk",
+                        max_bytes=builder._MAX_APK_BYTES,
+                        expected_size=int(status["size_bytes"]),
+                        expected_sha256=str(status["sha256"]),
+                    )
                 except Exception as exc:
                     return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
-                self.send_response(200)
-                self._headers("application/vnd.android.package-archive")
-                self.send_header("Content-Disposition", 'attachment; filename="vortex.apk"')
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self._write(data)
-                return
             if path == "/api/desktop/deb":
                 try:
                     status = _load("debbuild").deb_status()
@@ -3873,18 +4491,16 @@ class VortexHandler(BaseHTTPRequestHandler):
                     builder = _load("debbuild")
                     status = builder.deb_status()
                     deb_path = Path(status["path"]) if status.get("built") else None
-                    if not deb_path or not deb_path.is_file():
+                    if not deb_path:
                         return self._json(404, {"error": {"code": "not_found", "message": "Desktop package has not been built yet. POST /api/desktop/deb first."}})
-                    data = deb_path.read_bytes()
+                    return self._download_owner_file(
+                        deb_path, "application/vnd.debian.binary-package", str(status["filename"]),
+                        max_bytes=builder._MAX_PACKAGE_BYTES,
+                        expected_size=int(status["size_bytes"]),
+                        expected_sha256=str(status["sha256"]),
+                    )
                 except Exception as exc:
                     return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
-                self.send_response(200)
-                self._headers("application/vnd.debian.binary-package")
-                self.send_header("Content-Disposition", f'attachment; filename="{deb_path.name}"')
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self._write(data)
-                return
             if path == "/api/license":
                 license_path = Path(__file__).resolve().parent.parent / "LICENSE"
                 notice_path = Path(__file__).resolve().parent.parent / "NOTICE"
@@ -3926,12 +4542,17 @@ class VortexHandler(BaseHTTPRequestHandler):
                 parts = path.split("/")
                 if len(parts) == 5 and parts[-1] == "stream":
                     session_id = parts[-2]
+                    query = urllib.parse.parse_qs(parsed.query)
+                    try:
+                        since = int(self._query_text(query, "since", "0", limit=16))
+                    except (TypeError, ValueError) as exc:
+                        raise PolicyError("since must be an integer") from exc
+                    if since < 0:
+                        raise PolicyError("since must be >= 0")
                     self.send_response(200)
-                    self.send_header("Content-Type", "text/event-stream")
-                    self.send_header("Cache-Control", "no-store")
+                    self._headers("text/event-stream")
                     self.send_header("X-Accel-Buffering", "no")
                     self.end_headers()
-                    since = 0
                     for _ in range(300):
                         payload = self.sessions.events_since(session_id, since)
                         try:
@@ -4018,14 +4639,65 @@ class VortexHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
 
+    def _download_owner_file(
+        self,
+        path: Path,
+        content_type: str,
+        filename: str,
+        *,
+        max_bytes: int,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> None:
+        """Verify and stream a package without following links or buffering it."""
+        try:
+            with open_owner_binary(path, max_bytes=max_bytes) as (handle, details):
+                digest_state = hashlib.sha256()
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest_state.update(chunk)
+                if details.st_size != expected_size or not secrets.compare_digest(digest_state.hexdigest(), expected_sha256):
+                    return self._json(HTTPStatus.CONFLICT, {"error": {"code": "package_changed", "message": "package changed while preparing the download; retry the build"}})
+                handle.seek(0)
+                self.send_response(200)
+                self._headers(content_type)
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Length", str(details.st_size))
+                self.end_headers()
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                        break
+        except (OSError, ValueError):
+            return self._json(404, {"error": {"code": "not_found", "message": "trusted package file is no longer available; build it again"}})
+
     def _static(self, path: Path, content_type: str) -> None:
-        data = path.read_bytes(); self.send_response(200); self._headers(content_type); self.send_header("Content-Length", str(len(data))); self.end_headers(); self._write(data)
+        with path.open("rb") as handle:
+            details = os.fstat(handle.fileno())
+            if not stat.S_ISREG(details.st_mode) or details.st_size > MAX_STATIC_ASSET_BYTES:
+                raise OSError("static asset is not a bounded regular file")
+            data = handle.read(MAX_STATIC_ASSET_BYTES + 1)
+        if len(data) > MAX_STATIC_ASSET_BYTES:
+            raise OSError("static asset exceeds the response bound")
+        self.send_response(200); self._headers(content_type); self.send_header("Content-Length", str(len(data))); self.end_headers(); self._write(data)
 
     def do_POST(self) -> None:
-        if not self._authorized(): return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
+        if not self._guard_request(): return
         path = urllib.parse.urlparse(self.path).path
+        # A short-lived browser cookie can authorize application requests, but
+        # it cannot mint a replacement for itself. Session exchange always
+        # requires the original capability header, preserving fixed expiry.
+        if path == "/api/auth/session":
+            if not self._capability_authorized():
+                return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
+        elif not self._authorized():
+            return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         try:
             body = self._read_json()
+            if path == "/api/auth/session":
+                session_id = self._issue_browser_session()
+                cookie = f"Vortex-Session={session_id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800"
+                return self._json(200, {"authenticated": True, "expires_in": 28800}, {"Set-Cookie": cookie})
             if path == "/api/sessions":
                 session = self.sessions.create(self._optional_str(body, "name"), self._optional_str(body, "cwd"), self._optional_str(body, "shell"), self._bounded_int(body, "cols", 100, 2, 500), self._bounded_int(body, "rows", 30, 2, 500))
                 return self._json(201, {"session": session})
@@ -4102,15 +4774,19 @@ class VortexHandler(BaseHTTPRequestHandler):
                     raw_classes = ["reconnaissance"]
                 if not isinstance(raw_classes, list) or not all(isinstance(x, str) and x for x in raw_classes):
                     raise ValueError("classes must be a list of non-empty strings")
-                expires = parse_expiry(body.get("expires_at"), default_seconds=24 * 3600)
-                item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": redact(self._optional_str(body, "name") or "Authorized assessment")[:160], "authorization": redact(self._optional_str(body, "authorization") or "operator-declared authorization")[:500], "targets": targets, "classes": [redact(x)[:80] for x in raw_classes[:20]], "status": "active"}
-                self.store.create_engagement(item)
                 excluded = body.get("excluded_targets")
                 if excluded is None:
                     excluded = []
-                if not isinstance(excluded, list) or not all(isinstance(x, str) and x for x in excluded):
+                if not isinstance(excluded, list) or not all(isinstance(x, str) and x.strip() for x in excluded):
                     raise ValueError("excluded_targets must be a list of non-empty strings")
-                self.workspace.save_engagement_scope(item["id"], excluded[:100], self._optional_str(body, "environment") or "", self._optional_str(body, "owner") or "")
+                if len(excluded) > 100:
+                    raise ValueError("excluded_targets may contain at most 100 entries")
+                canonical_excluded = [normalize_target(x) for x in excluded]
+                environment = self._optional_str(body, "environment") or ""
+                owner = self._optional_str(body, "owner") or ""
+                expires = parse_expiry(body.get("expires_at"), default_seconds=24 * 3600)
+                item = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "created_at": now_iso(), "expires_at": expires, "name": redact(self._optional_str(body, "name") or "Authorized assessment")[:160], "authorization": redact(self._optional_str(body, "authorization") or "operator-declared authorization")[:500], "targets": targets, "classes": [redact(x)[:80] for x in raw_classes[:20]], "status": "active"}
+                self.workspace.create_engagement(item, canonical_excluded, environment, owner)
                 item = self.workspace.enrich_engagement(item)
                 return self._json(201, {"engagement": item})
             if path.startswith("/api/operations/") and path.endswith("/approve"):
@@ -4123,8 +4799,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return self._json(404, {"error": {"code": "not_running", "message": "operation is not running"}})
                 return self._json(202, {"cancel_requested": True, "operation_id": operation_id})
             if path == "/api/feedback":
-                rating = self._bounded_int(body, "rating", 1, 1, 5); correction = redact(self._optional_str(body, "correction") or "")[:2000]
-                self.store.append_audit("feedback_recorded", {"operation_id": self._optional_str(body, "operation_id"), "rating": rating, "correction": correction}); return self._json(201, {"saved": True})
+                rating = self._bounded_int(body, "rating", 1, 1, 5)
+                correction = redact(self._optional_str(body, "correction") or "")[:2000]
+                feedback = self.store.save_feedback(self._optional_str(body, "operation_id"), rating, correction)
+                return self._json(201, {"saved": True, "feedback": feedback})
             if path == "/api/workspace/turn":
                 load_settings = _load("config").load_settings
                 run_turn = _load("orchestrate").run_turn
@@ -4147,9 +4825,13 @@ class VortexHandler(BaseHTTPRequestHandler):
                     return self._json(404, {"error": {"code": "not_found", "message": "conversation not found"}})
                 return self._json(200, {"conversation": item})
             if path.startswith("/api/conversations/") and path.endswith("/archive"):
-                self.workspace.archive_conversation(path.split("/")[-2]); return self._json(200, {"archived": True})
+                if not self.workspace.archive_conversation(path.split("/")[-2]):
+                    return self._json(404, {"error": {"code": "not_found", "message": "conversation not found"}})
+                return self._json(200, {"archived": True})
             if path.startswith("/api/conversations/") and path.endswith("/delete"):
-                self.workspace.delete_conversation(path.split("/")[-2]); return self._json(200, {"deleted": True})
+                if not self.workspace.delete_conversation(path.split("/")[-2]):
+                    return self._json(404, {"error": {"code": "not_found", "message": "conversation not found"}})
+                return self._json(200, {"deleted": True})
             if path.startswith("/api/conversations/") and path.endswith("/edit"):
                 parts = path.split("/")
                 # Renderer sends /api/conversations/<cid>/messages/<mid>/edit.
@@ -4190,7 +4872,34 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"settings": save_settings(body if isinstance(body, dict) else {})})
             if path == "/api/ollama/install":
                 manager = _load("models.manager")
-                return self._json(200, {"install": manager.install_ollama(self._flag(body, "confirm"))})
+                confirmed = self._flag(body, "confirm")
+                if not confirmed:
+                    # Preserve the manager's canonical permission response and
+                    # never create even a prerequisite plan without consent.
+                    return self._json(200, {"install": manager.install_ollama(False)})
+                runtime = manager.runtime_status()
+                platform = runtime.get("platform") or {}
+                if (not runtime.get("installed") and not platform.get("zstd_available")
+                        and not platform.get("offline")):
+                    # Current upstream archives require zstd. Prepare its exact
+                    # reviewed apt plan before starting a multi-gigabyte download;
+                    # the operator still authenticates and approves in the secure
+                    # installation PTY, then explicitly retries this install.
+                    planned = self._dependency_plan(body, custom_package="zstd")
+                    proposal = planned.pop("install")
+                    return self._json(200, {
+                        **planned,
+                        "prerequisite": proposal,
+                        "install": {
+                            "status": "dependency_required",
+                            "dependency": "zstd",
+                            "step": "Install the reviewed zstd prerequisite, then retry Ollama.",
+                        },
+                    })
+                return self._json(200, {"install": manager.install_ollama(True)})
+            if path == "/api/ollama/install/cancel":
+                manager = _load("models.manager")
+                return self._json(200, {"install": manager.cancel_install()})
             if path == "/api/ollama/server/start":
                 manager = _load("models.manager")
                 return self._json(200, {"server": manager.start_server()})
@@ -4202,7 +4911,24 @@ class VortexHandler(BaseHTTPRequestHandler):
                 name = self._text(body, "name")
                 if not name:
                     raise ValueError("model name is required")
-                return self._json(202, {"download": manager.pull_model(name)})
+                role = self._optional_str(body, "role") or "none"
+                download = manager.pull_model(name, role=role)
+                preference = None
+                if role != "none":
+                    preference = {
+                        "role": role, "setting": {
+                            "primary": "model_primary", "planner": "model_planner",
+                            "fast": "model_fast", "specialist": "model_specialist",
+                        }.get(role), "model": name.strip(), "state": download.get("preference_state"),
+                    }
+                return self._json(202, {"download": download, "preference": preference})
+            if path == "/api/ollama/models/activate":
+                manager = _load("models.manager")
+                name = self._text(body, "name")
+                role = self._text(body, "role")
+                if not name or not role:
+                    raise ValueError("model name and advisory role are required")
+                return self._json(200, {"preference": manager.activate_model(name, role)})
             if path == "/api/ollama/models/cancel":
                 manager = _load("models.manager")
                 name = self._text(body, "name")
@@ -4218,18 +4944,53 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/setup/complete":
                 save_settings = _load("config").save_settings
                 return self._json(200, {"settings": save_settings({"first_run_complete": True})})
+            if path == "/api/dependencies/execute":
+                plan_id = self._text(body, "plan_id")
+                if not plan_id or not re.fullmatch(r"[0-9a-f]{64}", plan_id):
+                    raise ValueError("a valid dependency plan id is required")
+                plan = self.store.get_plan(plan_id)
+                if not plan:
+                    return self._json(404, {"error": {"code": "not_found", "message": "dependency plan not found"}})
+                root_commands = [item for item in plan.get("commands", []) if item.get("privilege") == "root-required"]
+                if (
+                    plan.get("kind") != "package_operation"
+                    or plan.get("status") not in {"planned", "approved"}
+                    or len(root_commands) != 1
+                    or root_commands[0].get("adapter_id") != "linux.packages.apt"
+                ):
+                    raise PolicyError("only an unstarted reviewed apt dependency plan can open an installation terminal")
+                cli_path = Path(__file__).resolve().parent.parent / "cli" / "vortex.py"
+                cli_details = cli_path.lstat()
+                app_root = Path(__file__).resolve().parent.parent
+                if (
+                    not stat.S_ISREG(cli_details.st_mode)
+                    or cli_details.st_uid not in {0, os.geteuid()}
+                    or stat.S_IMODE(cli_details.st_mode) & 0o022
+                    or cli_path.resolve(strict=True).parent != (app_root / "cli").resolve(strict=True)
+                ):
+                    raise PermissionError("the reviewed VORTEX CLI entry point is unavailable or unsafe")
+                python = probe_executable(sys.executable, include_version=False)
+                if python.get("state") != "installed" or not python.get("realpath"):
+                    raise PermissionError("the trusted Python runtime is unavailable")
+                command = [python["realpath"], str(cli_path), "run", plan_id]
+                with self.sessions.lock:
+                    if any(item.get("status") == "running" and item.get("command") == command for item in self.sessions.sessions.values()):
+                        raise PolicyError("this dependency plan already has an active installation terminal")
+                    session = self.sessions.create(
+                        "Dependency installation", plan.get("cwd"), None,
+                        self._bounded_int(body, "cols", 100, 2, 500),
+                        self._bounded_int(body, "rows", 30, 2, 500),
+                        command=command,
+                    )
+                self.store.append_audit("dependency_install_terminal_started", {"plan_id": plan_id, "session_id": session["id"]})
+                return self._json(201, {"session": session, "plan_id": plan_id, "interactive_confirmation": True})
             if path == "/api/dependencies/plan":
-                deps = _load("dependencies")
-                item_id = self._optional_str(body, "id") or ""
-                proposal = deps.proposal_for(item_id)
-                if proposal.get("installed") or proposal.get("method") != "apt" or not proposal.get("plan_request"):
-                    return self._json(200, {"install": proposal, "planned": False, "auto_install": False})
-                result = _load("orchestrate").run_turn(
-                    self.store, self.workspace, self.executor, proposal["plan_request"],
-                    cwd=self._optional_str(body, "cwd"), engagement_id=None, conversation_id=self._optional_str(body, "conversation_id"),
-                    settings=_load("config").load_settings(),
+                result = self._dependency_plan(
+                    body,
+                    item_id=self._optional_str(body, "id"),
+                    custom_package=self._optional_str(body, "package"),
                 )
-                return self._json(200, {"install": proposal, "planned": True, "auto_install": False, **result})
+                return self._json(200, result)
             if path.startswith("/api/tasks/") and path.endswith("/resume"):
                 load_settings = _load("config").load_settings
                 run_turn = _load("orchestrate").run_turn
@@ -4272,11 +5033,15 @@ class VortexHandler(BaseHTTPRequestHandler):
                 task = self.workspace.get_task(task_id)
                 if not task:
                     return self._json(404, {"error": {"code": "not_found", "message": "task not found"}})
-                if task.get("operation_id") and task["operation_id"] != operation_id:
+                if task.get("operation_id") != operation_id:
                     raise PolicyError("task is not bound to this operation")
-                if task.get("plan_id") and operation.get("plan_id") and task["plan_id"] != operation["plan_id"]:
+                if not operation.get("plan_id") or task.get("plan_id") != operation.get("plan_id"):
                     raise PolicyError("task is not bound to this plan")
-                plan = self.store.get_plan(operation.get("plan_id") or "") or {}
+                if operation.get("status") in {"started", "running", "awaiting_confirmation"}:
+                    raise PolicyError("an active operation cannot be finalized manually")
+                plan = self.store.get_plan(operation["plan_id"])
+                if not plan:
+                    raise PolicyError("operation plan was not found")
                 report = finish_task(self.workspace, task_id, operation, plan)
                 return self._json(200, {"operation": operation, "report": report, "task": self.workspace.get_task(task_id)})
             if path == "/api/benchmark":
@@ -4311,6 +5076,8 @@ class VortexHandler(BaseHTTPRequestHandler):
             return self._json(409, {"error": {"code": "already_exists", "message": redact(str(exc)), "exit_code": EXIT_CODES["incompatible_state"]}})
         except TimeoutError as exc:
             return self._json(409, {"error": {"code": "expired", "message": str(exc), "exit_code": EXIT_CODES["timeout"]}})
+        except UnsupportedMediaType as exc:
+            return self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": {"code": "unsupported_media_type", "message": str(exc)}})
         except (ValueError, PolicyError, json.JSONDecodeError) as exc:
             return self._json(422, {"error": {"code": "invalid_plan", "message": redact(str(exc)), "exit_code": EXIT_CODES["policy_denied"]}})
         except (sqlite3.IntegrityError, sqlite3.DatabaseError) as exc:
@@ -4319,40 +5086,106 @@ class VortexHandler(BaseHTTPRequestHandler):
             return self._json(500, {"error": {"code": "internal_error", "message": redact(str(exc))}})
 
 
+def _loopback_bind(host: str) -> bool:
+    value = str(host or "").strip().rstrip(".").lower()
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_bind_security(host: str, token: str | None) -> None:
+    """Fail closed before a sidecar can expose host authority on a network."""
+    if not isinstance(host, str) or not host.strip() or any(char in host for char in "\x00\r\n/\\"):
+        raise ValueError("invalid sidecar bind host")
+    if not _loopback_bind(host):
+        if not isinstance(token, str) or len(token) < 32:
+            raise ValueError("non-loopback sidecar binds require a capability token of at least 32 characters")
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTP server with a finite slow-client concurrency budget."""
+    daemon_threads = True
+    block_on_close = False
+    request_queue_size = 64
+
+    def __init__(self, *args: Any, max_request_threads: int = 64, **kwargs: Any):
+        self._request_slots = threading.BoundedSemaphore(max(1, min(int(max_request_threads), 256)))
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
 def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -> None:
+    validate_bind_security(host, token)
     store = Store()
     try:
         from .workspace import Workspace
     except ImportError:
         from workspace import Workspace
     handler = VortexHandler
-    handler.store = store; handler.executor = ExecutionManager(store); handler.sessions = SessionManager(store); handler.workspace = Workspace(store); handler.executor.workspace = handler.workspace; handler.frontend = Path(__file__).resolve().parent.parent / "frontend"; handler.token = token
-    # ExecutionManager has already closed operations abandoned by a previous
-    # sidecar; pause the tasks that were waiting on them so the UI shows an
-    # honest unknown state instead of a task stuck in EXECUTING forever.
+    handler.store = store
+    handler.executor = ExecutionManager(store)
+    handler.sessions = SessionManager(store)
+    handler.workspace = Workspace(store)
+    handler.executor.workspace = handler.workspace
+    handler.frontend = Path(__file__).resolve().parent.parent / "frontend"
+    handler.token = token
+    handler.allow_remote_host = not _loopback_bind(host)
+    server: BoundedThreadingHTTPServer | None = None
+    runtime_file: Path | None = None
     try:
-        handler.workspace.reconcile_orphaned_tasks()
-    except (OSError, sqlite3.Error):
-        pass
-    server = ThreadingHTTPServer((host, port), handler)
-    def stop_on_term(_signum: int, _frame: Any) -> None:
-        raise KeyboardInterrupt
-    signal.signal(signal.SIGTERM, stop_on_term)
-    signal.signal(signal.SIGHUP, stop_on_term)
-    runtime_file = write_runtime_metadata(host, server.server_port, token)
-    print(json.dumps({"backend": "online", "host": host, "port": server.server_port, "version": APP_VERSION}), flush=True)
-    try: server.serve_forever()
-    except KeyboardInterrupt: pass
+        # ExecutionManager has already closed operations abandoned by a previous
+        # sidecar; pause tasks that were waiting on them instead of showing a
+        # task stuck in EXECUTING forever.
+        try:
+            handler.workspace.reconcile_orphaned_tasks()
+        except (OSError, sqlite3.Error):
+            pass
+        server = BoundedThreadingHTTPServer((host, port), handler)
+
+        def stop_on_term(_signum: int, _frame: Any) -> None:
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, stop_on_term)
+        signal.signal(signal.SIGHUP, stop_on_term)
+        runtime_file = write_runtime_metadata(host, server.server_port, token)
+        print(json.dumps({"backend": "online", "host": host, "port": server.server_port, "version": APP_VERSION}), flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
     finally:
+        handler.executor.shutdown()
         handler.sessions.shutdown()
         try:
             _load("models.manager").shutdown()
         except Exception:
             pass
-        server.server_close()
-        try:
-            if json.loads(runtime_file.read_text(encoding="utf-8")).get("pid") == os.getpid(): runtime_file.unlink()
-        except (OSError, ValueError): pass
+        if server is not None:
+            server.server_close()
+        if runtime_file is not None:
+            try:
+                if json.loads(read_owner_text(runtime_file, max_bytes=16 * 1024)).get("pid") == os.getpid():
+                    runtime_file.unlink()
+            except (OSError, ValueError):
+                pass
 
 
 if __name__ == "__main__":
@@ -4361,4 +5194,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=int(os.environ.get("VORTEX_PORT", "8765")))
     parser.add_argument("--token", default=os.environ.get("VORTEX_SIDECAR_TOKEN"))
     args = parser.parse_args()
-    serve(args.host, args.port, args.token)
+    try:
+        serve(args.host, args.port, args.token)
+    except ValueError as exc:
+        parser.error(str(exc))
