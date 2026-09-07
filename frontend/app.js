@@ -1,18 +1,81 @@
 /* Vortex renderer. In Electron all requests go through the typed preload bridge;
    the relative fetch fallback keeps the local preview useful without Electron. */
-const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, sessions: [], activeSessionId: null, paneIds: [], sessionSeqs: {}, sessionTimer: null, plain: false };
+const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, sessions: [], activeSessionId: null, paneIds: [], sessionSeqs: {}, sessionStreams: {}, sessionStreamRetryAt: {}, sessionTimer: null, plain: false };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 const fmtDate = (value) => { if (!value) return '—'; try { return new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(value)); } catch { return value; } };
+let browserCapability = '';
+let browserSessionPromise = null;
+let capabilityFragmentPresent = false;
+try {
+  const fragment = new URLSearchParams(location.hash.replace(/^#/, ''));
+  capabilityFragmentPresent = fragment.has('vortex-token');
+  if (capabilityFragmentPresent) {
+    const supplied = String(fragment.get('vortex-token') || '').trim();
+    if (supplied && supplied.length <= 256 && !/[\x00-\x1f\x7f]/.test(supplied)) {
+      // Keep the in-memory copy even when privacy settings disable Web Storage.
+      browserCapability = supplied;
+      try { sessionStorage.setItem('vortex-capability', supplied); } catch (_) { /* in-memory exchange still works */ }
+    } else {
+      try { sessionStorage.removeItem('vortex-capability'); } catch (_) { /* storage may be disabled */ }
+    }
+  } else {
+    try { browserCapability = sessionStorage.getItem('vortex-capability') || ''; } catch (_) { browserCapability = ''; }
+  }
+} catch (_) { browserCapability = ''; }
+if (capabilityFragmentPresent) {
+  // Scrub valid, invalid, and empty credentials before any API or subresource can
+  // preserve them in browser history. URL fragments are never sent to HTTP.
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (_) { /* constrained WebViews may deny history mutation */ }
+}
+function showCapabilityDialog(message = '') {
+  if (window.vortexApi?.request) return;
+  const dialog = $('capability-dialog');
+  if (!dialog) return;
+  const error = $('capability-error');
+  if (error) error.textContent = message;
+  if (!dialog.open) dialog.showModal();
+  setTimeout(() => $('capability-input')?.focus(), 0);
+}
+async function establishBrowserSession() {
+  if (!browserCapability || window.vortexApi?.request) return;
+  if (!browserSessionPromise) {
+    browserSessionPromise = fetch('/api/auth/session', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Vortex-Token': browserCapability},
+      body: '{}'
+    }).then(async response => {
+      if (!response.ok) {
+        let message = 'The sidecar capability was rejected.';
+        try { message = (await response.json()).error?.message || message; } catch (_) { /* use bounded fallback */ }
+        throw new Error(message);
+      }
+      try { sessionStorage.removeItem('vortex-capability'); } catch (_) { /* storage may be disabled */ }
+      browserCapability = '';
+    }).catch(error => {
+      browserSessionPromise = null;
+      try { sessionStorage.removeItem('vortex-capability'); } catch (_) { /* storage may be disabled */ }
+      browserCapability = '';
+      showCapabilityDialog(error.message);
+      throw error;
+    });
+  }
+  return browserSessionPromise;
+}
 const api = async (path, options = {}) => {
   if (window.vortexApi?.request) return window.vortexApi.request(path, options);
-  const response = await fetch(path, { headers: {'Content-Type':'application/json', ...(options.headers || {})}, ...options, body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || `Request failed (${response.status})`);
+  if (browserCapability) await establishBrowserSession();
+  const response = await fetch(path, { headers: {'Content-Type':'application/json', ...(browserCapability ? {'X-Vortex-Token': browserCapability} : {}), ...(options.headers || {})}, ...options, body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body });
+  let payload;
+  try { payload = await response.json(); } catch (_) { throw new Error(`Sidecar returned an invalid response (${response.status})`); }
+  if (!response.ok) {
+    if (response.status === 401) showCapabilityDialog('Enter the capability printed by the remote VORTEX sidecar.');
+    throw new Error(payload.error?.message || `Request failed (${response.status})`);
+  }
   return payload;
 };
-function toast(message, bad = false) { const el = $('toast'); el.textContent = message; el.style.borderColor = bad ? 'var(--red)' : 'var(--cyan)'; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 4200); }
-function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); if (view === 'models' && typeof window.loadModels === 'function') window.loadModels(); }
+function toast(message, bad = false) { const el = $('toast'); el.setAttribute('role', bad ? 'alert' : 'status'); el.setAttribute('aria-live', bad ? 'assertive' : 'polite'); el.textContent = message; el.style.borderColor = bad ? 'var(--red)' : 'var(--cyan)'; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 4200); }
+function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => { const active = el.id === `view-${view}`; el.classList.toggle('active', active); el.setAttribute('aria-hidden', String(!active)); }); document.querySelectorAll('.nav-item').forEach(el => { const active = el.dataset.view === view; el.classList.toggle('active', active); if (active) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); }); $('view-title').textContent = view.toUpperCase(); document.title = `${view.replace(/(^|-)([a-z])/g, (_, prefix, letter) => `${prefix ? ' ' : ''}${letter.toUpperCase()}`)} — VORTEX`; if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); if (view === 'models' && typeof window.loadModels === 'function') window.loadModels(); }
 function statusClass(status) { return ['succeeded','success'].includes(status) ? 'badge-green' : ['failed','timed_out','interrupted'].includes(status) ? 'badge-red' : status === 'planned' || status === 'awaiting_confirmation' ? 'badge-amber' : 'badge-muted'; }
 function statusLabel(status) { return ({succeeded:'VERIFIED OK',failed:'FAILED',timed_out:'TIMED OUT',interrupted:'INTERRUPTED',unavailable:'TOOL MISSING',running:'RUNNING',started:'STARTED',planned:'CONFIRM REQUIRED',awaiting_confirmation:'PREFLIGHT COMPLETE',clarified:'PLAN ONLY',rejected:'BLOCKED',unknown_after_crash:'UNKNOWN AFTER CRASH'}[status] || String(status || 'STANDBY').toUpperCase()); }
 async function loadDoctor(refresh = false) { try { const data = await api(`/api/doctor${refresh ? '?fresh=1' : ''}`); state.doctor = data.doctor; renderDoctor(); } catch (e) { $('side-context').textContent = 'backend offline'; toast(e.message, true); } }
@@ -122,9 +185,12 @@ function renderPlan(plan) { state.plan = plan; const badge = $('plan-badge'); ba
  const suggestions = (plan.suggestions || []).map(s => `<button class="suggestion-chip" data-suggestion="${esc(s)}">${esc(s)}</button>`).join('');
  const knowledge = (plan.knowledge || []).map(k => `<article class="knowledge-item"><span>${esc(k.label)}</span><code>${esc((k.examples || []).slice(0,2).join(' · '))}</code></article>`).join('');
  const rootRequired = (plan.commands || []).some(c => c.privilege === 'root-required');
- const rootHint = rootRequired ? `<div class="approval"><small>ROOT REQUIRED · VORTEX will not capture a sudo password. Run <code>sudo vortex --allow-root run ${esc(plan.id)}</code> on this host to execute this reviewed plan from the CLI.</small></div>` : '';
+ const aptDependency = plan.kind === 'package_operation' && (plan.commands || []).some(c => c.adapter_id === 'linux.packages.apt' && c.privilege === 'root-required');
+ const installAction = aptDependency ? '<button class="approve-button" id="launch-dependency-install">OPEN INSTALL TERMINAL</button>' : '';
+ const rootHint = rootRequired ? `<div class="approval root-approval"><small>OS AUTHENTICATION REQUIRED · VORTEX never reads your password. ${aptDependency ? 'Open the installation terminal here, type APPROVE after reviewing the plan, then respond directly to the operating system prompt.' : `In a terminal, run <code>vortex run ${esc(plan.id)}</code>.`} A fresh preflight and second approval protect the final mutation.</small>${installAction}</div>` : '';
  $('plan-content').className = 'plan-card'; $('plan-content').innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>OBJECTIVE / ${esc(plan.kind.replace('_',' '))}</span>${esc(plan.request)}</div><span class="badge ${statusClass(plan.status)}">${esc(statusLabel(plan.status))}</span></div><ul class="plan-notes">${notes}</ul>${suggestions ? `<div class="suggestion-row"><small>TRY ONE OF THESE</small>${suggestions}</div>` : ''}${knowledge ? `<div class="knowledge-row"><small>LOCAL CAPABILITIES</small>${knowledge}</div>` : ''}${commands}${rootHint}<div class="worker-row">WORKERS · ${worker}</div>${plan.approval_required && plan.status === 'planned' && !rootRequired ? `<div class="approval"><small>⌁ ${esc(plan.approval_phrase)}</small><button class="approve-button" id="approve-plan">APPROVE &amp; EXECUTE</button></div>` : ''}`;
  $('approve-plan')?.addEventListener('click', approvePlan);
+ $('launch-dependency-install')?.addEventListener('click', () => launchDependencyInstall(plan));
  document.querySelectorAll('[data-suggestion]').forEach(btn => btn.addEventListener('click', () => { if (typeof window.makePlan === 'function') window.makePlan(btn.dataset.suggestion); }));
  if (typeof window.updateAiOpsHud === 'function') window.updateAiOpsHud({ plan });
 }
@@ -150,39 +216,56 @@ async function makePlan(request) {
   finally { planSubmitBusy = false; $('plan-button').disabled = false; $('plan-button').innerHTML = '<span class="spark">✦</span> SEND'; }
 }
 async function approvePlan() { if (!state.plan) return; const button = $('approve-plan'); button.disabled = true; button.textContent = 'STARTING…'; try { const data = await api('/api/execute', {method:'POST', body:{plan_id:state.plan.id, approval_token:state.plan.approval_token, confirm:true}}); const op = data.operation; renderPlan({...state.plan, status:'started'}); toast('Operation started. Streaming real output from the local sidecar.'); await watchOperation(op.id); } catch(e) { button.disabled = false; button.textContent = 'APPROVE & EXECUTE'; toast(e.message, true); } }
+async function launchDependencyInstall(plan) {
+  const button = $('launch-dependency-install');
+  if (!plan?.id || button?.disabled) return;
+  if (button) { button.disabled = true; button.textContent = 'OPENING…'; }
+  try {
+    const size = terminalMetrics();
+    const data = await api('/api/dependencies/execute', {method:'POST', body:{plan_id:plan.id, cols:size.cols, rows:size.rows}});
+    setView('terminal');
+    adoptSession(data.session);
+    toast('Secure install terminal opened. Review and type APPROVE there; any password goes only to the operating system.');
+  } catch (e) {
+    if (button) { button.disabled = false; button.textContent = 'OPEN INSTALL TERMINAL'; }
+    toast(e.message, true);
+  }
+}
 async function watchOperation(id) {
   const finish = async (op) => { renderAnalysis(op); await loadHistory(); };
+  const commandBudget = (state.plan?.commands || []).reduce((total, command) => total + Number(command.timeout_seconds || 30), 0);
+  const deadline = Date.now() + Math.min(3600, Math.max(90, commandBudget + 60)) * 1000;
   if (window.EventSource) {
     try {
-      await new Promise((resolve) => {
+      const streamed = await new Promise((resolve) => {
         const es = new EventSource(`/api/operations/${encodeURIComponent(id)}/stream`);
-        const timer = setTimeout(() => { es.close(); resolve('timeout'); }, 45000);
+        // The sidecar deliberately rotates SSE handlers after about one minute.
+        // Close first so EventSource cannot auto-reconnect behind the poll fallback.
+        const timer = setTimeout(() => { es.close(); resolve(null); }, 65000);
         es.onmessage = (ev) => {
           try {
             const op = JSON.parse(ev.data).operation;
             if (op && !['started', 'running'].includes(op.status)) {
-              clearTimeout(timer); es.close(); finish(op).then(() => resolve('done'));
+              clearTimeout(timer); es.close(); resolve(op);
             } else if (op) { renderLiveIfPresent(op); }
           } catch (_) { /* keep listening */ }
         };
-        es.onerror = () => { clearTimeout(timer); es.close(); resolve('error'); };
+        es.onerror = () => { clearTimeout(timer); es.close(); resolve(null); };
       });
-      const latest = await api(`/api/operations/${encodeURIComponent(id)}`);
-      if (latest.operation && !['started', 'running'].includes(latest.operation.status)) {
-        await finish(latest.operation); return;
-      }
+      if (streamed) { await finish(streamed); return; }
     } catch (_) { /* fall through to poll */ }
   }
-  for (let i = 0; i < 120; i++) {
-    await new Promise(r => setTimeout(r, 350));
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1000));
     try {
       const data = await api(`/api/operations/${encodeURIComponent(id)}`);
       const op = data.operation;
       if (!op) continue;
       if (!['started', 'running'].includes(op.status)) { await finish(op); return; }
+      renderLiveIfPresent(op);
     } catch (e) { toast(e.message, true); return; }
   }
-  toast('Operation is still running; activity can be refreshed.', true);
+  toast('Operation exceeded its display deadline; its final state remains available in Activity.', true);
 }
 function renderLiveIfPresent(op) {
   if (typeof renderLiveOutput === 'function') renderLiveOutput(op);
@@ -210,7 +293,8 @@ function renderAnalysis(op) {
   const verification = a.verification ? `<div class="analysis-block"><h3>Verification</h3><p><b style="color:var(--text)">${esc(a.verification.state)}</b> · ${esc(a.verification.observed_commands || 0)}/${esc(a.verification.total_commands || 0)} command(s) produced observed output</p><p style="color:var(--dim);font-size:10px">${esc(a.verification.note || '')}</p></div>` : '';
   const localAi = a.local_ai || {};
   const localAiRoute = (localAi.route?.selected || []).map(item => `${esc(item.role)}=${esc(item.model)}`).join(' · ');
-  const localAiBlock = localAi.state ? `<div class="analysis-block"><h3>Local AI interpretation</h3><p><b style="color:var(--text)">${esc((localAi.fuzzy && localAi.fuzzy.confidence) || localAi.state)}</b> · ${esc(localAiRoute || 'no routed model')} · ${esc((localAi.fuzzy && localAi.fuzzy.evidence_basis) || 'plan-only')}</p><p>${esc(localAi.synthesis?.fact_summary || localAi.message || 'No local AI interpretation was available.')}</p><p style="color:var(--dim);font-size:10px">${esc(localAi.synthesis?.meaning || localAi.synthesis?.unknowns || '')}</p></div>` : '';
+  const localAiFallback = localAi.fallback?.used ? ` · FALLBACK: ${esc(localAi.fallback.reason || 'alternate advisory used')}${localAi.fallback.effective_model ? ` → ${esc(localAi.fallback.effective_model)}` : ''}` : '';
+  const localAiBlock = localAi.state ? `<div class="analysis-block"><h3>Local AI interpretation</h3><p><b style="color:var(--text)">${esc((localAi.fuzzy && localAi.fuzzy.confidence) || localAi.state)}</b> · ${esc(localAiRoute || 'no routed model')} · ${esc((localAi.fuzzy && localAi.fuzzy.evidence_basis) || 'plan-only')}${localAiFallback}</p><p>${esc(localAi.synthesis?.fact_summary || localAi.message || 'No local AI interpretation was available.')}</p><p style="color:var(--dim);font-size:10px">${esc(localAi.synthesis?.meaning || localAi.synthesis?.unknowns || '')}</p></div>` : '';
   $('plan-badge').textContent = a.lifecycle || statusLabel(op.status);
   $('plan-badge').className = `badge ${statusClass(op.status)}`;
   const actionRow = (op.commands && op.commands.length) ? `<div class="analysis-block results-actions"><h3>Results actions</h3><div><button class="text-button" data-result-action="verify">VERIFY</button> <button class="text-button" data-result-action="report">REPORT</button> <button class="text-button" data-result-action="export">EXPORT</button></div><p style="color:var(--dim);font-size:10px;margin-top:7px">Verify re-checks the audit hash chain. Report and Export act on real stored data; only appropriate actions are offered for a result with observed output.</p></div>` : '';
@@ -368,16 +452,21 @@ async function loadSessions() {
 }
 function applySessionPayload(sessionId, data) {
   const output = ensureSessionPane(sessionId);
-  (data.events || []).forEach(event => { appendAnsi(output, event.data); state.sessionSeqs[sessionId] = Math.max(state.sessionSeqs[sessionId] || 0, event.seq); });
+  (data.events || []).forEach(event => {
+    const seq = Number(event.seq);
+    if (!Number.isSafeInteger(seq) || seq <= (state.sessionSeqs[sessionId] || 0)) return;
+    appendAnsi(output, event.data);
+    state.sessionSeqs[sessionId] = seq;
+  });
   const index = state.sessions.findIndex(item => item.id === sessionId);
   if (index >= 0 && data.session) state.sessions[index] = data.session;
 }
 
 function streamSession(sessionId) {
-  if (!window.EventSource || state.sessionStreams?.[sessionId]) return false;
-  state.sessionStreams = state.sessionStreams || {};
+  if (!window.EventSource || state.sessionStreams[sessionId] || Date.now() < (state.sessionStreamRetryAt[sessionId] || 0)) return false;
   try {
-    const es = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/stream`);
+    const since = state.sessionSeqs[sessionId] || 0;
+    const es = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/stream?since=${since}`);
     state.sessionStreams[sessionId] = es;
     es.onmessage = (ev) => {
       try {
@@ -389,10 +478,14 @@ function streamSession(sessionId) {
         const status = data.session?.status;
         const changed = before !== status;
         if (changed) { renderSessionTabs(); renderSessionPanes(); }
-        if (!data.session || !['starting', 'running'].includes(status)) { es.close(); delete state.sessionStreams[sessionId]; }
+        if (!data.session || !['starting', 'running'].includes(status)) { es.close(); delete state.sessionStreams[sessionId]; delete state.sessionStreamRetryAt[sessionId]; }
       } catch (_) { /* keep listening */ }
     };
-    es.onerror = () => { es.close(); delete state.sessionStreams[sessionId]; };
+    es.onerror = () => {
+      es.close();
+      delete state.sessionStreams[sessionId];
+      state.sessionStreamRetryAt[sessionId] = Date.now() + 2000;
+    };
     return true;
   } catch (_) { return false; }
 }
@@ -403,7 +496,8 @@ async function pollSessions() {
   if (state.sessionTimer) return;
   const tick = async () => {
     state.sessionTimer = null;
-    const live = state.sessions.filter(session => session.status === 'running' && !state.sessionStreams?.[session.id]);
+    state.sessions.filter(session => session.status === 'running').forEach(session => streamSession(session.id));
+    const live = state.sessions.filter(session => session.status === 'running' && !state.sessionStreams[session.id]);
     let dirty = false;
     for (const session of live) {
       try {
@@ -416,18 +510,25 @@ async function pollSessions() {
     state.session = activeSession();
     renderSessionState();
     if (dirty) { renderSessionTabs(); renderSessionPanes(); }
-    if (state.sessions.some(session => session.status === 'running')) state.sessionTimer = setTimeout(tick, 220);
+    if (state.sessions.some(session => session.status === 'running')) state.sessionTimer = setTimeout(tick, 500);
   };
   await tick();
+}
+function adoptSession(session) {
+  const index = state.sessions.findIndex(item => item.id === session.id);
+  if (index >= 0) state.sessions[index] = session;
+  else state.sessions.push(session);
+  state.activeSessionId = session.id; state.session = session; state.sessionSeqs[session.id] = 0;
+  if (state.paneIds.length >= 2) state.paneIds.shift();
+  if (!state.paneIds.includes(session.id)) state.paneIds.push(session.id);
+  renderSessionTabs(); renderSessionPanes(); renderSessionState(); pollSessions(); focusPtySurface();
 }
 async function openSession() {
   $('open-session').disabled = true;
   try {
     const size = terminalMetrics();
     const data = await api('/api/sessions', {method:'POST', body:{name:`linux pty ${state.sessions.length + 1}`, cwd:state.doctor?.cwd || undefined, cols:size.cols, rows:size.rows}});
-    state.sessions.push(data.session); state.activeSessionId = data.session.id; state.session = data.session; state.sessionSeqs[data.session.id] = 0;
-    if (state.paneIds.length >= 2) state.paneIds.shift(); state.paneIds.push(data.session.id);
-    renderSessionTabs(); renderSessionPanes(); renderSessionState(); pollSessions(); focusPtySurface();
+    adoptSession(data.session);
     toast('Real Linux PTY opened on this host. Type in the black pane.');
   } catch (e) { toast(e.message, true); }
   finally { $('open-session').disabled = false; renderSessionState(); }
@@ -471,5 +572,25 @@ async function resizeSessionNow() {
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
-function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('download-deb')?.addEventListener('click', downloadDeb); $('download-deb-settings')?.addEventListener('click', downloadDeb); $('plain-theme')?.addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function bindCapabilityForm() {
+  const form = $('capability-form');
+  if (!form) return;
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const input = $('capability-input');
+    const value = String(input?.value || '').trim();
+    if (!value || value.length > 256 || /[\x00-\x1f\x7f]/.test(value)) {
+      showCapabilityDialog('Enter a valid sidecar capability (maximum 256 characters).');
+      return;
+    }
+    browserCapability = value;
+    browserSessionPromise = null;
+    try { sessionStorage.setItem('vortex-capability', value); } catch (_) { /* continue in memory */ }
+    try {
+      await establishBrowserSession();
+      location.reload();
+    } catch (_) { if (input) input.value = ''; }
+  });
+}
+function init() { bindCapabilityForm(); document.querySelectorAll('.nav-item').forEach(item => { if (!item.title) item.title = item.textContent.trim(); }); if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setView(state.currentView); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('download-deb')?.addEventListener('click', downloadDeb); $('download-deb-settings')?.addEventListener('click', downloadDeb); $('plain-theme')?.addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);

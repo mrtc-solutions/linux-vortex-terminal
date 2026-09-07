@@ -19,7 +19,7 @@
     return out;
   }
   function pollable() {
-    if (install().status === 'preparing' || install().status === 'downloading' || install().status === 'verifying' || install().status === 'installing' || install().status === 'starting') return true;
+    if (install().status === 'preparing' || install().status === 'downloading' || install().status === 'verifying' || install().status === 'installing' || install().status === 'starting' || install().status === 'cancelling') return true;
     return Object.keys(activeJobs()).length > 0;
   }
 
@@ -62,7 +62,7 @@
   }
 
   function failureLabel(reason) {
-    return ({ permission: 'Permission denied', storage: 'Insufficient storage', network: 'Network failure', runtime_missing: 'Runtime not installed', pull_failed: 'Download failed', verification_failed: 'Verification failed', service: 'Service failure' })[reason] || 'Install failed';
+    return ({ permission: 'Permission denied', storage: 'Insufficient storage', network: 'Network failure', runtime_missing: 'Runtime not installed', pull_failed: 'Download failed', verification_failed: 'Verification failed', integration_failed: 'Advisory preference integration failed', service: 'Service failure' })[reason] || 'Install failed';
   }
 
   function stateClass(value, okValues) {
@@ -99,16 +99,28 @@
       statusRow('ENDPOINT', runtime.endpoint || '—', ''),
       statusRow('SERVER', server.managed ? 'vortex-managed · ' + (server.state || 'stopped') : 'externally managed', stateClass(server.state)),
       statusRow('ARCH', platform.arch + (platform.supported_arch === false ? ' (no user-space build)' : ''), platform.supported_arch === false ? 'bad' : ''),
+      statusRow('ARCHIVE HELPER', platform.zstd_available ? 'zstd available' : 'zstd missing — install it in Dependencies', platform.zstd_available ? 'ok' : 'warn'),
       statusRow('OFFLINE', platform.offline ? 'yes — install/download disabled' : 'no', platform.offline ? 'warn' : 'ok'),
       statusRow('DISK FREE', runtime.disk_free_gb != null ? runtime.disk_free_gb + ' GB' : 'unknown', ''),
       statusRow('MODELS', ((runtime.installed_candidates || []).length) + ' catalog model(s) matched', (runtime.installed_candidates || []).length ? 'ok' : ''),
     ];
+    var preferences = (modelsState.catalog && modelsState.catalog.routing_preferences) || {};
+    ['primary', 'planner', 'fast', 'specialist'].forEach(function (role) {
+      var pref = preferences[role];
+      if (!pref) return;
+      var value = pref.state === 'active'
+        ? (pref.resolved || pref.configured) + (pref.family_fallback ? ' · family fallback' : '')
+        : (pref.configured || 'not configured') + ' · unavailable (router will fall back)';
+      rows.push(statusRow('ROLE · ' + role.toUpperCase(), value, pref.state === 'active' ? 'ok' : 'warn'));
+    });
     box.innerHTML = rows.join('');
 
+    var installJob = install();
+    var installActive = ['preparing', 'downloading', 'verifying', 'installing', 'starting', 'cancelling'].indexOf(installJob.status) !== -1;
     if (actions) {
       var actionHtml = '';
       if (!installed) {
-        actionHtml = '<button class="primary-button" id="install-ollama-btn">INSTALL OLLAMA</button>';
+        actionHtml = installActive ? '<button class="text-button danger" id="cancel-install-ollama">CANCEL INSTALL</button>' : '<button class="primary-button" id="install-ollama-btn">INSTALL OLLAMA</button>';
       } else if (server.state !== 'running') {
         actionHtml = '<button class="primary-button" id="start-ollama-btn">START SERVICE</button>';
       } else {
@@ -117,6 +129,8 @@
       actions.innerHTML = actionHtml;
       var installBtn = $('install-ollama-btn');
       if (installBtn) installBtn.addEventListener('click', installOllama);
+      var cancelInstallBtn = $('cancel-install-ollama');
+      if (cancelInstallBtn) cancelInstallBtn.addEventListener('click', cancelInstall);
       var startBtn = $('start-ollama-btn');
       if (startBtn) startBtn.addEventListener('click', startServer);
       var stopBtn = $('stop-ollama-btn');
@@ -124,53 +138,83 @@
     }
 
     if (installBox) {
-      var job = install();
-      var active = job.status === 'preparing' || job.status === 'downloading' || job.status === 'verifying' || job.status === 'installing' || job.status === 'starting';
+      var job = installJob;
+      var active = installActive;
       var failed = job.status === 'failed';
+      var cancelled = job.status === 'cancelled';
       var done = job.status === 'completed';
       if (installed && !active && !failed && !done) { installBox.hidden = true; }
       else {
         installBox.hidden = false;
         var bar = renderBar(active ? job : null, failed);
-        var line = job.step || (failed ? 'Install failed.' : active ? 'Preparing install…' : 'Ollama is not installed.');
+        var line = job.step || (failed ? 'Install failed.' : cancelled ? 'Install cancelled.' : active ? 'Preparing install…' : 'Ollama is not installed.');
         if (failed) line += ' — ' + (failureLabel(job.failure_reason) + (job.error ? ': ' + job.error : ''));
         if (job.executable_verified) line += ' · executable ' + job.executable_verified;
         if (job.api_verified) line += ' · API ' + job.api_verified;
         var controls = (installed || done || failed) ? '' : '<button class="primary-button" id="confirm-install-ollama">DOWNLOAD &amp; INSTALL</button>';
-        if (failed) controls = '<button class="text-button" id="retry-install-ollama">RETRY</button>';
+        if (active) controls = '<button class="text-button danger" id="cancel-install-ollama-progress">CANCEL INSTALL</button>';
+        if (failed || cancelled) controls = '<button class="text-button" id="retry-install-ollama">RETRY</button>';
         installBox.innerHTML =
           '<h3>Install the Ollama runtime</h3>' +
-          '<p>VORTEX downloads the official user-space Ollama tarball into its own data directory (no root, no <code>curl | sh</code>), verifies the checksum, and serves it on loopback only.</p>' +
-          '<ol><li>Operator-confirmed, on-network download.</li><li>Checksum verified before extraction.</li><li>Executable and loopback API verified after install.</li></ol>' +
+          '<p>VORTEX resolves the official Ollama release into its own data directory (no root, no <code>curl | sh</code>), requires its published SHA-256 digest, and serves it on loopback only.</p>' +
+          '<ol><li>Operator-confirmed, on-network download.</li><li>Exact release size and mandatory published SHA-256 enforced; malformed archives are rejected.</li><li>Executable and loopback API always verified after install.</li></ol>' +
           '<p>' + esc(line) + '</p>' +
           bar + '<div class="ollama-actions">' + controls + '</div>';
         var confirmBtn = $('confirm-install-ollama');
         if (confirmBtn) confirmBtn.addEventListener('click', function () { installOllama(); });
         var retryBtn = $('retry-install-ollama');
         if (retryBtn) retryBtn.addEventListener('click', function () { installOllama(); });
+        var cancelProgressBtn = $('cancel-install-ollama-progress');
+        if (cancelProgressBtn) cancelProgressBtn.addEventListener('click', cancelInstall);
       }
     }
+  }
+
+  function suggestedRole(item) {
+    var phases = item.primary_for || [];
+    if (phases.indexOf('plan') !== -1 || phases.indexOf('tooling') !== -1) return 'planner';
+    if (phases.indexOf('fast') !== -1) return 'fast';
+    if (phases.indexOf('specialist') !== -1) return 'specialist';
+    return 'primary';
+  }
+
+  function roleSelect(item, selected, includeNone) {
+    var choices = [
+      ['primary', 'PRIMARY ANALYSIS'], ['planner', 'PLANNING ADVISORY'],
+      ['fast', 'FAST CONVERSATION'], ['specialist', 'SPECIALIST'],
+    ];
+    if (includeNone) choices.push(['none', 'DOWNLOAD ONLY']);
+    return '<select class="model-role-select" aria-label="Advisory role for ' + esc(item.name) + '">' + choices.map(function (entry) {
+      return '<option value="' + entry[0] + '"' + (entry[0] === selected ? ' selected' : '') + '>' + entry[1] + '</option>';
+    }).join('') + '</select>';
   }
 
   function downloadControls(item) {
     var job = item.download || null;
     if (!job || job.status === 'completed') {
       if (item.installed) {
-        return '<div class="model-controls"><span class="model-size">installed</span><button class="text-button" data-remove-model="' + esc(item.installed_name || item.name) + '">REMOVE</button></div>';
+        var active = item.active_roles || [];
+        var activeText = active.length ? 'ACTIVE: ' + active.join(' · ') : 'INSTALLED · NOT ASSIGNED';
+        return '<div class="model-meta model-role-state">' + esc(activeText) + '</div><div class="model-controls role-controls">' +
+          roleSelect(item, active[0] || suggestedRole(item), false) +
+          '<button class="secondary-button" data-activate-model="' + esc(item.installed_name || item.name) + '">USE FOR ROLE</button>' +
+          '<button class="text-button" data-remove-model="' + esc(item.installed_name || item.name) + '">REMOVE</button></div>';
       }
-      return '<div class="model-controls"><button class="primary-button" data-pull-model="' + esc(item.name) + '">DOWNLOAD</button>' + (item.approx_size_gb != null ? '<span class="model-size">~' + esc(item.approx_size_gb) + ' GB</span>' : '') + '</div>';
+      return '<div class="model-controls role-controls">' + roleSelect(item, suggestedRole(item), true) +
+        '<button class="primary-button" data-pull-model="' + esc(item.name) + '">DOWNLOAD &amp; USE</button>' +
+        (item.approx_size_gb != null ? '<span class="model-size">~' + esc(item.approx_size_gb) + ' GB</span>' : '') + '</div>';
     }
     if (job.status === 'failed') {
       return '<div class="model-meta" style="color:var(--red)">' + esc(failureLabel(job.failure_reason)) + (job.error ? ' · ' + esc(job.error) : '') + '</div>' +
-        '<div class="model-controls"><button class="text-button" data-pull-model="' + esc(item.name) + '">RETRY</button></div>';
+        '<div class="model-controls role-controls">' + roleSelect(item, job.requested_role || suggestedRole(item), true) + '<button class="text-button" data-pull-model="' + esc(item.name) + '">RETRY</button></div>';
     }
     if (job.status === 'cancelled') {
       return '<div class="model-meta">download cancelled</div>' +
-        '<div class="model-controls"><button class="text-button" data-pull-model="' + esc(item.name) + '">RETRY</button></div>';
+        '<div class="model-controls role-controls">' + roleSelect(item, job.requested_role || suggestedRole(item), true) + '<button class="text-button" data-pull-model="' + esc(item.name) + '">RETRY</button></div>';
     }
     var active = job.status === 'preparing' || job.status === 'downloading' || job.status === 'verifying' || job.status === 'cancelling';
     if (!active) {
-      return '<div class="model-controls"><button class="primary-button" data-pull-model="' + esc(item.name) + '">DOWNLOAD</button>' + (item.approx_size_gb != null ? '<span class="model-size">~' + esc(item.approx_size_gb) + ' GB</span>' : '') + '</div>';
+      return '<div class="model-controls role-controls">' + roleSelect(item, job.requested_role || suggestedRole(item), true) + '<button class="primary-button" data-pull-model="' + esc(item.name) + '">DOWNLOAD &amp; USE</button>' + (item.approx_size_gb != null ? '<span class="model-size">~' + esc(item.approx_size_gb) + ' GB</span>' : '') + '</div>';
     }
     var statusLine = (job.status === 'verifying' ? 'verifying…' : (job.last_status || job.status)) +
       (job.step && job.status === 'verifying' ? ' · ' + job.step : '');
@@ -201,16 +245,28 @@
         downloadControls(item) + '</article>';
     });
     var extraCards = extras.map(function (item) {
+      var active = item.active_roles || [];
       return '<article class="model-card installed"><span class="badge badge-green">INSTALLED</span>' +
         '<h3>' + esc(item.name) + '</h3>' +
-        '<div class="model-meta">outside curated catalog</div>' +
+        '<div class="model-meta">outside curated catalog · ' + esc(active.length ? 'ACTIVE: ' + active.join(' · ') : 'NOT ASSIGNED') + '</div>' +
         '<p>' + esc(item.description || 'Installed on this host.') + '</p>' +
-        '<div class="model-controls"><button class="text-button" data-remove-model="' + esc(item.name) + '">REMOVE</button></div></article>';
+        '<div class="model-controls role-controls">' + roleSelect(item, active[0] || 'primary', false) +
+        '<button class="secondary-button" data-activate-model="' + esc(item.name) + '">USE FOR ROLE</button>' +
+        '<button class="text-button" data-remove-model="' + esc(item.name) + '">REMOVE</button></div></article>';
     });
     grid.innerHTML = cards.join('') + extraCards.join('');
 
     grid.querySelectorAll('[data-pull-model]').forEach(function (btn) {
-      btn.addEventListener('click', function () { pullModel(btn.dataset.pullModel); });
+      btn.addEventListener('click', function () {
+        var select = btn.parentElement && btn.parentElement.querySelector('.model-role-select');
+        pullModel(btn.dataset.pullModel, select ? select.value : 'none');
+      });
+    });
+    grid.querySelectorAll('[data-activate-model]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var select = btn.parentElement && btn.parentElement.querySelector('.model-role-select');
+        activateModel(btn.dataset.activateModel, select ? select.value : 'primary');
+      });
     });
     grid.querySelectorAll('[data-cancel-model]').forEach(function (btn) {
       btn.addEventListener('click', function () { cancelDownload(btn.dataset.cancelModel); });
@@ -226,13 +282,13 @@
     var jobs = activeJobs();
     var names = Object.keys(jobs);
     var inst = install();
-    var installing = inst.status === 'preparing' || inst.status === 'downloading' || inst.status === 'verifying' || inst.status === 'installing' || inst.status === 'starting';
+    var installing = inst.status === 'preparing' || inst.status === 'downloading' || inst.status === 'verifying' || inst.status === 'installing' || inst.status === 'starting' || inst.status === 'cancelling';
     if (!names.length && !installing) { strip.hidden = true; strip.innerHTML = ''; return; }
     strip.hidden = false;
     var parts = [];
     if (installing) {
       var pct = measurable(inst) ? Math.round(Number(inst.percent) || 0) + '%' : '…';
-      parts.push('<span class="spinner"></span> installing Ollama ' + pct + (measurable(inst) ? ' · ' + fmtBytes(inst.downloaded_bytes) : ''));
+      parts.push('<span class="spinner"></span> installing Ollama ' + pct + (measurable(inst) ? ' · ' + fmtBytes(inst.downloaded_bytes) : '') + ' <button class="text-button danger" data-cancel-install-strip>CANCEL</button>');
     }
     names.forEach(function (name) {
       var job = jobs[name];
@@ -243,6 +299,7 @@
     strip.querySelectorAll('[data-cancel-strip]').forEach(function (btn) {
       btn.addEventListener('click', function () { cancelDownload(btn.dataset.cancelStrip); });
     });
+    strip.querySelector('[data-cancel-install-strip]')?.addEventListener('click', cancelInstall);
   }
 
   // Compact local-AI panel rendered inside the Agents view so the operator can
@@ -261,13 +318,13 @@
     var running = server.state === 'running';
     var apiState = runtime.api_state || 'unknown';
     var installJob = runtime.install || {};
-    var installActive = installJob.status === 'preparing' || installJob.status === 'downloading' || installJob.status === 'verifying' || installJob.status === 'installing' || installJob.status === 'starting';
+    var installActive = installJob.status === 'preparing' || installJob.status === 'downloading' || installJob.status === 'verifying' || installJob.status === 'installing' || installJob.status === 'starting' || installJob.status === 'cancelling';
 
     var rows = [];
     var runtimeAction = '';
     var runtimeBadge = installed ? '<span class="badge badge-green">INSTALLED</span>' : '<span class="badge badge-muted">NOT INSTALLED</span>';
     if (installActive) {
-      runtimeAction = '<span class="spinner"></span><span class="form-note" style="margin:0">' + esc(installJob.step || 'Installing…') + '</span>';
+      runtimeAction = '<span class="spinner"></span><span class="form-note" style="margin:0">' + esc(installJob.step || 'Installing…') + '</span><button class="text-button danger" data-local-ai="cancel-install">CANCEL</button>';
     } else if (!installed) {
       runtimeAction = '<button class="primary-button" data-local-ai="install">INSTALL OLLAMA</button>';
     } else if (!running) {
@@ -275,7 +332,7 @@
     } else {
       runtimeAction = '<button class="text-button" data-local-ai="stop">STOP SERVICE</button>';
     }
-    rows.push('<div class="dep-row"><div><strong>Ollama — local model runtime</strong><small>runtime · loopback only · ' + esc(apiState) + '</small></div>' + runtimeBadge + runtimeAction + '</div>');
+    rows.push('<div class="dep-row"><div><strong>Ollama — local model runtime</strong><small>runtime · loopback only · ' + esc(apiState) + '</small></div>' + runtimeBadge + '<div class="dep-controls">' + runtimeAction + '</div></div>');
 
     var items = (modelsState.catalog && modelsState.catalog.items) || [];
     items.forEach(function (item) {
@@ -284,15 +341,16 @@
       var job = item.download || null;
       var active = job && (job.status === 'preparing' || job.status === 'downloading' || job.status === 'verifying' || job.status === 'cancelling');
       if (item.installed) {
-        controls = '<button class="text-button" data-local-ai-remove="' + esc(item.installed_name || item.name) + '">REMOVE</button>';
+        var activeRoles = item.active_roles || [];
+        controls = '<span class="form-note" style="margin:0">' + esc(activeRoles.length ? 'active: ' + activeRoles.join(' · ') : 'not assigned') + '</span><button class="text-button" data-local-ai-remove="' + esc(item.installed_name || item.name) + '">REMOVE</button>';
       } else if (active) {
         controls = '<span class="spinner"></span><span class="form-note" style="margin:0">' + esc(job.status) + '</span>';
       } else if (!installed || !running) {
         controls = '<span class="form-note" style="margin:0">install &amp; start Ollama first</span>';
       } else {
-        controls = '<button class="primary-button" data-local-ai-pull="' + esc(item.name) + '">DOWNLOAD</button>';
+        controls = '<button class="primary-button" data-local-ai-pull="' + esc(item.name) + '">DOWNLOAD &amp; USE</button>';
       }
-      rows.push('<div class="dep-row"><div><strong>' + esc(item.label || item.name) + '</strong><small>' + esc(item.family || '') + ' · ' + esc(item.name) + (item.approx_size_gb != null ? ' · ~' + esc(item.approx_size_gb) + ' GB' : '') + '</small></div>' + badge + controls + '</div>');
+      rows.push('<div class="dep-row"><div><strong>' + esc(item.label || item.name) + '</strong><small>' + esc(item.family || '') + ' · ' + esc(item.name) + (item.approx_size_gb != null ? ' · ~' + esc(item.approx_size_gb) + ' GB' : '') + '</small></div>' + badge + '<div class="dep-controls">' + controls + '</div></div>');
     });
 
     box.innerHTML = rows.join('');
@@ -300,12 +358,16 @@
       btn.addEventListener('click', function () {
         var action = btn.dataset.localAi;
         if (action === 'install') installOllama();
+        else if (action === 'cancel-install') cancelInstall();
         else if (action === 'start') startServer();
         else if (action === 'stop') stopServer();
       });
     });
     box.querySelectorAll('[data-local-ai-pull]').forEach(function (btn) {
-      btn.addEventListener('click', function () { pullModel(btn.dataset.localAiPull); });
+      btn.addEventListener('click', function () {
+        var item = ((modelsState.catalog && modelsState.catalog.items) || []).find(function (candidate) { return candidate.name === btn.dataset.localAiPull; });
+        pullModel(btn.dataset.localAiPull, item ? suggestedRole(item) : 'primary');
+      });
     });
     box.querySelectorAll('[data-local-ai-remove]').forEach(function (btn) {
       btn.addEventListener('click', function () { removeModel(btn.dataset.localAiRemove); });
@@ -348,9 +410,20 @@
   async function installOllama() {
     if (modelsState.busy.install) return;
     setBusy('install', true);
-    toast('Starting the operator-confirmed Ollama download…');
+    toast('Preparing the operator-confirmed Ollama install…');
     try {
-      await api('/api/ollama/install', { method: 'POST', body: { confirm: true } });
+      var context = (typeof state === 'object' && state) ? state : {};
+      var result = await api('/api/ollama/install', {
+        method: 'POST',
+        body: { confirm: true, cwd: context.doctor && context.doctor.cwd, conversation_id: context.conversationId },
+      });
+      if (result.planned) {
+        if (typeof window.showDependencyPlan !== 'function' || !window.showDependencyPlan(result)) {
+          throw new Error('Ollama needs the reviewed zstd prerequisite, but its installation plan could not be displayed.');
+        }
+        toast('Ollama needs zstd first. Approve the prepared secure install, then retry Ollama.');
+        return;
+      }
       await loadModels();
     } catch (e) {
       toast(e.message, true);
@@ -358,6 +431,14 @@
     } finally {
       setBusy('install', false);
     }
+  }
+
+  async function cancelInstall() {
+    try {
+      await api('/api/ollama/install/cancel', { method: 'POST', body: {} });
+      toast('Cancelling the Ollama install…');
+      await loadModels();
+    } catch (e) { toast(e.message, true); }
   }
 
   async function startServer() {
@@ -376,20 +457,38 @@
     } catch (e) { toast(e.message, true); }
   }
 
-  async function pullModel(name) {
+  async function pullModel(name, role) {
     name = String(name || '').trim();
+    role = String(role || 'none');
     if (!name) { toast('Enter a model name such as phi4-mini:3.8b first.', true); return; }
     if (modelsState.busy['pull:' + name]) return;
     setBusy('pull:' + name, true);
-    toast('Downloading ' + name + '…');
+    toast('Downloading ' + name + (role === 'none' ? '…' : ' for ' + role + ' advisory work…'));
     try {
-      await api('/api/ollama/models/pull', { method: 'POST', body: { name: name } });
+      await api('/api/ollama/models/pull', { method: 'POST', body: { name: name, role: role } });
       await loadModels();
     } catch (e) {
       toast(e.message, true);
       await loadModels();
     } finally {
       setBusy('pull:' + name, false);
+    }
+  }
+
+  async function activateModel(name, role) {
+    name = String(name || '').trim();
+    role = String(role || '').trim();
+    if (!name || !role || modelsState.busy['activate:' + name]) return;
+    setBusy('activate:' + name, true);
+    try {
+      var data = await api('/api/ollama/models/activate', { method: 'POST', body: { name: name, role: role } });
+      var preference = data.preference || {};
+      toast((preference.model || name) + ' is now active for ' + (preference.role || role) + ' advisory work.');
+      await loadModels();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      setBusy('activate:' + name, false);
     }
   }
 
@@ -429,14 +528,14 @@
     if (pull && !pull._bound) {
       pull._bound = true;
       pull.addEventListener('click', function () {
-        pullModel(($('model-name-input') || {}).value || '');
+        pullModel(($('model-name-input') || {}).value || '', (($('model-role-input') || {}).value || 'primary'));
       });
     }
     var input = $('model-name-input');
     if (input && !input._bound) {
       input._bound = true;
       input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') pullModel(input.value);
+        if (e.key === 'Enter') pullModel(input.value, (($('model-role-input') || {}).value || 'primary'));
       });
     }
   }

@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 from pathlib import Path
 
 from backend.mobile.apkbuild import build_apk, sync_payload
@@ -76,11 +77,66 @@ class ApkBuildTests(unittest.TestCase):
                 self.assertIn(required, names, required)
             dex = zf.read("classes.dex")
             self.assertTrue(dex.startswith(b"dex\n035\x00"))
-            self.assertIn(b"http://192.0.2.8:4173/", dex)
+            self.assertIn(b"file:///android_asset/www/connect.html", dex)
+            self.assertNotIn(b"http://192.0.2.8:4173/", dex)
+            self.assertEqual(zf.read("assets/sidecar.txt"), b"http://192.0.2.8:4173/\n")
+            connect = zf.read("assets/www/connect.html").decode("utf-8")
+            self.assertIn("Sidecar capability", connect)
+            self.assertIn("vortex-token", connect)
+            self.assertIn("url.pathname !== '/'", connect)
+            self.assertIn("url.search || url.hash", connect)
+            self.assertIn("token.length > 256", connect)
+            self.assertIn("document.getElementById('t').value = ''", connect)
             license_text = zf.read("assets/LICENSE").decode("utf-8")
             self.assertIn("MIT License", license_text)
             index = zf.read("assets/www/index.html").decode("utf-8")
             self.assertIn("DOWNLOAD APK", index)
+
+    def test_apk_rejects_non_origin_or_credentialed_sidecar_urls(self):
+        for invalid in (
+            "javascript:alert(1)", "http://user:secret@example.test/",
+            "http://example.test/path", "http://example.test/?token=secret",
+            "http://example.test/#fragment", "http://bad host/",
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                build_apk(sidecar_url=invalid, output=Path(self.tmp.name) / "invalid.apk")
+
+    def test_apk_verifier_rejects_payload_tampering_and_unsigned_entries(self):
+        from backend.mobile.apkbuild import _verify_apk
+        original = Path(self.tmp.name) / "original.apk"
+        build_apk(sidecar_url="http://127.0.0.1:8765/", output=original)
+        with zipfile.ZipFile(original) as archive:
+            entries = {name: archive.read(name) for name in archive.namelist()}
+        for suffix, mutation in (
+            ("tampered", {"assets/www/app.js": entries["assets/www/app.js"] + b"\n// tampered\n"}),
+            ("unsigned", {"assets/unsigned.txt": b"not covered by the signature"}),
+        ):
+            candidate = Path(self.tmp.name) / f"{suffix}.apk"
+            with zipfile.ZipFile(candidate, "w") as archive:
+                for name, payload in (entries | mutation).items():
+                    archive.writestr(name, payload)
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(RuntimeError, "APK"):
+                _verify_apk(candidate)
+
+    def test_failed_apk_verification_preserves_last_published_build(self):
+        from backend.mobile import apkbuild
+        output = Path(self.tmp.name) / "stable.apk"
+        built = build_apk(sidecar_url="http://127.0.0.1:8765/", output=output)
+        before = output.read_bytes()
+        with mock.patch.object(apkbuild, "_verify_apk", side_effect=RuntimeError("verification fixture")):
+            with self.assertRaisesRegex(RuntimeError, "verification fixture"):
+                build_apk(sidecar_url="http://127.0.0.1:8765/", output=output)
+        self.assertEqual(output.read_bytes(), before)
+        self.assertEqual(apkbuild._sha256_file(output), built["sha256"])
+        self.assertEqual(list(output.parent.glob(".vortex-apk-build-*")), [])
+
+    def test_apk_status_does_not_follow_symlink(self):
+        from backend.mobile.apkbuild import apk_status, mobile_dir
+        victim = Path(self.tmp.name) / "not-an-apk"
+        victim.write_bytes(b"PK\x03\x04secret")
+        path = mobile_dir() / "vortex.apk"
+        path.symlink_to(victim)
+        self.assertFalse(apk_status()["built"])
 
     def test_rebuild_picks_up_frontend_changes(self):
         frontend = Path(__file__).resolve().parent.parent / "frontend" / "index.html"

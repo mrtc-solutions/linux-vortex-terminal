@@ -21,6 +21,29 @@ assert.ok(workspace.includes('if (!setup.ready) return;'), 'not-ready setup neve
 assert.ok(workspace.includes('hideFirstRun()'), 'first-run close helper is wired');
 assert.ok(workspace.includes('finally { hideFirstRun(); }') || workspace.includes('finally { hideFirstRun() }'), 'CONTINUE closes surface in finally');
 
+// Keyboard and assistive-technology basics: bypass navigation, named static
+// controls, current-view state, assertive errors, and readable secondary text.
+assert.ok(index.includes('class="skip-link" href="#main-content"') && index.includes('id="main-content" tabindex="-1"'), 'keyboard users can bypass repeated navigation');
+for (const label of ['Terminal input', 'Search conversations', 'Execution policy', 'Privacy mode', 'Developer mode', 'Offline mode', 'Lab mode', 'Host tool access']) {
+  assert.ok(index.includes(`aria-label="${label}"`), `${label} control is named`);
+}
+assert.ok(index.includes('aria-label="Close engagement form"'), 'symbol-only close control has an accessible name');
+assert.ok(app.includes("setAttribute('aria-current', 'page')"), 'active SPA navigation exposes aria-current');
+assert.ok(app.includes("setAttribute('aria-hidden', String(!active))"), 'inactive SPA views expose their hidden state');
+assert.ok(app.includes("bad ? 'alert' : 'status'") && app.includes("bad ? 'assertive' : 'polite'"), 'error toasts are announced assertively');
+const hexLuminance = value => {
+  const channels = value.match(/[0-9a-f]{2}/gi).map(channel => parseInt(channel, 16) / 255)
+    .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+};
+const contrast = (left, right) => {
+  const values = [hexLuminance(left), hexLuminance(right)].sort((a, b) => b - a);
+  return (values[0] + 0.05) / (values[1] + 0.05);
+};
+const dimColor = styles.match(/--dim:\s*(#[0-9a-f]{6})/i)[1];
+const lightestSurface = styles.match(/--surface-3:\s*(#[0-9a-f]{6})/i)[1];
+assert.ok(contrast(dimColor, lightestSurface) >= 4.5, 'small secondary text meets WCAG AA contrast on the lightest surface');
+
 // Chat bar must be focusable/labeled and submit must local-echo, reset, and
 // re-enable the SEND button in a finally block.
 assert.ok(index.includes('id="request-input"') && index.includes('aria-label="Ask VORTEX"'), 'request input is labeled');
@@ -29,6 +52,11 @@ assert.ok(workspace.includes('local-echo'), 'chat submit local-echoes the user m
 assert.ok(workspace.includes("api('/api/workspace/turn'"), 'chat submit uses the workspace turn endpoint');
 assert.ok(workspace.includes('auto_install=${deps.auto_install ? \'yes\' : \'no\'}'), 'dependency summary reports auto_install truthfully');
 assert.ok(workspace.includes("item.method === 'apt' ? 'INSTALL' : 'REVIEW'"), 'dep rows promise INSTALL only where a reviewed installer exists; unmapped items say REVIEW');
+assert.ok(index.includes('id="custom-dependency-form"') && index.includes('id="custom-dependency-name"'), 'Dependencies has an accessible manual text-entry workflow');
+assert.ok(index.includes('<option value="package">') && index.includes('<option value="ollama">') && index.includes('<option value="model">'), 'manual workflow explicitly classifies package, runtime, and model requests');
+assert.ok(workspace.includes("body: { package: name") && workspace.includes("body: { name, role }"), 'manual input routes to typed package planning or model management rather than a shell');
+assert.ok(app.includes("api('/api/dependencies/execute'") && app.includes('OPEN INSTALL TERMINAL'), 'root package plans launch the exact reviewed CLI handoff in an in-app PTY');
+assert.ok(app.includes('VORTEX never reads your password'), 'root package plan explains narrow OS-owned authentication');
 
 // Reports view is fully interactive: downloads, PREVIEW, DELETE; renaming a
 // conversation renames its reports; next steps are one-click follow-ups; a
@@ -51,7 +79,9 @@ assert.ok(index.includes('id="view-models"') && index.includes('data-view="model
 assert.ok(index.includes('assets/models.js'), 'Models view loads its dedicated module');
 assert.ok(models.includes("api('/api/ollama')"), 'models module loads runtime + catalog status');
 assert.ok(models.includes('/api/ollama/install'), 'models module can install Ollama');
+assert.ok(models.includes('/api/ollama/install/cancel'), 'models module can cancel an in-flight runtime install');
 assert.ok(models.includes('/api/ollama/models/pull'), 'models module can pull a model');
+assert.ok(models.includes('/api/ollama/models/activate'), 'models module can activate an installed model role');
 assert.ok(models.includes('/api/ollama/models/cancel'), 'models module can cancel a download');
 assert.ok(models.includes('/api/ollama/models/remove'), 'models module can remove a model');
 // The Agents view must surface the local AI runtime + model pool (Ollama and
@@ -88,6 +118,13 @@ assert.ok(workspace.includes("input.focus({ preventScroll: true })") || workspac
 assert.ok(app.includes("$('request-input').addEventListener('keydown'"), 'request input Enter is wired');
 assert.ok(workspace.includes('sendButton.disabled = false'), 'SEND button is re-enabled on failure');
 assert.ok(workspace.includes('if (planning)') && workspace.includes('planning = false'), 'chat submit is guarded against overlapping turns');
+// Long operations remain observable for the sum of command budgets, and an SSE
+// terminal event is finalized exactly once rather than rendered again after a
+// redundant fetch. PTY stream reconnects resume from the last sequence.
+assert.ok(app.includes('commandBudget + 60') && app.includes('while (Date.now() < deadline)'), 'operation watcher honors long command budgets');
+assert.ok(app.includes('if (streamed) { await finish(streamed); return; }'), 'terminal SSE result finalizes once');
+assert.ok(app.includes('/stream?since=${since}') && app.includes('Number.isSafeInteger(seq)'), 'PTY reconnect resumes and rejects duplicate/invalid sequence events');
+assert.ok(app.includes('sessionStreamRetryAt[sessionId] = Date.now() + 2000'), 'PTY stream reconnects are backoff-limited');
 
 // Unclear requests render clickable suggestion hints, local capability
 // retrieval, and completed operations render verification plus next_steps.

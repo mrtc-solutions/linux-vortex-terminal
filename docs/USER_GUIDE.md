@@ -70,8 +70,10 @@ All Python tests must print `OK`. The terminal emulator prints `PASS`.
 
 This writes `~/.local/bin/vortex` pointing at this source tree. It does
 **not** install apt packages and never asks for a sudo password. Reviewed
-package installs stay separate: VORTEX builds a plan first, then an
-administrator can execute that reviewed plan with `sudo vortex --allow-root run <plan-id>`.
+package installs stay separate: VORTEX builds a plan first, opens it in a
+managed installation PTY, performs a fresh preflight, and lets the operating
+system authenticate only the final typed mutation. Do not launch VORTEX itself
+with `sudo`.
 
 ```bash
 ./vortex install --user --json
@@ -220,11 +222,15 @@ In the UI:
 3. Review the typed argv, risk, and Guardian decision.
 4. Click **APPROVE & EXECUTE** unless policy auto-ran a low-risk local command.
 5. Read **observed** stdout in the live output pane. That is host output.
-6. Open **Dependencies** for missing tools. **INSTALL** builds an apt *plan*
-   or an operator proposal. VORTEX never silent-installs. If the reviewed plan
-   needs root, execute it separately with `sudo vortex --allow-root run <plan-id>`.
-7. When local Ollama is healthy, the plan/result views also show a **Local AI**
-   interpretation block. That text is advisory only and never authorizes execution.
+6. Open **Dependencies** and type one exact Debian package, `ollama`, or a
+   validated local `model:tag`. A package creates a reviewed apt plan; **OPEN
+   INSTALL TERMINAL** preserves that exact plan while OS authentication stays
+   outside VORTEX. Ollama/model workflows show download, verification,
+   cancellation, retry, rescan, and role-integration status. VORTEX never
+   silent-installs.
+7. When local Ollama is healthy, the plan/result views show role-aware **Local
+   AI** advisory output and explicit fallback attribution. That text never
+   authorizes execution.
 
 ## 8. Optional desktop window (Electron)
 

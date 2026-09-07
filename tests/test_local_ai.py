@@ -2,15 +2,18 @@ import io
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.dependencies import inventory, proposal_for
+from backend.dependencies import custom_package_proposal, inventory, proposal_for
 from backend.health import setup_checks
-from backend.models.router import advise, ollama_status
+from backend.models import router
+from backend.models.router import advise, choose_route, ollama_status
 from backend.vortex_backend import ExecutionManager, Store, build_plan
 from backend.workspace import Workspace
 
@@ -51,6 +54,68 @@ class LocalAiRouterTests(unittest.TestCase):
         self.assertEqual(status["recommended"]["planner"], "qwen3:4b")
         self.assertIn("mode", status["resources"])
         self.assertIn("context_tokens", status["resources"])
+
+    def test_offline_mode_keeps_loopback_local_inference_available(self):
+        def fake_json(_endpoint, path, **_kwargs):
+            if path == "/api/version":
+                return {"version": "test"}
+            if path == "/api/tags":
+                return {"models": [{"name": "phi4-mini:3.8b"}]}
+            raise AssertionError(path)
+        with patch("backend.models.router._ollama_json", side_effect=fake_json):
+            status = router.model_status({"offline": True, "ai_enabled": True, "ollama_endpoint": "http://127.0.0.1:11434"})
+        self.assertTrue(status["offline"])
+        self.assertEqual(status["local"]["state"], "healthy")
+        self.assertEqual(status["selected"], "local-ollama")
+
+    def test_exact_configured_tag_wins_before_family_fallback(self):
+        self.assertEqual(router._pick_available("phi4-mini:3.8b", ["phi4-mini:latest", "phi4-mini:3.8b"]), "phi4-mini:3.8b")
+
+    def test_variant_model_routes_to_actual_installed_tag_without_prefix_collision(self):
+        def fake_json(_endpoint, path, **_kwargs):
+            if path == "/api/version":
+                return {"version": "test"}
+            return {"models": [
+                {"name": "phi4-mini:latest", "size": 1},
+                {"name": "phi4-miniature:3.8b", "size": 1},
+            ]}
+
+        with patch("backend.models.router._ollama_json", side_effect=fake_json):
+            local = ollama_status("http://127.0.0.1:11434")
+        phi = next(item for item in local["candidates"] if item["name"] == "phi4-mini:3.8b")
+        self.assertTrue(phi["installed"])
+        self.assertEqual(phi["installed_name"], "phi4-mini:latest")
+        self.assertTrue(any(item["name"] == "phi4-miniature:3.8b" for item in local["extras"]))
+        route = choose_route(
+            "interpret evidence", phase="interpret",
+            settings={"model_primary": "phi4-mini:3.8b"},
+            status={"enabled": True, "local": local},
+        )
+        self.assertEqual(route["primary"], "phi4-mini:latest")
+
+    def test_ollama_json_rejects_oversized_response_before_reading(self):
+        class Response:
+            headers = {"Content-Length": str(router._MAX_OLLAMA_STATUS_BYTES + 1)}
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self, _size=-1):
+                raise AssertionError("announced oversized response must not be read")
+        class Opener:
+            def open(self, _request, timeout):
+                self.timeout = timeout
+                return Response()
+        with patch("backend.models.router._opener", return_value=Opener()):
+            with self.assertRaisesRegex(ValueError, "allowed size"):
+                router._ollama_json("http://127.0.0.1:11434", "/api/tags")
+
+    def test_evidence_payload_bounds_nested_observations(self):
+        payload = router.evidence_payload(
+            "request",
+            operation={"artifacts": [{"kind": "text", "observations": ["x" * 5000] * 20}]},
+        )
+        observations = payload["operation"]["artifacts"][0]["observations"]
+        self.assertEqual(len(observations), 5)
+        self.assertTrue(all(len(item) == 180 for item in observations))
 
     def test_advise_synthesizes_multi_model_responses_without_execution_claims(self):
         model_state = {
@@ -94,6 +159,104 @@ class LocalAiRouterTests(unittest.TestCase):
         self.assertEqual(len(result["responses"]), 2)
         self.assertIn("Observed command output", result["message"])
         self.assertIn("Unknowns:", result["message"])
+
+    def test_failed_primary_falls_back_to_verifier_and_labels_effective_model(self):
+        model_state = {
+            "enabled": True,
+            "local": {
+                "state": "healthy", "endpoint": "http://127.0.0.1:11434",
+                "installed_candidates": ["phi4-mini:3.8b", "qwen3:4b"],
+                "models": [{"name": "phi4-mini:3.8b"}, {"name": "qwen3:4b"}],
+                "resources": {"mode": "balanced", "max_parallel_models": 2, "context_tokens": 2048},
+                "recommended": {"analysis": "phi4-mini:3.8b", "planner": "qwen3:4b", "fast": "phi4-mini:3.8b"},
+            },
+        }
+
+        def consult(model, role, *_args):
+            if role == "primary":
+                raise TimeoutError("primary timed out")
+            return {
+                "state": "responded", "role": role, "model": model,
+                "fact_summary": "Verifier used only observed evidence.", "meaning": "Narrow result.",
+                "unknowns": "Primary response unavailable.", "next_steps": [], "caution": "Advisory only.",
+                "status_alignment": "observed-success",
+            }
+
+        operation = {"status": "succeeded", "commands": [{"display": "whoami", "stdout": "user", "status": "succeeded"}]}
+        with patch("backend.models.router.model_status", return_value=model_state), patch("backend.models.router._consult_one", side_effect=consult):
+            result = advise("interpret", operation=operation, phase="interpret", settings={})
+        self.assertEqual(result["state"], "responded")
+        self.assertTrue(result["fallback"]["used"])
+        self.assertEqual(result["fallback"]["selected_model"], "phi4-mini:3.8b")
+        self.assertEqual(result["fallback"]["effective_model"], "qwen3:4b")
+        self.assertEqual(result["synthesis"]["model"], "qwen3:4b")
+        self.assertEqual(result["route"]["strategy"], "multi-parallel")
+
+    def test_real_loopback_fake_ollama_invokes_primary_and_secondary_roles(self):
+        calls = []
+        calls_lock = threading.Lock()
+
+        class FakeOllama(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                return
+
+            def _send(self, payload):
+                raw = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                if self.path == "/api/version":
+                    return self._send({"version": "fake-e2e"})
+                if self.path == "/api/tags":
+                    return self._send({"models": [{"name": "phi4-mini:3.8b"}, {"name": "qwen3:4b"}]})
+                self.send_error(404)
+
+            def do_POST(self):
+                if self.path != "/api/chat":
+                    return self.send_error(404)
+                size = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(size))
+                user = json.loads(request["messages"][1]["content"])
+                with calls_lock:
+                    calls.append((request["model"], user["role"]))
+                self._send({"done": True, "message": {"content": json.dumps({
+                    "fact_summary": f"{user['role']} reviewed supplied evidence.",
+                    "meaning": "Only the supplied command result was considered.",
+                    "unknowns": "No broader conclusion.", "next_steps": ["Review timeline."],
+                    "caution": "Advisory only.", "status_alignment": "observed-success",
+                })}})
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+        resources = {"mode": "balanced", "max_parallel_models": 2, "context_tokens": 2048}
+        try:
+            router.invalidate_status_cache()
+            with patch("backend.models.router.hardware_profile", return_value=resources):
+                result = advise(
+                    "Interpret actual evidence", phase="interpret",
+                    operation={"status": "succeeded", "commands": [{"display": "whoami", "status": "succeeded", "stdout": "user"}]},
+                    settings={
+                        "ai_enabled": True, "offline": True, "ollama_endpoint": endpoint,
+                        "model_primary": "phi4-mini:3.8b", "model_planner": "qwen3:4b",
+                        "model_fast": "phi4-mini:3.8b", "model_specialist": "qwen3:4b",
+                        "model_max_parallel": 2,
+                    },
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+        self.assertEqual(result["state"], "responded")
+        self.assertEqual(result["route"]["strategy"], "multi-parallel")
+        self.assertCountEqual(calls, [("phi4-mini:3.8b", "primary"), ("qwen3:4b", "verifier")])
+        self.assertEqual(result["fuzzy"]["models_responded"], 2)
+        self.assertFalse(result["fallback"]["used"])
 
     def test_dependency_inventory_includes_wordlist_dataset_proposal(self):
         with patch("backend.security.scanners.discover_wordlist", return_value={"state": "absent", "path": None, "message": "No reviewed wordlist was found."}):
@@ -205,6 +368,34 @@ class LocalAiRouterTests(unittest.TestCase):
         runtime = next(item for item in data["items"] if item["id"] == "runtime:ollama")
         self.assertEqual(observed["settings"]["ollama_endpoint"], "http://127.0.0.1:11459")
         self.assertEqual(runtime["endpoint"], "http://127.0.0.1:11459")
+
+    def test_custom_package_proposal_accepts_only_exact_distro_identifiers(self):
+        proposal = custom_package_proposal("  RipGrep  ")
+        self.assertEqual(proposal["apt_package"], "ripgrep")
+        self.assertEqual(proposal["plan_request"], "install package ripgrep")
+        self.assertTrue(proposal["requires_root"])
+        for hostile in ("", "packages", "curl | sh", "foo bar", "../pkg", "http://example.test/x", "x;id", "a" * 129, "pkg:amd64:evil"):
+            with self.subTest(hostile=hostile), self.assertRaises(ValueError):
+                custom_package_proposal(hostile)
+        with self.assertRaises(ValueError):
+            custom_package_proposal(42)  # type: ignore[arg-type]
+
+    def test_explicit_custom_model_preference_routes_installed_extra(self):
+        status = {
+            "local": {
+                "state": "healthy",
+                "installed_candidates": ["phi4-mini:3.8b", "qwen3:4b"],
+                "extras": [{"name": "acme/custom-model:7b"}],
+                "resources": {"mode": "balanced", "max_parallel_models": 2},
+                "recommended": {},
+            }
+        }
+        route = choose_route(
+            "plan a safe operation", phase="plan", status=status,
+            settings={"model_planner": "acme/custom-model:7b"},
+        )
+        self.assertEqual(route["primary"], "acme/custom-model:7b")
+        self.assertEqual(route["selected"][0]["model"], "acme/custom-model:7b")
 
 
 class LocalAiIntegrationTests(unittest.TestCase):

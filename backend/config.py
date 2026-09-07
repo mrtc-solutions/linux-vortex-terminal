@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .fileio import atomic_write, exclusive_file_lock, read_owner_text
+except ImportError:  # pragma: no cover - direct module import
+    from fileio import atomic_write, exclusive_file_lock, read_owner_text  # type: ignore
+
+try:
     from security.guardian import policy_defaults
 except ImportError:
     from backend.security.guardian import policy_defaults
@@ -59,12 +64,12 @@ def _typed_value(key: str, value: Any) -> Any:
     return value
 
 
-def load_settings() -> dict[str, Any]:
+def _load_settings_unlocked() -> dict[str, Any]:
     path = settings_path()
     data = dict(DEFAULTS)
     if path.is_file():
         try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
+            loaded = json.loads(read_owner_text(path, max_bytes=256 * 1024))
             if isinstance(loaded, dict):
                 for key, value in loaded.items():
                     if key not in DEFAULTS:
@@ -99,35 +104,38 @@ def load_settings() -> dict[str, Any]:
     return data
 
 
+def load_settings() -> dict[str, Any]:
+    # Atomic replacement means readers never see partial JSON. They need no
+    # shared lock and therefore stay cheap on hot health/model paths.
+    return _load_settings_unlocked()
+
+
 def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
     _, canonical = _load_backend_paths()
-    current = load_settings()
-    for key, value in updates.items():
-        if key not in DEFAULTS:
-            raise ValueError(f"unknown setting: {key}")
-        current[key] = _typed_value(key, value)
-    if current["privacy_mode"] not in {"local", "hybrid", "cloud"}:
-        current["privacy_mode"] = "local"
-    if current["profile"] not in {"safe", "standard", "expert"}:
-        current["profile"] = "safe"
-    if current.get("ai_verbosity") not in {"brief", "balanced", "detailed"}:
-        current["ai_verbosity"] = "balanced"
-    current["model_timeout_seconds"] = max(2, min(int(current.get("model_timeout_seconds") or 12), 60))
-    current["model_max_parallel"] = max(1, min(int(current.get("model_max_parallel") or 2), 3))
-    # Safe always confirms. HTTP/settings cannot unlock medium auto-run or root.
-    current["auto_low_risk"] = current["profile"] in {"standard", "expert"}
-    current["auto_medium_risk"] = False
-    current["allow_root"] = False
-    try:
-        from models.router import DEFAULT_OLLAMA, loopback_http_endpoint
-    except ImportError:
-        from backend.models.router import DEFAULT_OLLAMA, loopback_http_endpoint
-    canonical_endpoint = loopback_http_endpoint(str(current.get("ollama_endpoint") or ""), default="")
-    current["ollama_endpoint"] = canonical_endpoint or DEFAULT_OLLAMA
     path = settings_path()
-    path.write_text(canonical(current), encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
-    return current
+    with exclusive_file_lock(path):
+        current = _load_settings_unlocked()
+        for key, value in updates.items():
+            if key not in DEFAULTS:
+                raise ValueError(f"unknown setting: {key}")
+            current[key] = _typed_value(key, value)
+        if current["privacy_mode"] not in {"local", "hybrid", "cloud"}:
+            current["privacy_mode"] = "local"
+        if current["profile"] not in {"safe", "standard", "expert"}:
+            current["profile"] = "safe"
+        if current.get("ai_verbosity") not in {"brief", "balanced", "detailed"}:
+            current["ai_verbosity"] = "balanced"
+        current["model_timeout_seconds"] = max(2, min(int(current.get("model_timeout_seconds") or 12), 60))
+        current["model_max_parallel"] = max(1, min(int(current.get("model_max_parallel") or 2), 3))
+        # Safe always confirms. HTTP/settings cannot unlock medium auto-run or root.
+        current["auto_low_risk"] = current["profile"] in {"standard", "expert"}
+        current["auto_medium_risk"] = False
+        current["allow_root"] = False
+        try:
+            from models.router import DEFAULT_OLLAMA, loopback_http_endpoint
+        except ImportError:
+            from backend.models.router import DEFAULT_OLLAMA, loopback_http_endpoint
+        canonical_endpoint = loopback_http_endpoint(str(current.get("ollama_endpoint") or ""), default="")
+        current["ollama_endpoint"] = canonical_endpoint or DEFAULT_OLLAMA
+        atomic_write(path, canonical(current), mode=0o600)
+        return current

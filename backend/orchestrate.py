@@ -72,7 +72,12 @@ def compose_secondary_advisory(primary: dict[str, Any] | None, council: dict[str
     """
     primary = dict(primary or {})
     if primary.get("state") == "responded":
-        primary["fallback"] = {"used": False, "reason": "primary local model responded"}
+        # The local router may already have fallen back from a configured or
+        # failed primary to another installed advisory model. Preserve that
+        # truthful marker instead of overwriting it merely because some routed
+        # local model answered.
+        if not isinstance(primary.get("fallback"), dict):
+            primary["fallback"] = {"used": False, "reason": "a routed local model responded"}
         return primary
     council = council or {}
     consultations = list(council.get("consultations") or [])
@@ -290,6 +295,10 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
     status = operation.get("status")
     mapping = {"succeeded": "COMPLETED", "failed": "FAILED", "cancelled": "CANCELLED", "timed_out": "FAILED", "unavailable": "FAILED", "interrupted": "CANCELLED", "awaiting_confirmation": "WAITING_FOR_APPROVAL", "unknown_after_crash": "PAUSED"}
     state = mapping.get(status, "FAILED")
+    # A deliberate pause is a cancellation transport-wise, but it remains
+    # resumable in the durable task lifecycle rather than becoming CANCELLED.
+    if task.get("state") == "PAUSED" and status in {"cancelled", "interrupted"}:
+        state = "PAUSED"
     explanation = interpret_operation(plan, operation)
     result = dict(task.get("result") or {})
     episode = episode_step(plan, operation)
@@ -325,7 +334,7 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                 "body": {"markdown": markdown(operation, plan, workspace.get_task(task_id)), "status": status, "request": plan.get("request")},
             })
             workspace.add_memory("task", task_id, explanation, {"operation_id": operation.get("id")})
-    final_state = "REPLANNING" if objective.get("replan") and not objective.get("achieved") else state
+    final_state = state if state == "PAUSED" else ("REPLANNING" if objective.get("replan") and not objective.get("achieved") else state)
     workspace.update_task(task_id, state=final_state, operation_id=operation.get("id"), result=result)
     if task.get("conversation_id") and status not in {"started", "running"}:
         extra = " Report generated." if report else ""

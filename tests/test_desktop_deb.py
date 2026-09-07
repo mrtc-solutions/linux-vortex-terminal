@@ -27,7 +27,15 @@ class DesktopDebTests(unittest.TestCase):
         os.environ.pop("VORTEX_DATA_DIR", None)
 
     def test_build_produces_real_unsigned_deb_with_live_frontend(self):
-        result = build_deb(output_dir=self.out)
+        residue = Path(__file__).resolve().parent.parent / "backend" / ".untracked-package-secret"
+        residue.write_text("must-not-ship\n", encoding="utf-8")
+        self.addCleanup(lambda: residue.unlink(missing_ok=True))
+        bash_env_marker = Path(self.tmp.name) / "bash-env-executed"
+        bash_env = Path(self.tmp.name) / "hostile-bash-env.sh"
+        bash_env.write_text(f"touch {bash_env_marker}\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"BASH_ENV": str(bash_env), "VORTEX_GPG_KEY": "must-not-be-inherited"}):
+            result = build_deb(output_dir=self.out)
+        self.assertFalse(bash_env_marker.exists(), "package builder must not inherit BASH_ENV")
         self.assertTrue(result["ok"])
         self.assertEqual(result["version"], APP_VERSION)
         self.assertFalse(result["signed"], "the package is unsigned by policy")
@@ -43,6 +51,14 @@ class DesktopDebTests(unittest.TestCase):
         extract = self.out / "extract"
         extracted = _run("dpkg-deb", "-x", str(path), str(extract))
         self.assertEqual(extracted.returncode, 0, extracted.stderr)
+        self.assertEqual(list(extract.rglob("__pycache__")), [], "developer bytecode caches must not ship")
+        self.assertEqual(list(extract.rglob("*.pyc")), [], "stale Python bytecode must not ship")
+        self.assertFalse((extract / "usr" / "share" / "vortex" / "backend" / residue.name).exists(), "untracked checkout residue must not ship")
+        # Runtime resources needed by the installed package remain available;
+        # in particular its live package builder must not point at missing files.
+        share = extract / "usr" / "share" / "vortex"
+        for relative in ("LICENSE", "NOTICE", "packaging/deb/build.sh", "packaging/deb/vortex.1", "packaging/deb/vortex.desktop"):
+            self.assertTrue((share / relative).is_file(), f"{relative} must ship for installed runtime parity")
         # The package carries the live frontend, not a stale copy.
         app_js = (extract / "usr" / "share" / "vortex" / "frontend" / "app.js").read_text(encoding="utf-8")
         self.assertIn("triggerDownload", app_js)
@@ -75,6 +91,14 @@ class DesktopDebTests(unittest.TestCase):
         self.assertEqual(status["sha256"], built["sha256"])
         self.assertEqual(status["version"], APP_VERSION)
 
+    def test_status_ignores_symlinked_package_candidate(self):
+        from backend.debbuild import desktop_dir
+        directory = desktop_dir()
+        victim = Path(self.tmp.name) / "victim.deb"
+        victim.write_bytes(b"not a package")
+        (directory / f"linux-vortex-terminal_{APP_VERSION}_all.deb").symlink_to(victim)
+        self.assertFalse(deb_status()["built"])
+
     def test_rebuild_picks_up_frontend_changes(self):
         frontend = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
         original = frontend.read_text(encoding="utf-8")
@@ -86,12 +110,22 @@ class DesktopDebTests(unittest.TestCase):
         finally:
             frontend.write_text(original, encoding="utf-8")
 
+    def test_failed_rebuild_preserves_last_verified_package(self):
+        built = build_deb(output_dir=self.out)
+        path = Path(built["path"])
+        before = path.read_bytes()
+        with mock.patch("backend.debbuild._verify_deb", side_effect=RuntimeError("verification fixture")):
+            with self.assertRaisesRegex(RuntimeError, "verification fixture"):
+                build_deb(output_dir=self.out)
+        self.assertEqual(path.read_bytes(), before, "failed staging must not replace the published package")
+        self.assertEqual(list(self.out.glob(".vortex-deb-build-*")), [], "unique staging directories must be cleaned")
+
     def test_frontend_digest_matches_live_tree(self):
         result = build_deb()
         self.assertEqual(result["frontend_digest"], frontend_digest())
 
     def test_missing_dpkg_deb_is_an_honest_error(self):
-        with mock.patch("backend.debbuild.shutil.which", return_value=None):
+        with mock.patch("backend.debbuild._trusted_tool", side_effect=RuntimeError("A trusted dpkg-deb executable is required")):
             with self.assertRaises(RuntimeError) as ctx:
                 build_deb(output_dir=self.out)
             self.assertIn("dpkg-deb", str(ctx.exception))

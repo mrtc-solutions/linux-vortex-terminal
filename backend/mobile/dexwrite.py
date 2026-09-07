@@ -2,8 +2,8 @@
 
 The class is ``io.vortex.mobile.MainActivity``. ``onCreate`` constructs a
 ``WebView``, enables JavaScript and DOM storage, attaches a ``WebViewClient``,
-and loads the sidecar URL baked in at packaging time. The DEX is rebuilt on
-every APK sync so the URL always matches the workbench that produced it.
+and loads the caller-provided startup URL. APK builds pass the bundled
+``file:///android_asset/www/connect.html`` screen; no capability is embedded.
 """
 from __future__ import annotations
 

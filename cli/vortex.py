@@ -8,19 +8,27 @@ from __future__ import annotations
 import argparse
 import datetime
 import difflib
+import termios
+import tty
 import json
 import os
 import select
 import shutil
+import sqlite3
+import subprocess
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.artifacts import ArtifactError, analyze_path
-from backend.vortex_backend import (ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, build_undo_plan, detect_context, digest, now_iso, probe_executable, command_spec, report_markdown, runtime_root, validate_cwd, plan_digest)
+from backend.fileio import read_owner_text
+from backend.vortex_backend import (ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, build_undo_plan, detect_context, digest, now_iso, probe_executable, command_spec, report_markdown, runtime_root, trusted_privilege_broker, validate_cwd, plan_digest)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps({"schema_version": 1, **value}, sort_keys=True, indent=2))
@@ -41,7 +49,15 @@ def wait_operation(store, manager, op_id):
     try:
         while True:
             op = store.get_operation(op_id)
-            if op and op['status'] not in ('started', 'running'): return op
+            if op and op['status'] not in ('started', 'running'):
+                # The durable terminal status is written just before task/report
+                # finalization. Join the owning worker so a one-shot CLI cannot
+                # exit between those two steps and strand an OBSERVING task.
+                with manager.lock:
+                    worker = manager.threads.get(op_id)
+                if worker and worker is not threading.current_thread():
+                    worker.join(timeout=10)
+                return store.get_operation(op_id) or op
             time.sleep(.15)
     except KeyboardInterrupt:
         manager.cancel(op_id)
@@ -166,63 +182,165 @@ def shell_command(shell, action, yes, as_json):
 def runtime_metadata():
     path = runtime_root() / 'sidecar.json'
     try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-        pid = int(data.get('pid', 0))
-        if pid and pid != os.getpid():
+        data = json.loads(read_owner_text(path, max_bytes=16 * 1024))
+        if not isinstance(data, dict):
+            return None
+        pid = data.get('pid')
+        port = data.get('port')
+        host = data.get('host')
+        token = data.get('token')
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+            return None
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            return None
+        if host not in {'127.0.0.1', 'localhost', '::1'}:
+            return None
+        if token is not None and (not isinstance(token, str) or len(token) > 256 or any(ord(char) < 0x20 or ord(char) == 0x7f for char in token)):
+            return None
+        if pid != os.getpid():
             try: os.kill(pid, 0)
             except OSError: return None
         return data
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, UnicodeError):
         return None
 
 
 def remote_request(metadata, route, body=None):
     host = metadata.get('host')
-    if host in ('0.0.0.0', '::', ''): host = '127.0.0.1'
-    url = f"http://{host}:{int(metadata['port'])}{route}"
+    if host not in {'127.0.0.1', 'localhost', '::1'}:
+        raise ValueError('sidecar host must be loopback')
+    port = metadata.get('port')
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError('sidecar port is invalid')
+    network_host = f'[{host}]' if ':' in host else host
+    url = f"http://{network_host}:{port}{route}"
     request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, headers={'Content-Type':'application/json', **({'X-Vortex-Token': metadata['token']} if metadata.get('token') else {})})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(request, timeout=10) as response:
-        payload = json.loads(response.read())
-    if 'error' in payload and not payload.get('ok', False): raise RuntimeError(payload['error'].get('message', 'sidecar request failed'))
+        announced = response.headers.get('Content-Length')
+        if announced:
+            try: announced_size = int(announced)
+            except (TypeError, ValueError) as exc: raise ValueError('invalid sidecar response length') from exc
+            if announced_size < 0 or announced_size > 4 * 1024 * 1024:
+                raise ValueError('sidecar response exceeds the allowed size')
+        raw = response.read(4 * 1024 * 1024 + 1)
+    if len(raw) > 4 * 1024 * 1024:
+        raise ValueError('sidecar response exceeds the allowed size')
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError('sidecar response must be a JSON object')
+    if 'error' in payload and not payload.get('ok', False):
+        error = payload.get('error')
+        raise RuntimeError(error.get('message', 'sidecar request failed') if isinstance(error, dict) else 'sidecar request failed')
     return payload
+
+
+def authorize_privileged_handoff(non_interactive=False):
+    """Let sudo authenticate on the controlling terminal without exposing input."""
+    if os.getuid() == 0:
+        return True
+    broker = trusted_privilege_broker()
+    if broker.get('state') != 'installed':
+        raise PermissionError(broker.get('reason') or 'trusted sudo is unavailable')
+    if non_interactive or not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise PermissionError('root-required plans need an interactive terminal for OS authentication')
+    print('\nVORTEX is handing privilege authentication to the operating system. It cannot read or store your password.', file=sys.stderr)
+    result = subprocess.run([broker['realpath'], '-v'], stdin=None, stdout=None, stderr=None, check=False, env={
+        key: value for key, value in os.environ.items()
+        if key in {'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM'}
+    })
+    if result.returncode != 0:
+        raise PermissionError('operating-system privilege authentication was declined or failed')
+    return True
+
+
+def rescan_installed_tools():
+    """Refresh the live sidecar when possible and persist a local fallback."""
+    metadata = runtime_metadata()
+    if metadata:
+        try:
+            return remote_request(metadata, '/api/tools/host/rescan', {})
+        except (OSError, ValueError, RuntimeError, urllib.error.URLError):
+            pass
+    from backend.tools.hostscan import invalidate_host_scan_cache, scan_host_tools
+    invalidate_host_scan_cache()
+    return {'host_tools': scan_host_tools(persist=True, use_cache=False)}
+
+
+@contextmanager
+def raw_stdin():
+    """Forward keystrokes immediately while always restoring the user's TTY."""
+    if not sys.stdin.isatty():
+        yield
+        return
+    fd = sys.stdin.fileno()
+    try:
+        previous = termios.tcgetattr(fd)
+        tty.setraw(fd)
+    except (OSError, termios.error):
+        yield
+        return
+    try:
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, previous)
 
 
 def attach_remote_session(metadata, session_id, as_json=False):
     sequence = 0
-    while True:
-        payload = remote_request(metadata, f"/api/sessions/{session_id}/events?since={sequence}")
-        for event in payload.get('events', []):
-            stream = sys.stderr if as_json else sys.stdout
-            stream.write(event.get('data', '')); stream.flush(); sequence = max(sequence, int(event.get('seq', sequence)))
-        session = payload.get('session')
-        if session and session.get('status') not in ('starting', 'running'): return session
-        readable, _, _ = select.select([sys.stdin], [], [], .05)
-        if readable:
-            data = os.read(sys.stdin.fileno(), 65536)
-            if not data:
-                remote_request(metadata, f"/api/sessions/{session_id}/kill", {}); return payload.get('session')
-            remote_request(metadata, f"/api/sessions/{session_id}/input", {'data': data.decode('utf-8', errors='replace')})
+    encoded_id = urllib.parse.quote(str(session_id), safe='')
+    last_size = None
+    with raw_stdin():
+        while True:
+            payload = remote_request(metadata, f"/api/sessions/{encoded_id}/events?since={sequence}")
+            for event in payload.get('events', []):
+                stream = sys.stderr if as_json else sys.stdout
+                stream.write(event.get('data', '')); stream.flush(); sequence = max(sequence, int(event.get('seq', sequence)))
+            session = payload.get('session')
+            if not session:
+                raise ValueError('session not found')
+            if session.get('status') not in ('starting', 'running'):
+                return session
+            size = shutil.get_terminal_size((100, 30))
+            current_size = (size.columns, size.lines)
+            if current_size != last_size:
+                remote_request(metadata, f"/api/sessions/{encoded_id}/resize", {'cols':size.columns, 'rows':size.lines})
+                last_size = current_size
+            readable, _, _ = select.select([sys.stdin], [], [], .05)
+            if readable:
+                data = os.read(sys.stdin.fileno(), 65536)
+                if not data:
+                    remote_request(metadata, f"/api/sessions/{encoded_id}/kill", {}); return payload.get('session')
+                remote_request(metadata, f"/api/sessions/{encoded_id}/input", {'data': data.decode('utf-8', errors='replace')})
 
 
 def attach_foreground_session(manager, session_id):
     sequence = 0
-    while True:
-        payload = manager.events_since(session_id, sequence)
-        for event in payload.get('events', []):
-            sys.stdout.write(event.get('data', ''))
-            sys.stdout.flush()
-            sequence = max(sequence, event.get('seq', sequence))
-        session = payload.get('session')
-        if session and session.get('status') not in ('starting', 'running'):
-            return session
-        readable, _, _ = select.select([sys.stdin], [], [], 0.05)
-        if readable:
-            data = os.read(sys.stdin.fileno(), 65536)
-            if not data:
-                manager.kill(session_id)
-                return manager.info(session_id)
-            manager.write(session_id, data.decode('utf-8', errors='replace'))
+    last_size = None
+    with raw_stdin():
+        while True:
+            payload = manager.events_since(session_id, sequence)
+            for event in payload.get('events', []):
+                sys.stdout.write(event.get('data', ''))
+                sys.stdout.flush()
+                sequence = max(sequence, event.get('seq', sequence))
+            session = payload.get('session')
+            if not session:
+                raise ValueError('session not found')
+            if session.get('status') not in ('starting', 'running'):
+                return session
+            size = shutil.get_terminal_size((100, 30))
+            current_size = (size.columns, size.lines)
+            if current_size != last_size:
+                manager.resize(session_id, size.columns, size.lines)
+                last_size = current_size
+            readable, _, _ = select.select([sys.stdin], [], [], 0.05)
+            if readable:
+                data = os.read(sys.stdin.fileno(), 65536)
+                if not data:
+                    manager.kill(session_id)
+                    return manager.info(session_id)
+                manager.write(session_id, data.decode('utf-8', errors='replace'))
 
 
 def main(argv=None):
@@ -234,7 +352,7 @@ def main(argv=None):
     parser.add_argument('--offline', action='store_true', help='disable model and outbound capabilities')
     parser.add_argument('--no-color', action='store_true', help='disable terminal color')
     parser.add_argument('--non-interactive', action='store_true')
-    parser.add_argument('--allow-root', action='store_true', help='explicitly allow one UID 0 invocation')
+    parser.add_argument('--allow-root', action='store_true', help='explicitly allow one native UID 0 invocation (do not prefix vortex with sudo)')
     parser.add_argument('--dry-run', action='store_true', help='print a plan without executing it')
     parser.add_argument('--yes', action='store_true', help='skip the interactive prompt only for a policy-valid plan')
     parser.add_argument('--format', choices=('text', 'json', 'md'), default='text', help='output format')
@@ -288,7 +406,17 @@ def main(argv=None):
     args = parser.parse_args(argv)
     args.as_json = args.as_json or args.format == 'json'
     is_natural_request = args.subcommand == '_request'
+    if os.getuid() == 0 and os.environ.get('SUDO_USER'):
+        print('vortex: do not run VORTEX itself with sudo; run `vortex run <plan-id>` as your user and VORTEX will hand only the reviewed mutation to OS authentication', file=sys.stderr)
+        return EXIT_CODES['confirmation_required']
     store = Store()
+    managers = []
+    def execution_manager(workspace=None):
+        manager = ExecutionManager(store)
+        if workspace is not None:
+            manager.workspace = workspace
+        managers.append(manager)
+        return manager
     try:
         if args.subcommand == 'doctor': emit({'doctor': detect_context()}, args.as_json); return EXIT_CODES['success']
         if args.subcommand == 'health':
@@ -306,7 +434,7 @@ def main(argv=None):
             if args.action in ('pause', 'reject'):
                 if not args.task_id:
                     raise ValueError('task id is required')
-                manager = ExecutionManager(store)
+                manager = execution_manager(workspace)
                 if args.action == 'pause':
                     task = workspace.pause_task(args.task_id, manager)
                     if not task:
@@ -351,13 +479,26 @@ def main(argv=None):
             settings['profile'] = args.profile
             settings['auto_low_risk'] = args.profile in ('standard', 'expert')
             settings['cli_yes'] = bool(args.yes)
-            result = run_turn(store, Workspace(store), ExecutionManager(store), args.request, cwd=args.cwd, engagement_id=args.engagement_id, conversation_id=None, settings=settings, confirm=bool(args.yes), approval_token=None, allow_root=bool(args.allow_root))
+            workspace = Workspace(store)
+            manager = execution_manager(workspace)
+            result = run_turn(store, workspace, manager, args.request, cwd=args.cwd, engagement_id=args.engagement_id, conversation_id=None, settings=settings, confirm=bool(args.yes), approval_token=None, allow_root=bool(args.allow_root))
+            operation = result.get('operation')
+            if operation and operation.get('id'):
+                operation = wait_operation(store, manager, operation['id'])
+                if operation.get('status') == 'awaiting_confirmation' and args.yes:
+                    operation = manager.approve_preflight(operation['id'], True, result['plan']['approval_token'], operation.get('preflight_digest'))
+                    operation = wait_operation(store, manager, operation['id'])
+                result['operation'] = operation
+                result['task'] = workspace.get_task(result['task']['id'])
             emit(result, args.as_json)
-            return 0
+            if not operation:
+                return 0
+            return {'succeeded': EXIT_CODES['success'], 'cancelled': EXIT_CODES['interrupted'], 'interrupted': EXIT_CODES['interrupted'], 'timed_out': EXIT_CODES['timeout'], 'unavailable': EXIT_CODES['unavailable'], 'awaiting_confirmation': EXIT_CODES['confirmation_required']}.get(operation.get('status'), EXIT_CODES['command_failed'])
         if args.subcommand == 'benchmark':
             from backend.benchmark import run_suite
             from backend.workspace import Workspace
-            emit({'benchmark': run_suite(store, Workspace(store), ExecutionManager(store), args.cwd)}, args.as_json); return 0
+            workspace = Workspace(store)
+            emit({'benchmark': run_suite(store, workspace, execution_manager(workspace), args.cwd)}, args.as_json); return 0
         if args.subcommand == 'palette':
             from backend.palette import run_palette
             from backend.workspace import Workspace
@@ -467,10 +608,11 @@ def main(argv=None):
                         return EXIT_CODES['success'] if result and result.get('status') == 'succeeded' else EXIT_CODES['command_failed']
                     if args.action == 'kill':
                         if not args.session_id: raise ValueError('session kill requires a session id')
-                        remote_request(metadata, f"/api/sessions/{args.session_id}/kill", {})
+                        remote_request(metadata, f"/api/sessions/{urllib.parse.quote(str(args.session_id), safe='')}/kill", {})
                         emit({'session_id': args.session_id, 'kill_requested': True}, args.as_json); return 0
                     if args.action == 'new':
-                        created = remote_request(metadata, '/api/sessions', {'name':'cli shell','cwd':args.cwd,'shell':args.shell})['session']
+                        size = shutil.get_terminal_size((100, 30))
+                        created = remote_request(metadata, '/api/sessions', {'name':'cli shell','cwd':args.cwd,'shell':args.shell,'cols':size.columns,'rows':size.lines})['session']
                         result = attach_remote_session(metadata, created['id'], args.as_json)
                         if args.as_json: emit({'session': result}, True)
                         return EXIT_CODES['success'] if result and result.get('status') == 'succeeded' else EXIT_CODES['command_failed']
@@ -481,7 +623,8 @@ def main(argv=None):
             if not sys.stdin.isatty() and not args.non_interactive:
                 raise PermissionError('session new requires an interactive TTY')
             sessions = SessionManager(store)
-            session = sessions.create(name='cli shell', cwd_raw=args.cwd, shell=args.shell)
+            size = shutil.get_terminal_size((100, 30))
+            session = sessions.create(name='cli shell', cwd_raw=args.cwd, shell=args.shell, cols=size.columns, rows=size.lines)
             if args.as_json:
                 print(json.dumps({'schema_version': 1, 'session': session}, sort_keys=True), file=sys.stderr)
             else:
@@ -536,7 +679,7 @@ def main(argv=None):
             if not args.as_json:
                 plan_text(plan)
                 if any(spec.get('privilege') == 'root-required' for spec in plan.get('commands', [])) and os.getuid() != 0:
-                    print(f"\nThis reviewed plan needs root for the final mutation. Re-run as:\n  sudo vortex --allow-root run {plan['id']}\n", file=sys.stderr)
+                    print("\nThis reviewed plan needs OS authentication for the final mutation. VORTEX stays unprivileged, runs a fresh preflight, asks again, then hands only the typed mutation to trusted sudo.\n", file=sys.stderr)
         elif args.subcommand == 'run' and ((args.plan_id is None and (args.direct_mode or args.direct)) or args.plan_id == '--'):
             direct = args.direct_mode or args.direct
             if direct and direct[0] == '--': direct = direct[1:]
@@ -582,9 +725,13 @@ def main(argv=None):
         supplied_token = getattr(args, 'approval_token', None)
         token = plan['approval_token'] if supplied_token is None else supplied_token
         if non_interactive and (not getattr(args, 'digest', None) or supplied_token is None or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
+        needs_privilege = any(spec.get('privilege') == 'root-required' for spec in plan.get('commands', []))
+        if needs_privilege and os.getuid() != 0:
+            authorize_privileged_handoff(non_interactive)
         from backend.config import load_settings as _load_settings
+        from backend.workspace import Workspace
         settings = _load_settings()
-        manager=ExecutionManager(store); op=manager.start(plan,True,token,getattr(args, 'allow_root', False), getattr(args, 'offline', False), settings=settings); op=wait_operation(store,manager,op['id'])
+        manager=execution_manager(Workspace(store)); op=manager.start(plan,True,token,getattr(args, 'allow_root', False), getattr(args, 'offline', False), settings=settings, privileged_handoff=needs_privilege); op=wait_operation(store,manager,op['id'])
         if op.get('status') == 'awaiting_confirmation':
             if not yes:
                 print('\nFresh preflight completed. Review the observed facts before approving the mutation:', file=sys.stderr)
@@ -593,9 +740,22 @@ def main(argv=None):
                 if sys.stdin.readline().strip() != 'APPROVE':
                     manager.cancel(op['id'])
                     return EXIT_CODES['confirmation_required']
+            if needs_privilege and os.getuid() != 0:
+                authorize_privileged_handoff(non_interactive)
             preflight_digest = getattr(args, 'preflight_digest', None) or op.get('preflight_digest')
             op = manager.approve_preflight(op['id'], True, token, preflight_digest)
             op = wait_operation(store, manager, op['id'])
+        if op.get('status') == 'succeeded' and any(spec.get('adapter_id') == 'linux.packages.apt' for spec in plan.get('commands', [])):
+            try:
+                scan = rescan_installed_tools()
+                op['integration'] = {'state': 'rescanned', 'host_tools': len((scan.get('host_tools') or {}).get('tools') or [])}
+                store.update_operation(op)
+                store.append_audit('dependency_tools_rescanned', {'operation_id': op['id'], **op['integration']})
+                if not args.as_json:
+                    print('[RESCANNED] verified install integrated into the host-tool inventory', file=sys.stderr)
+            except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+                op['integration'] = {'state': 'rescan_failed', 'error': str(exc)[:160]}
+                store.update_operation(op)
         if args.as_json:
             emit({'plan': plan, 'operation': op} if (is_natural_request or args.subcommand == 'run') else {'operation': op}, True)
         else: print(f"[{op['status'].upper()}] operation {op['id']}")
@@ -603,5 +763,11 @@ def main(argv=None):
     except KeyboardInterrupt: return EXIT_CODES['interrupted']
     except PermissionError as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['confirmation_required']
     except Exception as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['failure']
+    finally:
+        for manager in reversed(managers):
+            try:
+                manager.shutdown()
+            except (OSError, RuntimeError, sqlite3.Error):
+                pass
 
 if __name__ == '__main__': raise SystemExit(main())

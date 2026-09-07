@@ -161,12 +161,37 @@
     Promise.resolve(bridge.getState?.()).then(state => applyNativeState(doc, state)).catch(() => {});
   }
 
-  function bindEscapeKey(doc) {
+  function focusTrapTarget(focusables, activeElement, shiftKey) {
+    if (!focusables.length) return null;
+    const index = focusables.indexOf(activeElement);
+    if (index < 0) return shiftKey ? focusables[focusables.length - 1] : focusables[0];
+    if (shiftKey && index === 0) return focusables[focusables.length - 1];
+    if (!shiftKey && index === focusables.length - 1) return focusables[0];
+    return null;
+  }
+
+  function bindDialogKeys(doc) {
     doc.addEventListener('keydown', event => {
-      if (event.key !== 'Escape') return;
       const surfaces = Array.from(doc.querySelectorAll('[data-surface-window]')).filter(surface => !surface.hidden);
+      const activeSurface = surfaces[surfaces.length - 1];
+      if (event.key === 'Tab' && activeSurface && stateOf(activeSurface) !== MINIMIZED) {
+        const selector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+        const focusables = Array.from(activeSurface.querySelectorAll(selector)).filter(element => !element.hidden && element.getAttribute('aria-hidden') !== 'true' && (!element.getClientRects || element.getClientRects().length > 0));
+        if (!focusables.length) {
+          activeSurface.querySelector('.surface-titlebar, [role="dialog"]')?.focus({ preventScroll: true });
+          event.preventDefault();
+          return;
+        }
+        const target = focusTrapTarget(focusables, doc.activeElement, event.shiftKey);
+        if (target) {
+          target.focus({ preventScroll: true });
+          event.preventDefault();
+        }
+        return;
+      }
+      if (event.key !== 'Escape') return;
       if (surfaces.length) {
-        closeSurface(surfaces[surfaces.length - 1]);
+        closeSurface(activeSurface);
         event.preventDefault();
         return;
       }
@@ -183,12 +208,13 @@
     bindNativeWindow(doc);
     bindSurfaceWindows(doc);
     bindTerminalWindow(doc);
-    bindEscapeKey(doc);
+    bindDialogKeys(doc);
   }
 
   root.VortexWindows = Object.freeze({
     applySurfaceState,
     closeSurface,
+    focusTrapTarget,
     init,
     nextWindowState,
     showSurface

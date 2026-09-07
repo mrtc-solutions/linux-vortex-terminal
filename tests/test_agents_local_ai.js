@@ -130,7 +130,7 @@ const installedRunning = {
     const html = t.elements['agents-local-ai'].innerHTML;
     assert.ok(html.includes('data-local-ai-pull='), 'models offer DOWNLOAD once the runtime is running');
     assert.ok(!html.includes('>INSTALL OLLAMA<'), 'no install button when Ollama is present');
-    assert.ok(html.includes('>DOWNLOAD<'), 'download action is rendered');
+    assert.ok(html.includes('>DOWNLOAD &amp; USE<'), 'download-and-activate action is rendered');
   }
 
   console.log('agents local-AI panel: PASS');

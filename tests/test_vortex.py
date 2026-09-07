@@ -6,18 +6,20 @@ import sqlite3
 import tempfile
 import threading
 import time
+from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 from pathlib import Path
 
 from backend.artifacts import ArtifactError, analyze_bytes, analyze_path
 from backend.vortex_backend import sanitize_pty
-from backend.facts import parse_apt_preflight, parse_container_logs, parse_package_facts, parse_ssh_connection, parse_systemd_show
+from backend.facts import parse_apt_preflight, parse_container_logs, parse_package_facts, parse_package_observation, parse_ssh_connection, parse_systemd_show
 from backend.network import resolve_target, resolve_targets, resolution_digest
 from backend import vortex_backend as vtx_backend  # noqa: E402
 from backend.vortex_backend import (
     ExecutionManager, PolicyError, SessionManager, Store, build_plan, build_undo_plan, clear_probe_caches, command_spec,
-    apt_tools_ready, digest, make_analysis, normalize_target, now_iso, parse_package_request, parse_systemd_mutation, probe_executable, plan_digest, sanitize_pty, systemd_user_bus_state, target_in_engagement,
+    apt_tools_ready, config_root, data_root, digest, make_analysis, normalize_target, now_iso, parse_package_request, parse_systemd_mutation, probe_executable, plan_digest, runtime_root, sanitize_pty, systemd_user_bus_state, target_in_engagement, trusted_privilege_broker,
 )
 
 ALLOW_ROOT = os.geteuid() == 0
@@ -31,6 +33,175 @@ class VortexCoreTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_cli_raw_mode_restores_terminal_after_exception(self):
+        from cli import vortex as cli
+        fake_stdin = type("Input", (), {"isatty": lambda self: True, "fileno": lambda self: 7})()
+        attributes = [1, 2, 3]
+        with patch.object(cli.sys, "stdin", fake_stdin), \
+             patch.object(cli.termios, "tcgetattr", return_value=attributes), \
+             patch.object(cli.tty, "setraw") as setraw, \
+             patch.object(cli.termios, "tcsetattr") as restore:
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                with cli.raw_stdin():
+                    raise RuntimeError("boom")
+        setraw.assert_called_once_with(7)
+        restore.assert_called_once_with(7, cli.termios.TCSADRAIN, attributes)
+
+    def test_cli_runtime_metadata_rejects_non_loopback_and_symlink_state(self):
+        from cli import vortex as cli
+        runtime = Path(self.tmp.name) / "runtime-meta"
+        runtime.mkdir()
+        path = runtime / "sidecar.json"
+        valid = {"pid": os.getpid(), "host": "127.0.0.1", "port": 4545, "token": "local-token"}
+        with patch.object(cli, "runtime_root", return_value=runtime):
+            path.write_text(json.dumps({**valid, "host": "attacker.example.test"}), encoding="utf-8")
+            self.assertIsNone(cli.runtime_metadata())
+            path.write_text(json.dumps(valid), encoding="utf-8")
+            self.assertEqual(cli.runtime_metadata()["port"], 4545)
+            victim = Path(self.tmp.name) / "metadata-victim"
+            victim.write_text(json.dumps(valid), encoding="utf-8")
+            path.unlink()
+            path.symlink_to(victim)
+            self.assertIsNone(cli.runtime_metadata())
+
+    def test_cli_remote_request_rejects_non_loopback_before_network(self):
+        from cli import vortex as cli
+        with patch.object(cli.urllib.request, "build_opener") as opener:
+            with self.assertRaisesRegex(ValueError, "loopback"):
+                cli.remote_request({"host": "attacker.example.test", "port": 80}, "/api/health")
+        opener.assert_not_called()
+
+    def test_cli_remote_attach_encodes_session_and_propagates_initial_size(self):
+        from cli import vortex as cli
+        calls = []
+        event_reads = 0
+
+        def remote(_metadata, route, body=None):
+            nonlocal event_reads
+            calls.append((route, body))
+            if "/events" in route:
+                event_reads += 1
+                if event_reads == 1:
+                    return {"events": [], "session": {"status": "running"}}
+                return {"events": [], "session": {"status": "succeeded", "exit_code": 0}}
+            return {"ok": True}
+
+        with patch.object(cli, "raw_stdin", return_value=nullcontext()), \
+             patch.object(cli, "remote_request", side_effect=remote), \
+             patch.object(cli.shutil, "get_terminal_size", return_value=SimpleNamespace(columns=132, lines=43)), \
+             patch.object(cli.select, "select", return_value=([], [], [])):
+            result = cli.attach_remote_session({"port": 1}, "id/with?chars")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertTrue(all("id%2Fwith%3Fchars" in route for route, _ in calls))
+        resize = next(body for route, body in calls if route.endswith("/resize"))
+        self.assertEqual(resize, {"cols": 132, "rows": 43})
+
+    def test_cli_attach_rejects_missing_session_instead_of_spinning(self):
+        from cli import vortex as cli
+        with patch.object(cli, "raw_stdin", return_value=nullcontext()), \
+             patch.object(cli, "remote_request", return_value={"events": [], "session": None}):
+            with self.assertRaisesRegex(ValueError, "session not found"):
+                cli.attach_remote_session({"port": 1}, "missing")
+
+    def test_cli_foreground_attach_resizes_once_then_returns(self):
+        from cli import vortex as cli
+
+        class Manager:
+            def __init__(self):
+                self.reads = 0
+                self.sizes = []
+            def events_since(self, _session_id, _sequence):
+                self.reads += 1
+                return {"events": [], "session": {"status": "running" if self.reads == 1 else "succeeded"}}
+            def resize(self, session_id, cols, rows):
+                self.sizes.append((session_id, cols, rows))
+
+        manager = Manager()
+        with patch.object(cli, "raw_stdin", return_value=nullcontext()), \
+             patch.object(cli.shutil, "get_terminal_size", return_value=SimpleNamespace(columns=101, lines=37)), \
+             patch.object(cli.select, "select", return_value=([], [], [])):
+            result = cli.attach_foreground_session(manager, "session-1")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(manager.sizes, [("session-1", 101, 37)])
+
+    def test_sudo_invocation_is_rejected_before_opening_user_state(self):
+        from cli import vortex as cli
+        with patch.object(cli.os, "getuid", return_value=0), \
+             patch.dict(os.environ, {"SUDO_USER": "alice"}, clear=False), \
+             patch.object(cli, "Store", side_effect=AssertionError("Store must not open under sudo")) as store:
+            rc = cli.main(["doctor"])
+        self.assertEqual(rc, vtx_backend.EXIT_CODES["confirmation_required"])
+        store.assert_not_called()
+
+    def test_root_data_default_ignores_sudo_user_xdg_directory(self):
+        root_home = Path(self.tmp.name) / "root-home"
+        user_xdg = Path(self.tmp.name) / "user-data"
+        user_config = Path(self.tmp.name) / "user-config"
+        user_runtime = Path(self.tmp.name) / "user-runtime"
+        fake_root = type("Pw", (), {"pw_dir": str(root_home)})()
+        env = {"SUDO_USER": "alice", "XDG_DATA_HOME": str(user_xdg), "XDG_CONFIG_HOME": str(user_config), "XDG_RUNTIME_DIR": str(user_runtime)}
+        with patch.dict(os.environ, env, clear=False), \
+             patch.object(vtx_backend.os, "getuid", return_value=0), \
+             patch.object(vtx_backend.pwd, "getpwuid", return_value=fake_root):
+            for key in ("VORTEX_DATA_DIR", "VORTEX_CONFIG_DIR", "VORTEX_RUNTIME_DIR"):
+                os.environ.pop(key, None)
+            observed = data_root()
+            observed_config = config_root()
+            observed_runtime = runtime_root()
+        self.assertEqual(observed, root_home / ".local" / "share" / "vortex")
+        self.assertEqual(observed_config, root_home / ".config" / "vortex")
+        self.assertEqual(observed_runtime, observed / "runtime" / "vortex")
+        self.assertFalse(str(observed).startswith(str(user_xdg)))
+        self.assertFalse(str(observed_config).startswith(str(user_config)))
+        self.assertFalse(str(observed_runtime).startswith(str(user_runtime)))
+
+    def test_privileged_handoff_wraps_only_root_spec_in_pinned_noninteractive_sudo(self):
+        plan = build_plan(self.store, "install package git", self.tmp.name)
+        if not plan.get("commands"):
+            self.skipTest("apt tooling is unavailable")
+        spec = next(item for item in plan["commands"] if item.get("privilege") == "root-required")
+        broker = {
+            "state": "installed", "realpath": "/usr/bin/sudo", "device": 1,
+            "inode": 2, "owner_uid": 0, "mode": "0o4755", "sha256": "abc",
+        }
+        manager = ExecutionManager(self.store)
+        manager.cancel_events["op"] = threading.Event()
+        manager.privilege_brokers["op"] = dict(broker)
+        with patch.object(vtx_backend.os, "getuid", return_value=1001), \
+             patch("backend.vortex_backend.trusted_privilege_broker", return_value=dict(broker)), \
+             patch("backend.vortex_backend.subprocess.Popen", side_effect=FileNotFoundError) as popen:
+            record = manager._run_one(spec, "op")
+        self.assertEqual(record["status"], "unavailable")
+        invoked = popen.call_args.args[0]
+        self.assertEqual(invoked[:3], ["/usr/bin/sudo", "-n", "--"])
+        self.assertEqual(invoked[3:], [spec["executable_identity"]["realpath"], *spec["argv"][1:]])
+        self.assertNotIn("sudo", record["argv"])
+
+    def test_privileged_handoff_fails_closed_if_broker_identity_changes(self):
+        plan = build_plan(self.store, "install package git", self.tmp.name)
+        if not plan.get("commands"):
+            self.skipTest("apt tooling is unavailable")
+        spec = next(item for item in plan["commands"] if item.get("privilege") == "root-required")
+        manager = ExecutionManager(self.store)
+        manager.cancel_events["op"] = threading.Event()
+        manager.privilege_brokers["op"] = {"state": "installed", "realpath": "/usr/bin/sudo", "sha256": "old"}
+        with patch.object(vtx_backend.os, "getuid", return_value=1001), \
+             patch("backend.vortex_backend.trusted_privilege_broker", return_value={"state": "installed", "realpath": "/usr/bin/sudo", "sha256": "new"}), \
+             patch("backend.vortex_backend.subprocess.Popen") as popen:
+            record = manager._run_one(spec, "op")
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["termination_reason"], "privilege_broker_changed")
+        popen.assert_not_called()
+
+    def test_trusted_privilege_broker_is_fixed_root_owned_binary(self):
+        broker = trusted_privilege_broker()
+        if broker.get("state") != "installed":
+            self.skipTest("sudo is unavailable")
+        self.assertEqual(broker["owner_uid"], 0)
+        self.assertIn(broker["realpath"], {"/usr/bin/sudo", "/bin/sudo"})
+        self.assertFalse(int(broker["mode"], 8) & 0o022)
+        self.assertEqual(len(broker["sha256"]), 64)
 
     def test_executable_probe_can_skip_version_process_explicitly(self):
         executable = Path(self.tmp.name) / "version-tool"
@@ -83,8 +254,33 @@ class VortexCoreTests(unittest.TestCase):
         self.assertEqual(plan['status'], 'planned')
         self.assertEqual(plan['kind'], 'ssh_diagnostics')
         self.assertEqual(plan['commands'][0]['adapter_id'], 'linux.ssh.config')
-        self.assertEqual(plan['commands'][0]['argv'], ['ssh', '-G', '--', 'labhost'])
+        argv = plan['commands'][0]['argv']
+        self.assertEqual(argv[:4], ['ssh', '-F', '/dev/null', '-G'])
+        self.assertIn('ProxyCommand=none', argv)
+        self.assertIn('PermitLocalCommand=no', argv)
+        self.assertEqual(argv[-2:], ['--', 'labhost'])
         self.assertEqual(plan['commands'][0]['network_class'], 'no-network')
+
+    def test_external_tool_adapters_disable_ambient_command_configs(self):
+        self.store.create_engagement({
+            'id': 'safe-argv', 'created_at': now_iso(), 'expires_at': '2099-08-25T00:00:00+00:00',
+            'name': 'local fixture', 'authorization': 'test', 'targets': ['http://127.0.0.1:9/'],
+            'classes': ['reconnaissance'], 'status': 'active',
+        })
+        http_plan = build_plan(self.store, 'curl http://127.0.0.1:9/', self.tmp.name, 'safe-argv')
+        if http_plan['status'] == 'planned':
+            argv = http_plan['commands'][0]['argv']
+            self.assertEqual(argv[:2], ['curl', '--disable'])
+            self.assertIn('=http,https', argv)
+
+        git_plan = build_plan(self.store, 'show git diff', self.tmp.name)
+        if git_plan['status'] == 'planned':
+            argv = git_plan['commands'][0]['argv']
+            self.assertIn('--no-pager', argv)
+            self.assertIn('core.fsmonitor=false', argv)
+            self.assertIn('diff.external=', argv)
+            self.assertIn('--no-ext-diff', argv)
+            self.assertIn('--no-textconv', argv)
 
     def test_pty_sanitizer_keeps_sgr_and_removes_osc(self):
         value = sanitize_pty('\x1b[31mred\x1b[0m\x1b]0;malicious-title\x07\x1b[2K\n')
@@ -288,6 +484,54 @@ class VortexCoreTests(unittest.TestCase):
         self.assertTrue(target_in_engagement("https://lab.example.test:8443/other", engagement))
         self.assertFalse(target_in_engagement("https://lab.example.test:443/other", engagement))
 
+    def test_engagement_scope_supports_true_subdomains_and_cidr_without_suffix_escape(self):
+        domain_scope = {"targets": ["example.test"], "status": "active"}
+        self.assertTrue(target_in_engagement("api.example.test", domain_scope))
+        self.assertTrue(target_in_engagement("https://deep.api.example.test:9443/path", domain_scope))
+        self.assertFalse(target_in_engagement("example.test.attacker.invalid", domain_scope))
+        self.assertFalse(target_in_engagement("notexample.test", domain_scope))
+
+        cidr_scope = {"targets": ["192.0.2.0/24", "2001:db8::/48"], "status": "active"}
+        self.assertTrue(target_in_engagement("192.0.2.44", cidr_scope))
+        self.assertTrue(target_in_engagement("https://192.0.2.99:8443/", cidr_scope))
+        self.assertTrue(target_in_engagement("192.0.2.128/25", cidr_scope))
+        self.assertTrue(target_in_engagement("2001:db8::42", cidr_scope))
+        self.assertFalse(target_in_engagement("192.0.3.1", cidr_scope))
+        self.assertFalse(target_in_engagement("192.0.0.0/16", cidr_scope))
+
+    def test_explicit_url_scope_pins_scheme_and_effective_default_port(self):
+        scope = {"targets": ["https://lab.example.test/"], "status": "active"}
+        self.assertTrue(target_in_engagement("https://lab.example.test:443/other", scope))
+        self.assertFalse(target_in_engagement("http://lab.example.test/", scope))
+
+    def test_non_loopback_bind_requires_strong_capability(self):
+        vtx_backend.validate_bind_security("127.0.0.1", None)
+        vtx_backend.validate_bind_security("localhost", None)
+        vtx_backend.validate_bind_security("0.0.0.0", "x" * 32)
+        with self.assertRaises(ValueError):
+            vtx_backend.validate_bind_security("0.0.0.0", None)
+        with self.assertRaises(ValueError):
+            vtx_backend.validate_bind_security("192.0.2.10", "short")
+
+    def test_completed_session_releases_all_live_runtime_buffers(self):
+        sessions = SessionManager(self.store, idle_seconds=120)
+        try:
+            session = sessions.create(cwd_raw=self.tmp.name, command=["/bin/true"])
+            for _ in range(100):
+                record = sessions.info(session["id"])
+                if record and record["status"] != "running":
+                    break
+                time.sleep(.02)
+            self.assertEqual(record["status"], "succeeded")
+            with sessions.lock:
+                self.assertNotIn(session["id"], sessions.sessions)
+                self.assertNotIn(session["id"], sessions.events)
+                self.assertNotIn(session["id"], sessions.reader_done)
+                self.assertNotIn(session["id"], sessions.workers)
+            self.assertIsNotNone(self.store.get_session_record(session["id"]))
+        finally:
+            sessions.shutdown()
+
     def test_output_cap_terminates_unbounded_output(self):
         if not shutil.which("yes"):
             self.skipTest("yes unavailable")
@@ -304,15 +548,32 @@ class VortexCoreTests(unittest.TestCase):
         }
         plan["digest"] = plan_digest(plan)
         self.store.save_plan(plan)
-        op = ExecutionManager(self.store).start(plan, True, "cap-token", allow_root=ALLOW_ROOT)
-        for _ in range(150):
+        manager = ExecutionManager(self.store)
+        queues = []
+        real_queue = vtx_backend.queue.Queue
+
+        def make_queue(*args, **kwargs):
+            instance = real_queue(*args, **kwargs)
+            queues.append(instance)
+            return instance
+
+        try:
+            with patch.object(vtx_backend.queue, "Queue", side_effect=make_queue):
+                op = manager.start(plan, True, "cap-token", allow_root=ALLOW_ROOT)
+                for _ in range(150):
+                    result = self.store.get_operation(op["id"])
+                    if result and result["status"] not in ("started", "running"):
+                        break
+                    time.sleep(.02)
             result = self.store.get_operation(op["id"])
-            if result and result["status"] not in ("started", "running"):
-                break
-            time.sleep(.02)
-        result = self.store.get_operation(op["id"])
-        self.assertEqual(result["status"], "timed_out")
-        self.assertEqual(result["commands"][0]["termination_reason"], "output_truncated")
+            self.assertEqual(result["status"], "timed_out")
+            command = result["commands"][0]
+            self.assertEqual(command["termination_reason"], "output_truncated")
+            self.assertEqual(len(command["stdout"].encode()), 4096)
+            self.assertTrue(queues)
+            self.assertTrue(all(item.maxsize > 0 for item in queues), "producer queues must be bounded")
+        finally:
+            manager.shutdown()
 
     def test_cancellation_reaches_the_process_group(self):
         cwd = Path(self.tmp.name)
@@ -487,6 +748,70 @@ The following packages will be upgraded:
         self.assertEqual(facts['policy']['candidate'], '1:2.39.2')
         self.assertEqual(facts['preflight']['removed'], 0)
 
+    def test_package_postcondition_parser_requires_exact_installed_state(self):
+        installed = parse_package_observation('install ok installed 1.2.3 amd64\n', 0)
+        self.assertEqual(installed, {'state': 'installed', 'installed': True, 'version': '1.2.3', 'architecture': 'amd64'})
+        self.assertEqual(parse_package_observation('no packages found', 1)['state'], 'absent')
+        self.assertEqual(parse_package_observation('surprising success', 0)['state'], 'unexpected_output')
+        results = [{
+            'executable': 'dpkg-query', 'argv': ['dpkg-query', '-W'],
+            'stdout': 'install ok installed 1.2.3 amd64\n', 'stderr': '',
+            'exit_code': 0, 'status': 'succeeded', 'package_observation': 'after',
+            'expected_package_state': 'installed',
+        }]
+        facts = parse_package_facts(results)
+        self.assertTrue(facts['verification']['verified'])
+        self.assertEqual(facts['verification']['version'], '1.2.3')
+
+    def test_package_preflight_gate_uses_root_mutation_not_trailing_verifier(self):
+        manager = ExecutionManager(self.store)
+        install = build_plan(self.store, "install package git", self.tmp.name)
+        self.assertEqual(install["status"], "planned")
+        install_op = {"commands": [{
+            "executable": "apt-get", "argv": ["apt-get", "-s", "--no-remove", "install", "git"],
+            "stdout": "Remv obsolete [1.0]\n0 upgraded, 1 newly installed, 1 to remove and 0 not upgraded.\n",
+            "stderr": "", "exit_code": 0, "status": "succeeded",
+        }]}
+        self.assertIn("reported removals", manager._preflight_gate(install, install_op))
+
+        remove = build_plan(self.store, "remove package git", self.tmp.name)
+        self.assertEqual(remove["status"], "planned")
+        remove_op = {"commands": [{
+            "executable": "apt-get", "argv": ["apt-get", "-s", "remove", "git"],
+            "stdout": "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n",
+            "stderr": "", "exit_code": 0, "status": "succeeded",
+        }]}
+        self.assertIn("no package removal", manager._preflight_gate(remove, remove_op))
+
+    def test_execution_fails_when_package_or_dpkg_postcondition_is_not_met(self):
+        for expected_key, stdout, reason in (
+            ("expected_package_state", "unexpected successful output\n", "package_verification_failed"),
+            ("expected_dpkg_state", "Packages are only half configured\n", "dpkg_verification_failed"),
+        ):
+            with self.subTest(expected_key=expected_key):
+                plan = build_plan(self.store, "whoami", self.tmp.name)
+                spec = dict(plan["commands"][0])
+                spec.update({"adapter_id": "linux.packages.apt", expected_key: "installed" if expected_key == "expected_package_state" else "consistent"})
+                plan["commands"] = [spec]
+                operation = {
+                    "id": f"postcondition-{expected_key}", "plan_id": plan["id"], "status": "started",
+                    "commands": [], "workers": [], "settings_snapshot": {"ai_enabled": False},
+                }
+                manager = ExecutionManager(self.store)
+                manager.cancel_events[operation["id"]] = threading.Event()
+                manager._run_one = lambda _spec, _op_id, output=stdout: {
+                    "argv": _spec["argv"], "display": _spec["display"], "executable": _spec["executable"],
+                    "adapter_id": _spec["adapter_id"], "adapter_version": _spec["adapter_version"],
+                    "cwd": _spec["cwd"], "started_at": now_iso(), "stdout": output, "stderr": "",
+                    "exit_code": 0, "signal": None, "termination_reason": "completed", "status": "succeeded",
+                    "version": "test", "evidence_digest": "test",
+                }
+                manager._run(plan, operation)
+                self.assertEqual(operation["status"], "failed")
+                self.assertEqual(operation["commands"][0]["termination_reason"], reason)
+                verification_key = "package_verification" if expected_key == "expected_package_state" else "dpkg_verification"
+                self.assertFalse(operation["commands"][0][verification_key]["verified"])
+
     def test_mutation_requires_a_second_approval_after_fresh_preflight(self):
         plan = build_plan(self.store, 'restart nginx', self.tmp.name)
         if plan['status'] != 'planned':
@@ -526,7 +851,7 @@ The following packages will be upgraded:
         plan = {
             'commands': [
                 {'adapter_id':'linux.packages.apt','executable':'apt-get','argv':['apt-get','-s','--no-remove','install','git']},
-                {'adapter_id':'linux.packages.apt','executable':'apt-get','argv':['apt-get','--assume-yes','--no-remove','install','git']},
+                {'adapter_id':'linux.packages.apt','executable':'apt-get','argv':['apt-get','--assume-yes','--no-remove','install','git'],'privilege':'root-required'},
             ]
         }
         operation = {'commands': [
@@ -551,8 +876,10 @@ The following packages will be upgraded:
             self.skipTest('apt/dpkg unavailable')
         plan = build_plan(self.store, 'install package git', self.tmp.name)
         self.assertEqual(plan['status'], 'planned')
-        self.assertEqual(plan['commands'][-2]['argv'][:4], ['apt-get', '-s', '--no-remove', 'install'])
-        self.assertEqual(plan['commands'][-1]['privilege'], 'root-required')
+        self.assertEqual(plan['commands'][-3]['argv'][:4], ['apt-get', '-s', '--no-remove', 'install'])
+        self.assertEqual(plan['commands'][-2]['privilege'], 'root-required')
+        self.assertEqual(plan['commands'][-1]['expected_package_state'], 'installed')
+        self.assertEqual(plan['commands'][-1]['package_observation'], 'after')
         self.assertNotIn('--allow-unauthenticated', json.dumps(plan))
         self.assertEqual(parse_package_request('install git; touch /tmp/pwned'), ('', None))
         if os.getuid() != 0:
@@ -562,8 +889,11 @@ The following packages will be upgraded:
     def test_package_probe_failure_is_informational_but_mutation_is_not(self):
         plan = build_plan(self.store, 'install package git', self.tmp.name)
         self.assertEqual(plan['commands'][0]['executable'], 'dpkg')
-        query = next(command for command in plan['commands'] if command['executable'] == 'dpkg-query' and '-W' in command['argv'])
-        self.assertTrue(query['allow_failure'])
+        queries = [command for command in plan['commands'] if command['executable'] == 'dpkg-query' and '-W' in command['argv']]
+        self.assertEqual(queries[0]['success_exit_codes'], [0, 1])
+        self.assertEqual(queries[0]['package_observation'], 'before')
+        self.assertEqual(queries[-1]['success_exit_codes'], [0])
+        self.assertEqual(queries[-1]['expected_package_state'], 'installed')
         self.assertTrue(any(command['executable'] == 'apt-get' and '-s' in command['argv'] for command in plan['commands']))
 
     def test_systemd_user_context_is_detected_without_fallback_to_root(self):

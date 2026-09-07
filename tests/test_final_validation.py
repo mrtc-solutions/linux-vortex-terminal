@@ -64,15 +64,7 @@ class FinalValidationTests(unittest.TestCase):
         # the database directory, to avoid a transient open-DB warning.
         mgr = getattr(self, "manager", None)
         if mgr is not None:
-            for _ in range(100):
-                try:
-                    with mgr.lock:
-                        threads = list(mgr.threads.values())
-                    if not any(t.is_alive() for t in threads):
-                        break
-                except Exception:
-                    break
-                time.sleep(0.02)
+            mgr.shutdown()
         shutil.rmtree(os.environ.get("XDG_CONFIG_HOME", ""), ignore_errors=True)
         shutil.rmtree(os.environ.get("VORTEX_DATA_DIR", ""), ignore_errors=True)
         self.tmp.cleanup()
@@ -305,9 +297,12 @@ class FinalValidationTests(unittest.TestCase):
         }
         self.store.save_session(session)
         from backend.vortex_backend import SessionManager
-        SessionManager(self.store)
-        record = self.store.get_session_record("sess-dead")
-        self.assertEqual(record["status"], "unknown_after_crash")
+        sessions = SessionManager(self.store)
+        try:
+            record = self.store.get_session_record("sess-dead")
+            self.assertEqual(record["status"], "unknown_after_crash")
+        finally:
+            sessions.shutdown()
 
     def test_13_authorized_http_osint_runs_against_controlled_target(self):
         """OSINT authorized-HTTP adapter really runs against a controlled target."""
@@ -329,7 +324,8 @@ class FinalValidationTests(unittest.TestCase):
 
         srv = HTTPServer(("127.0.0.1", 0), _H)
         port = srv.server_port
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        server_thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        server_thread.start()
         try:
             url = f"http://127.0.0.1:{port}/"
             self.store.create_engagement({
@@ -359,6 +355,8 @@ class FinalValidationTests(unittest.TestCase):
             self.assertIn("X-Vortex", observed)
         finally:
             srv.shutdown()
+            srv.server_close()
+            server_thread.join(timeout=2)
 
     def test_14_failed_command_is_truthful(self):
         """A genuinely failing command is reported as FAILED, never as success."""

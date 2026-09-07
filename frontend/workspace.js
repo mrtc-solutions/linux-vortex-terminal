@@ -584,6 +584,95 @@
         ['secret-ollama', 'secret-openai', 'secret-anthropic'].forEach(id => { if ($(id)) $(id).value = ''; });
       } catch (e) { toast(e.message, true); }
     });
+    function showDependencyPlan(planned, host) {
+      if (!planned?.planned || !planned.plan) return false;
+      if (host && window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(host);
+      else if (host) host.hidden = true;
+      state.conversationId = planned.conversation?.id || state.conversationId;
+      persistConversationId(state.conversationId);
+      state.task = planned.task;
+      state.plan = planned.plan;
+      setView('overview');
+      if (origRenderPlan) origRenderPlan(planned.plan);
+      toast('Reviewed apt plan ready. Open its secure install terminal; the OS authenticates only the final mutation.');
+      return true;
+    }
+    window.showDependencyPlan = function (planned) { return showDependencyPlan(planned, null); };
+
+    function updateCustomDependencyForm() {
+      const kind = $('custom-dependency-kind')?.value || 'package';
+      const input = $('custom-dependency-name');
+      const role = $('custom-model-role-wrap');
+      const button = $('custom-dependency-submit');
+      const help = $('custom-dependency-help');
+      if (role) role.hidden = kind !== 'model';
+      if (!input || !button) return;
+      if (kind === 'ollama') {
+        input.placeholder = 'ollama';
+        if (!input.value.trim()) input.value = 'ollama';
+        button.textContent = 'INSTALL & VERIFY OLLAMA';
+        if (help) help.textContent = 'Resolves the official release, requires its published SHA-256 digest, extracts privately, verifies the executable, and binds the managed service to loopback only. Current releases also require the reviewed zstd package.';
+      } else if (kind === 'model') {
+        input.placeholder = 'e.g. llama3.2:3b or namespace/model:tag';
+        if (input.value.trim().toLowerCase() === 'ollama') input.value = '';
+        button.textContent = 'DOWNLOAD & INTEGRATE';
+        if (help) help.textContent = 'The exact model is downloaded through local Ollama. Choose its advisory role; deterministic Planner and Guardian authority never move to the model.';
+      } else {
+        input.placeholder = 'e.g. ripgrep';
+        if (input.value.trim().toLowerCase() === 'ollama') input.value = '';
+        button.textContent = 'CREATE REVIEWED PLAN';
+        if (help) help.textContent = 'Exact distro package names produce a Guardian-gated apt plan. Root approval stays in the OS/CLI; no password is captured. Rescan Tools after success to discover new executables.';
+      }
+    }
+
+    $('custom-dependency-kind')?.addEventListener('change', updateCustomDependencyForm);
+    $('custom-dependency-form')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      const host = $('dep-window');
+      const kind = $('custom-dependency-kind')?.value || 'package';
+      const name = String($('custom-dependency-name')?.value || '').trim();
+      const button = $('custom-dependency-submit');
+      if (!name) return toast('Enter one exact package, runtime, or model name.', true);
+      if (button?.disabled) return;
+      if (button) { button.disabled = true; button.textContent = kind === 'package' ? 'BUILDING PLAN…' : 'STARTING…'; }
+      try {
+        if (kind === 'package') {
+          const planned = await api('/api/dependencies/plan', { method: 'POST', body: { package: name, cwd: state.doctor?.cwd, conversation_id: state.conversationId } });
+          if (!showDependencyPlan(planned, host)) toast(planned.install?.message || 'No reviewed package plan is available.', true);
+        } else if (kind === 'ollama') {
+          if (name.toLowerCase() !== 'ollama') throw new Error('The supported managed runtime name is exactly `ollama`.');
+          const result = await api('/api/ollama/install', {
+            method: 'POST',
+            body: { confirm: true, cwd: state.doctor?.cwd, conversation_id: state.conversationId },
+          });
+          if (showDependencyPlan(result, host)) {
+            toast('Ollama needs zstd first. Approve the prepared secure install, then retry Ollama.');
+          } else {
+            if (window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(host); else host.hidden = true;
+            setView('models');
+            await window.loadModels?.();
+            toast('Ollama install started. Progress and retry controls are in Models.');
+          }
+        } else if (kind === 'model') {
+          const role = $('custom-model-role')?.value || 'primary';
+          const result = await api('/api/ollama/models/pull', { method: 'POST', body: { name, role } });
+          if (window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(host); else host.hidden = true;
+          setView('models');
+          await window.loadModels?.();
+          const integrated = result.preference ? ` It will be used for ${result.preference.role} advisory work after verification.` : '';
+          toast(`Model download started.${integrated}`);
+        } else {
+          throw new Error('Unknown dependency type.');
+        }
+      } catch (e) {
+        toast(e.message, true);
+      } finally {
+        if (button) button.disabled = false;
+        updateCustomDependencyForm();
+      }
+    });
+    updateCustomDependencyForm();
+
     async function loadDependencies() {
       const host = $('dep-window');
       const list = $('dep-list');
@@ -636,18 +725,7 @@
         $('dep-plan')?.addEventListener('click', async () => {
           try {
             const planned = await api('/api/dependencies/plan', { method: 'POST', body: { id: itemId, cwd: state.doctor?.cwd, conversation_id: state.conversationId } });
-            if (planned.planned && planned.plan) {
-              if (window.VortexWindows?.closeSurface) window.VortexWindows.closeSurface(host);
-              else host.hidden = true;
-              state.conversationId = planned.conversation?.id || state.conversationId;
-              state.task = planned.task;
-              state.plan = planned.plan;
-              setView('overview');
-              if (origRenderPlan) origRenderPlan(planned.plan);
-              toast('Reviewed apt plan ready. Approve it only if you administer this host.');
-            } else {
-              toast(planned.install?.message || 'No automatic install is available.');
-            }
+            if (!showDependencyPlan(planned, host)) toast(planned.install?.message || 'No automatic install is available.');
           } catch (e) { toast(e.message, true); }
         });
       } catch (e) { toast(e.message, true); }

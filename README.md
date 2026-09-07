@@ -7,9 +7,10 @@ Linux-native, AI-assisted authorized cybersecurity and Linux operations workbenc
 VORTEX turns a natural-language objective into an inspectable plan, checks tools
 actually installed on the host, evaluates the plan with an independent Guardian,
 runs only typed argv through one local Python authority, and records observed
-evidence. Local-AI-first advisory routing is used only when a loopback-only
-Ollama runtime and the recommended local model pool are healthy; deterministic
-planning and Guardian remain authoritative. Missing tools, agents, Docker, and
+evidence. Local-AI-first advisory routing uses verified models from a
+loopback-only Ollama runtime, with explicit primary/planner/fast/specialist roles
+and truthful deterministic fallback; planning and Guardian remain authoritative.
+Missing tools, agents, Docker, and
 models are reported as unavailable, and tools found in unsafe/user-writable
 locations are shown as present-but-blocked for review rather than silently
 trusted. Nothing is fabricated to make the UI look complete.
@@ -55,9 +56,10 @@ Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 
 Install semantics are explicit:
 - `vortex install --user` and `scripts/install-user.sh` write only a user-local launcher.
-- **Dependencies → INSTALL** builds a reviewed apt plan or shows operator steps; it never silently installs packages.
-- Root-required reviewed plans are executed separately with `sudo vortex --allow-root run <plan-id>`.
-- Ollama and model pulls stay operator-controlled; VORTEX only probes loopback, reports status, and suggests commands.
+- The **Dependencies** text entry accepts one exact Debian package, `ollama`, or a validated `model:tag`. Debian packages become persisted, Guardian-gated apt plans; **OPEN INSTALL TERMINAL** runs the exact saved plan in a managed PTY.
+- VORTEX remains unprivileged, performs a fresh preflight, asks twice, and hands only the final typed root mutation to trusted OS `sudo`; never start VORTEX itself with `sudo`.
+- The in-app Ollama installer downloads the official user-space release only after confirmation, enforces the release size and published SHA-256, extracts privately, verifies the executable and loopback API, and supports cancellation/retry. Missing `zstd` produces its reviewed apt prerequisite plan before the large download.
+- Model pulls validate the exact tag, verify it through the loopback API, and activate the selected advisory role only after success. Offline mode blocks downloads but not owner-local loopback inference.
 
 ## What is implemented and tested
 
@@ -97,14 +99,14 @@ UNAVAILABLE), or **Not implemented**.
 | Prompt-injection defense (tool output is data, never instructions) | Implemented + tested |
 | MCP server / client | Not implemented |
 | Remote graphical (VNC/RDP/noVNC) sessions | Not implemented |
-| Missing-dependency window / `vortex deps` | Implemented + tested; reviewed apt plans/operator proposals only; no silent install |
+| In-app dependency entry / `vortex deps` | Implemented + tested; exact reviewed apt plans execute through a confirmation-gated managed PTY; Ollama/models use verified managed workflows; no silent install |
 | Reports Markdown / HTML / JSON / PDF from observed operations | Implemented + tested |
 | System inventory report from doctor + tool probes | Implemented |
 | Memory, experiences, validated procedures | Implemented + tested |
 | First-run live requirement checks | Implemented; blocked runtimes show as warnings instead of false missing installs |
 | Offline mode, privacy mode, lab-mode flag | Implemented |
 | STOP ALL kill switch | Implemented + tested |
-| Local-AI-first advisory routing via Ollama loopback + model pool | Implemented + tested; advisory only, unavailable unless the loopback runtime and recommended models are healthy |
+| Local-AI advisory routing via Ollama loopback + model roles | Implemented + tested; concurrent primary/verifier calls, visible role resolution/fallback, advisory only |
 | Docker/Podman isolation probe | Implemented; UNAVAILABLE when no runtime is installed |
 | Plugin JSON manifests (no plugin code execution) | Implemented |
 | Security tests: injection, prompt-injection text, Guardian | Implemented + tested |
