@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -404,6 +405,11 @@ def choose_route(request: str, plan: dict[str, Any] | None = None, operation: di
     if resources.get("mode") == "low-resource":
         max_models = 1
     max_models = max(1, min(max_models, int(settings.get("model_max_parallel", max_models) or max_models), 3))
+    if phase == "plan":
+        # Plan advisory runs synchronously inside the conversation turn. A
+        # single primary model keeps request latency bounded; the multi-model
+        # verification still happens during post-execution interpretation.
+        max_models = 1
     preferred_fast = settings.get("model_fast") or local.get("recommended", {}).get("fast") or "llama3.2:3b"
     preferred_plan = settings.get("model_planner") or local.get("recommended", {}).get("planner") or "qwen3:4b"
     preferred_analysis = settings.get("model_primary") or local.get("recommended", {}).get("analysis") or "phi4-mini:3.8b"
@@ -748,12 +754,20 @@ def advise(request: str, *, plan: dict[str, Any] | None = None, operation: dict[
         return base
     endpoint = str(local.get("endpoint") or "")
     evidence = evidence_payload(request, plan=plan, operation=operation, phase=phase)
+    # Plan-phase advisory runs synchronously inside the conversation turn, so it
+    # is bounded more tightly than the post-execution interpret phase, which
+    # already runs on the operation worker thread.
+    consult_settings = settings
+    if phase == "plan":
+        consult_settings = dict(settings)
+        consult_settings["model_timeout_seconds"] = min(_model_timeout(settings), 6)
     responses: list[dict[str, Any]] = []
-    for item in selected:
+
+    def _consult(item: dict[str, Any]) -> dict[str, Any]:
         try:
-            responses.append(_consult_one(str(item.get("model")), str(item.get("role")), request, evidence, route, settings, endpoint))
+            return _consult_one(str(item.get("model")), str(item.get("role")), request, evidence, route, consult_settings, endpoint)
         except Exception as exc:
-            responses.append({
+            return {
                 "role": item.get("role"),
                 "model": item.get("model"),
                 "state": "unavailable",
@@ -764,7 +778,17 @@ def advise(request: str, *, plan: dict[str, Any] | None = None, operation: dict[
                 "next_steps": [],
                 "caution": "VORTEX continued without this advisory response.",
                 "status_alignment": "unknown",
-            })
+            }
+
+    if len(selected) == 1:
+        responses = [_consult(selected[0])]
+    else:
+        # Independent advisory calls run concurrently so one slow model cannot
+        # serialize the whole consultation. Results stay in route order for a
+        # deterministic synthesis.
+        with ThreadPoolExecutor(max_workers=min(len(selected), 3)) as pool:
+            futures = [pool.submit(_consult, item) for item in selected]
+            responses = [future.result() for future in futures]
     fuzzy = _fuzzy_confidence(route, responses, operation)
     synthesis = _deterministic_synthesis(route, responses, fuzzy)
     parts = [

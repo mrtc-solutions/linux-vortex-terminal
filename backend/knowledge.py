@@ -95,6 +95,17 @@ CATEGORIES: list[dict[str, Any]] = [
         "adapters": ("linux.containers.inspect", "linux.containers.logs"),
         "limit": "read-only",
     },
+    {
+        "id": "osint",
+        "label": "OSINT & engagement-scoped reconnaissance",
+        "keywords": ("osint", "sigit", "recon", "reconnaissance", "subdomain", "whois",
+                     "port scan", "reverse ip", "tech detect", "breach", "username recon",
+                     "phone", "email", "github"),
+        "examples": ("osint", "sigit services", "whois example.com", "subdomain enumeration for example.com"),
+        "adapters": ("security.amass.passive", "security.nmap.discovery", "linux.network.dns",
+                     "linux.network.whois", "security.http.headers"),
+        "limit": "engagement-gated",
+    },
 ]
 
 CATEGORY_BY_ID = {item["id"]: item for item in CATEGORIES}

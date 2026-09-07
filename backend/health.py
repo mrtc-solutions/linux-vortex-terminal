@@ -77,6 +77,16 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     required_models = [name for name, meta in MODEL_CATALOG.items() if not meta.get("optional")]
     missing_required_models = [name for name in required_models if name not in installed_candidates]
     model_pool_state = "healthy" if ollama.get("state") == "healthy" and not missing_required_models else ("warning" if installed_candidates else "unavailable")
+    # Actionable operator guidance: a missing binary, a silent service, or a
+    # healthy runtime with an incomplete pool each suggest one concrete step.
+    if ollama_binary.get("state") != "installed":
+        ollama_action = {"step": "install", "message": "Ollama binary not found — install it from the Models view (user-space, loopback-only)."}
+    elif ollama.get("state") != "healthy":
+        ollama_action = {"step": "start", "message": "Ollama is present but the loopback service did not answer — start it or verify 127.0.0.1:11434."}
+    elif missing_required_models:
+        ollama_action = {"step": "pull", "message": "Runtime healthy but core models are missing: " + ", ".join(missing_required_models) + "."}
+    else:
+        ollama_action = {"step": "ok", "message": "Runtime healthy and the recommended model pool is available."}
     data_dir = Path(store.db_path).parent
     storage = _disk_percent(data_dir)
     try:
@@ -111,6 +121,7 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
             "version": ollama.get("version") or ollama_binary.get("version"),
             "endpoint": ollama.get("endpoint"),
             "recommended_mode": recommended.get("mode"),
+            "diagnostics": ollama_action,
         },
         "local_ai": {
             "state": local_ai_state,

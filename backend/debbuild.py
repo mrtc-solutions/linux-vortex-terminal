@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 PACKAGE = "linux-vortex-terminal"
-FRONTEND_FILES = ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "styles.css")
+FRONTEND_FILES = ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "models.js", "hud.js", "styles.css")
 
 
 def repo_root() -> Path:

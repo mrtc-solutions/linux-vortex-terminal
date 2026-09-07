@@ -337,3 +337,73 @@ class LocalAiIntegrationTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["plan"]["id"], plan["id"])
         self.assertEqual(payload["operation"]["status"], "succeeded")
+
+
+class SecondaryAdvisorFallbackTests(unittest.TestCase):
+    """The agent council must act as the honest secondary layer when the primary
+    local model is unavailable. Nothing here is fabricated model output."""
+
+    def _unavailable_primary(self):
+        return {
+            "state": "unavailable",
+            "provider": "ollama",
+            "endpoint": "http://127.0.0.1:11434",
+            "message": "Local AI unavailable: connection refused. Deterministic VORTEX planning remains authoritative.",
+            "responses": [],
+            "route": {"selected": []},
+            "fuzzy": {"confidence": "unavailable", "agreement": "none", "models_responded": 0},
+            "synthesis": {"state": "unavailable", "fact_summary": "", "meaning": "", "unknowns": "Local advisory models are unavailable.", "next_steps": [], "caution": "Deterministic planning still works.", "model": None},
+        }
+
+    def test_fallback_engages_when_primary_unavailable(self):
+        from backend.agents.council import consult
+        from backend.orchestrate import compose_secondary_advisory
+
+        council = consult({"kind": "plan", "commands": [{"display": "whoami"}]}, {"id": "VTX-test"})
+        result = compose_secondary_advisory(self._unavailable_primary(), council)
+        self.assertEqual(result["state"], "fallback")
+        self.assertEqual(result["provider"], "agent-council")
+        self.assertTrue(result["fallback"]["used"])
+        self.assertEqual(result["fallback"]["primary_state"], "unavailable")
+        self.assertGreaterEqual(result["fallback"]["agents_checked"], 10)
+        agents = result["agents"]
+        self.assertGreaterEqual(len(agents), 10)
+        local = next(a for a in agents if a["id"] == "vortex-local")
+        self.assertTrue(local["healthy"])
+        self.assertEqual(local["state"], "installed")
+        for agent in agents:
+            self.assertFalse(agent["fabricated"])
+            self.assertTrue(agent["contribution"])
+        # Only the deterministic advisor contributes substantive text.
+        self.assertIn("deterministic", result["synthesis"]["caution"].lower())
+        self.assertIsNone(result["synthesis"]["model"])
+        self.assertIn("secondary", result["message"].lower())
+
+    def test_fallback_reports_missing_agents_honestly(self):
+        from backend.orchestrate import compose_secondary_advisory
+
+        result = compose_secondary_advisory(self._unavailable_primary(), {"consultations": []})
+        cai = next((a for a in result["agents"] if a["id"] == "cai"), None)
+        self.assertIsNotNone(cai)
+        self.assertEqual(cai["state"], "missing")
+        self.assertFalse(cai["healthy"])
+        self.assertIn("not installed", cai["contribution"].lower())
+        self.assertIn("UNAVAILABLE", cai["contribution"].upper())
+        # The fallback must never claim a model produced text.
+        self.assertIsNone(result["synthesis"]["model"])
+        self.assertEqual(result["synthesis"]["state"], "deterministic-fallback")
+
+    def test_no_fallback_when_primary_responded(self):
+        from backend.orchestrate import compose_secondary_advisory
+
+        primary = {
+            "state": "responded",
+            "provider": "ollama",
+            "message": "all good",
+            "route": {"selected": [{"role": "primary", "model": "phi4-mini:3.8b"}]},
+            "synthesis": {"state": "responded", "fact_summary": "x"},
+        }
+        result = compose_secondary_advisory(primary, None)
+        self.assertEqual(result["state"], "responded")
+        self.assertFalse(result["fallback"]["used"])
+        self.assertNotIn("agents", result)

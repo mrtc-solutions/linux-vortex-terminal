@@ -57,6 +57,7 @@ TOOL_CATALOG: dict[str, dict[str, Any]] = {
     "ffuf": {"family": "authorized-content-discovery", "probe": ["-V"], "role": "bounded content discovery"},
     "nikto": {"family": "authorized-assessment", "probe": ["-Version"], "role": "web server assessment"},
     "amass": {"family": "passive-osint", "probe": ["-version"], "role": "passive domain discovery"},
+    "sigit": {"family": "passive-osint", "probe": ["--version"], "role": "OSINT toolkit (interactive TUI, 14 reviewed services)"},
     "ssh": {"family": "ssh-diagnostics", "probe": ["-V"], "role": "connection diagnostics"},
     "apt-get": {"family": "packages", "probe": ["--version"], "role": "package planning and mutation"},
     "apt-cache": {"family": "packages", "probe": ["--version"], "role": "package metadata"},

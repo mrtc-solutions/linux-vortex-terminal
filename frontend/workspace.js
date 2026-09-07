@@ -81,11 +81,13 @@
       ['REWARD', task?.result?.episode?.evaluation?.reward === 0 || task?.result?.episode?.evaluation?.reward ? String(task.result.episode.evaluation.reward) : '—'],
     ];
     el.innerHTML = rows.map(([a, b]) => `<div class="context-row"><label>${esc(a)}</label><span>${esc(b)}</span></div>`).join('');
+    if (typeof window.updateAiOpsHud === 'function') window.updateAiOpsHud({ task, guardian, council, operation });
   }
 
   function renderLiveOutput(operation) {
     const el = $('live-output');
     if (!el) return;
+    if (typeof window.updateAiOpsHud === 'function') window.updateAiOpsHud({ operation });
     const commands = operation?.commands || [];
     if (!commands.length) {
       el.textContent = 'No command output yet. Approved commands stream observed stdout here.';
@@ -620,7 +622,17 @@
         const item = data.install || {};
         const commands = (item.commands || []).map(line => esc(line)).join('\n');
         const canPlan = item.method === 'apt' && item.plan_request && !item.installed;
-        detail.innerHTML = `<strong>${esc(item.title || itemId)}</strong><p>${esc(item.message || '')}</p><p>Source: ${esc(item.source || 'n/a')} · License: ${esc(item.license || 'n/a')}</p><pre>${commands || 'No command is executed by VORTEX.'}</pre>${canPlan ? `<div class="form-foot"><button class="primary-button" id="dep-plan">CREATE APT PLAN</button></div>` : '<p class="form-note">This item is operator-installed. VORTEX will not download it.</p>'}`;
+        const source = item.source || 'n/a';
+        const sourceHtml = /^https?:\/\//i.test(source)
+          ? `<a class="report-dl" href="${esc(source)}" target="_blank" rel="noopener noreferrer">${esc(source)}</a>`
+          : esc(source);
+        const isAgent = item.kind === 'agent';
+        const note = isAgent
+          ? '<p class="form-note">VORTEX cannot download or run third-party agent code — review the repository above and install it yourself, then return to the Agents view. Local AI (Ollama + models) is installed from the Agents or Models view instead.</p>'
+          : (canPlan
+            ? ''
+            : '<p class="form-note">This item is operator-installed. VORTEX will not download it.</p>');
+        detail.innerHTML = `<strong>${esc(item.title || itemId)}</strong><p>${esc(item.message || '')}</p><p>Source: ${sourceHtml} · License: ${esc(item.license || 'n/a')}</p><pre>${commands || 'No command is executed by VORTEX.'}</pre>${canPlan ? `<div class="form-foot"><button class="primary-button" id="dep-plan">CREATE APT PLAN</button></div>` : note}`;
         $('dep-plan')?.addEventListener('click', async () => {
           try {
             const planned = await api('/api/dependencies/plan', { method: 'POST', body: { id: itemId, cwd: state.doctor?.cwd, conversation_id: state.conversationId } });

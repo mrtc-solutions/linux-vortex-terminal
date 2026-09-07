@@ -40,6 +40,12 @@ class ApkBuildTests(unittest.TestCase):
         self.assertIn("index.html", result["copied"])
         self.assertTrue((dest / "www" / "index.html").is_file())
         self.assertTrue((dest / "www" / "app.js").is_file())
+        # Every script the embedded index.html references must be synced, or the
+        # offline fallback snapshot inside the APK loads a broken shell.
+        self.assertIn("models.js", result["copied"])
+        self.assertIn("hud.js", result["copied"])
+        self.assertTrue((dest / "www" / "models.js").is_file())
+        self.assertTrue((dest / "www" / "hud.js").is_file())
         self.assertTrue((dest / "LICENSE").is_file())
         self.assertIn("MIT", (dest / "LICENSE").read_text(encoding="utf-8"))
         self.assertEqual((dest / "sidecar.txt").read_text(encoding="utf-8").strip(), "http://127.0.0.1:8765/")
@@ -60,6 +66,8 @@ class ApkBuildTests(unittest.TestCase):
                 "assets/www/index.html",
                 "assets/www/app.js",
                 "assets/www/workspace.js",
+                "assets/www/models.js",
+                "assets/www/hud.js",
                 "assets/LICENSE",
                 "META-INF/MANIFEST.MF",
                 "META-INF/CERT.SF",

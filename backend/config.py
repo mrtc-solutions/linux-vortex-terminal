@@ -14,7 +14,6 @@ except ImportError:
 DEFAULTS = {
     **policy_defaults("safe"),
     "developer_mode": False,
-    "matrix": "medium",
     "ollama_endpoint": "http://127.0.0.1:11434",
     "ai_enabled": True,
     "ai_verbosity": "balanced",
