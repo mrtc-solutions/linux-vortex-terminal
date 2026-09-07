@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased — 2026-09-06
+
+Local AI lifecycle: **Install Ollama** and a **model download manager** join the
+loopback-only advisory routing, plus terminal/AI-latency work and the removal of
+the decorative rain background.
+
+- The falling-rain canvas, its renderer, timers, CSS keyframes/surfaces, and the
+  `matrix` settings default are **removed completely** (no replacement animation).
+- New **Models view** (`frontend/models.js`): runtime status, INSTALL/START/STOP,
+  curated model pool with RECOMMENDED/OPTIONAL badges, per-model
+  DOWNLOAD/RETRY/CANCEL/REMOVE + progress, an active-downloads strip, and a custom
+  `model:tag` pull input.
+- New `backend/models/manager.py` owns the operator-facing lifecycle: a
+  **user-space, checksum-verified, loopback-only** Ollama install (no root, no
+  `curl | sh`) with a full `preparing → downloading → verifying → installing →
+  completed` state machine, post-install executable/API verification, storage
+  gating, and classified failures (`permission`/`storage`/`network`); plus
+  pull/cancel/remove with shell-free argv, offline gating, explicit
+  confirmation, honest byte progress + speed/ETA, and **post-pull verification**
+  (a clean exit is never trusted without the model appearing on the loopback API).
+- New routes: `GET /api/ollama`, `POST /api/ollama/install`,
+  `POST /api/ollama/server/{start,stop}`, `POST /api/ollama/models/{pull,cancel,remove}`.
+- Terminal streaming: PTY output is coalesced to one render per animation frame,
+  session tabs/panes rebuild only on status change, and PTY resize is debounced
+  to 160 ms.
+- AI pipeline: plan-phase advisory is bounded to one primary model (≤6 s) and
+  independent consultations run concurrently, removing the previous worst-case
+  multi-model serialization during the conversation turn.
+- **Secondary agent fallback**: when the primary local model (Ollama) cannot
+  respond, the deterministic agent council is now composed as the honest
+  secondary advisory layer (`compose_secondary_advisory`). Every agent is
+  reported by its real installed/missing status and the only substantive text
+  is the deterministic advisor's commentary — no model output is ever
+  fabricated. The fallback is surfaced in both the plan and interpret phases,
+  the turn explanation, and the task result.
+- **Agents view now surfaces the local AI runtime + model pool**: the Agents
+  view gains a `LOCAL AI · LOOPBACK ONLY` panel with the real **INSTALL
+  OLLAMA / START SERVICE / STOP SERVICE** action and per-model **DOWNLOAD /
+  REMOVE** buttons (a `MODELS →` link opens the full installer). Model
+  downloads are gated until Ollama is installed and the service is running.
+  Agent install proposals are clarified: the source repository is a clickable
+  link and the window states plainly that VORTEX will not download or run
+  third-party agent code (operator-installed, license-verified by the user).
+- `backend/health.py` reports an actionable `diagnostics` step for Ollama
+  (`install` / `start` / `pull` / `ok`).
+- Fix: `POST /api/ollama/server/{start,stop}` returned the internal `_SERVER`
+  dict (live `Popen` + log `deque`) through the JSON encoder and answered
+  HTTP 500 even though the service actually started/stopped. Both routes now
+  return a JSON-safe `_server_summary()`, and the captured stdout pipe is closed
+  on stop (no per-cycle descriptor leak).
+- Fix: the Models view double-escaped install-failure/download status text
+  (TLS errors rendered as literal `&lt;…&gt;`); text is now escaped exactly once.
+- Fix: the auto-replan follow-up passed `settings=` to `ExecutionManager.start`
+  so follow-up operations keep their settings snapshot.
+
 ## 0.2.21 — 2026-08-29
 
 Desktop twin of the mobile packaging flow: **DOWNLOAD .DEB** (Settings →

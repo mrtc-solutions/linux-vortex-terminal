@@ -957,17 +957,20 @@ class SessionManager:
         return identity["realpath"]
 
     def create(self, name: str | None = None, cwd_raw: str | None = None, shell: str | None = None, cols: Any = 100, rows: Any = 30, command: list[str] | None = None) -> dict[str, Any]:
-        running = sum(1 for item in self.list() if item.get("status") == "running")
-        if running >= max(1, min(self.max_sessions, 32)):
-            raise PolicyError("too many concurrent PTY sessions")
         cwd = validate_cwd(cwd_raw)
         shell_path = self._shell_path(shell)
         cols_i, rows_i = self._size(cols, 100), self._size(rows, 30)
         argv = command or [shell_path]
         if not isinstance(argv, list) or not argv or any(not isinstance(arg, str) or "\x00" in arg for arg in argv):
             raise PolicyError("invalid session argv")
+        # A relative executable is a program identity, not shell text. Resolve
+        # it to a real installed binary exactly like the shell itself; never
+        # silently substitute the default shell for a requested command.
         if not os.path.isabs(argv[0]):
-            argv[0] = shell_path
+            identity = probe_executable(argv[0])
+            if identity.get("state") != "installed" or not identity.get("realpath"):
+                raise PolicyError("session executable is unavailable or blocked")
+            argv[0] = identity["realpath"]
         identity = probe_executable(argv[0])
         if identity.get("state") != "installed":
             raise PolicyError("session executable is unavailable or blocked")
@@ -980,22 +983,28 @@ class SessionManager:
         env = minimal_env(True)
         env.setdefault("TERM", "xterm-256color")
         env["COLUMNS"], env["LINES"] = str(cols_i), str(rows_i)
-        pid, master = pty.fork()
-        if pid == 0:
-            try:
-                os.chdir(str(cwd))
-                os.execve(argv[0], argv, env)
-            except BaseException as exc:
-                try: os.write(2, (f"Vortex session exec failed: {exc}\n").encode("utf-8", "replace"))
-                except OSError: pass
-                os._exit(127)
-        os.set_blocking(master, False)
-        session["pid"] = pid
-        session["status"] = "running"
-        session["_pid"] = pid
-        session["_master"] = master
-        session["_event_seq"] = 0
+        # The concurrency cap must be enforced atomically with the slot insert,
+        # otherwise simultaneous requests can all read a count below the cap and
+        # then each fork a PTY past the limit.
         with self.lock:
+            running = sum(1 for item in self.list() if item.get("status") == "running")
+            if running >= max(1, min(self.max_sessions, 32)):
+                raise PolicyError("too many concurrent PTY sessions")
+            pid, master = pty.fork()
+            if pid == 0:
+                try:
+                    os.chdir(str(cwd))
+                    os.execve(argv[0], argv, env)
+                except BaseException as exc:
+                    try: os.write(2, (f"Vortex session exec failed: {exc}\n").encode("utf-8", "replace"))
+                    except OSError: pass
+                    os._exit(127)
+            os.set_blocking(master, False)
+            session["pid"] = pid
+            session["status"] = "running"
+            session["_pid"] = pid
+            session["_master"] = master
+            session["_event_seq"] = 0
             self.sessions[session_id] = session
             self.events[session_id] = deque(maxlen=2000)
             self.conditions[session_id] = threading.Condition(self.lock)
@@ -1581,6 +1590,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         raise ValueError("request is too long")
     cwd = validate_cwd(cwd_raw)
     lower = request.lower()
+    try:
+        _sigit = _load("tools.sigit")
+        sigit_slug = _sigit.classify_sigit_request(lower)
+    except Exception:
+        _sigit = None
+        sigit_slug = None
     specs: list[dict[str, Any]] = []
     notes: list[str] = []
     missing: list[str] = []
@@ -2464,6 +2479,66 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         status = "rejected"
         notes.append("Vortex does not refresh the apt package index from a natural-language ask; it refuses silent third-party repository or network trust changes.")
         notes.append("Use the PTY terminal session for an operator-controlled apt-get update, or create an explicit reviewed plan.")
+    elif sigit_slug is not None:
+        kind = "osint_tool"
+        risk = "high"
+        authorization = "reviewed engagement-gated OSINT capability (SIGIT)"
+        service = None
+        try:
+            if sigit_slug != _sigit.TOOLKIT:
+                service = _sigit.SIGIT_SERVICES.get(sigit_slug)
+        except Exception:
+            service = None
+        explicit_sigit = bool(_sigit and _sigit.mentions_sigit(lower))
+        if offline:
+            status = "unavailable"
+            notes.append("OFFLINE mode blocks outbound OSINT operations; no SIGIT service was planned or run.")
+        elif not engagement:
+            if closed_engagement:
+                status = "rejected"
+                notes.append("Engagement is closed or expired; no SIGIT capability was planned.")
+            elif unknown_engagement:
+                status = "rejected"
+                notes.append("Engagement not found; no SIGIT capability was planned.")
+            else:
+                status = "clarified"
+                if service is not None:
+                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) is a reviewed, engagement-gated OSINT capability; VORTEX never fabricates its output.")
+                else:
+                    notes.append("SIGIT (Simple Information Gathering Toolkit) is reviewed as 14 engagement-gated OSINT services; VORTEX never fabricates their output.")
+                notes.append("Create an authorized engagement with an owner, authorization reference, canonical targets, limits, and an expiry before outbound OSINT work.")
+        else:
+            out_of_scope: list[str] = []
+            if service is not None and str(service.get("target_kind")) in {"hostname", "ip", "url", "hostname/ip"}:
+                targets = re.findall(r"https?://[^\s,]+|\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b", request)
+                try:
+                    normalized = [normalize_target(t.rstrip(".,")) for t in targets]
+                except PolicyError as exc:
+                    raise PolicyError(str(exc)) from exc
+                out_of_scope = [target for target in normalized if not target_in_engagement(target, engagement)]
+            try:
+                probe = _sigit.probe_sigit() if _sigit else {"state": "absent", "executable": None, "path": None}
+            except Exception:
+                probe = {"state": "absent", "executable": None, "path": None}
+            if out_of_scope:
+                status = "rejected"
+                notes.append("Target is outside the active engagement scope: " + ", ".join(out_of_scope))
+            elif probe.get("state") != "installed":
+                status = "unavailable"
+                missing.append("sigit")
+                notes.append("TOOL MISSING: sigit. The operator-installed SIGIT CLI was not found on a safe PATH; no OSINT output exists.")
+                notes.append("SIGIT is MIT-licensed and operator-installed (PyPI/manual); its interactive TUI runs inside a PTY session, never as a fabricated argv.")
+            elif service is not None and service.get("safe_adapter") and not explicit_sigit:
+                status = "clarified"
+                adapter = str(service["safe_adapter"])
+                notes.append(f"SIGIT {service['number']} {service['name']} has a reviewed equivalent adapter ({adapter}); ask for it with the exact scoped target to get a typed, approved command.")
+                notes.append("VORTEX will not auto-run SIGIT for this capability; the equivalent adapter is engagement-scoped and Guardian-authorized.")
+            else:
+                status = "clarified"
+                notes.append("SIGIT is an interactive TUI; VORTEX will not run it with a fabricated argv or fake its output.")
+                notes.append("Open a PTY terminal session and run `sigit`, then select the reviewed service by number.")
+                if service is not None:
+                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) runs inside the operator TUI; its output is produced there, not by VORTEX.")
     else:
         host_match = None
         try:
@@ -3034,6 +3109,17 @@ class ExecutionManager:
                 router = _load("models.router")
                 local_ai = router.advise(plan.get("request", ""), plan=plan, operation=op, phase="interpret", settings=settings_now)
                 advisory_workers = router.advisory_workers
+                # When the primary local model did not respond, the agent
+                # council is the honest secondary advisory layer. The task
+                # result carries the same consultation used at plan time, so
+                # the fallback stays consistent across phases and is never
+                # fabricated model output.
+                council = None
+                workspace_now = getattr(self, "workspace", None)
+                if workspace_now is not None:
+                    task_now = workspace_now.find_task_by_plan(plan["id"])
+                    council = ((task_now or {}).get("result") or {}).get("council")
+                local_ai = _load("orchestrate").compose_secondary_advisory(local_ai, council, plan)
             except Exception as exc:
                 local_ai = {"state": "unavailable", "message": "", "error": redact(str(exc))[:200], "responses": [], "route": {}, "fuzzy": {"confidence": "unavailable"}, "synthesis": {"unknowns": "Local AI interpretation failed."}}
             op["analysis"]["local_ai"] = local_ai
@@ -3264,6 +3350,16 @@ def capabilities_document() -> dict[str, Any]:
     except Exception:
         agents = []
     installed_agents = [item["id"] for item in agents if item.get("health", {}).get("healthy")]
+    try:
+        sigit_services = [{
+            "id": s["id"],
+            "service": s["sigit_service"],
+            "title": s["title"],
+            "safe_adapter": s["safe_adapter"],
+            "auto_executed": False,
+        } for s in _load("tools.sigit").service_listing()]
+    except Exception:
+        sigit_services = []
     return {
         "product": "VORTEX",
         "version": APP_VERSION,
@@ -3274,6 +3370,7 @@ def capabilities_document() -> dict[str, Any]:
             "episode-observe-act-evaluate",
             "nuclei-ffuf-nikto-amass-gobuster-adapters",
             "host-tool-discovery",
+            "sigit-osint-capabilities",
             "local-ai-advisory-routing",
             "android-apk-client",
             "mit-license",
@@ -3285,11 +3382,19 @@ def capabilities_document() -> dict[str, Any]:
             "agents_installed": installed_agents,
             "agents_catalog": [item.get("id") for item in agents],
         },
+        "sigit": {
+            "toolkit": "SIGIT — Simple Information Gathering Toolkit (MIT)",
+            "cli": "sigit (operator-installed, interactive TUI)",
+            "source": "reviewed-capability-catalog",
+            "policy": "engagement-gated; never auto-run; runs only in a PTY TUI; VORTEX never fabricates OSINT output.",
+            "services": sigit_services,
+        },
         "unavailable_unless_installed": [
             "docker-sandbox-execution",
             "ollama-inference",
             "external-agent-consult",
             "sqlmap-msfconsole-execution",
+            "sigit-interactive-tui",
         ],
         "intentionally_not_implemented": [
             "fastapi-postgresql-pgvector",
@@ -3539,6 +3644,9 @@ class VortexHandler(BaseHTTPRequestHandler):
                 load_settings = _load("config").load_settings
                 from models.router import model_status
                 return self._json(200, {"model": model_status(load_settings())})
+            if path == "/api/ollama":
+                manager = _load("models.manager")
+                return self._json(200, {"ollama": manager.runtime_status(), "models": manager.catalog()})
             if path == "/api/settings":
                 load_settings = _load("config").load_settings
                 return self._json(200, {"settings": load_settings()})
@@ -4080,6 +4188,33 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 save_settings = _load("config").save_settings
                 return self._json(200, {"settings": save_settings(body if isinstance(body, dict) else {})})
+            if path == "/api/ollama/install":
+                manager = _load("models.manager")
+                return self._json(200, {"install": manager.install_ollama(self._flag(body, "confirm"))})
+            if path == "/api/ollama/server/start":
+                manager = _load("models.manager")
+                return self._json(200, {"server": manager.start_server()})
+            if path == "/api/ollama/server/stop":
+                manager = _load("models.manager")
+                return self._json(200, {"server": manager.stop_server()})
+            if path == "/api/ollama/models/pull":
+                manager = _load("models.manager")
+                name = self._text(body, "name")
+                if not name:
+                    raise ValueError("model name is required")
+                return self._json(202, {"download": manager.pull_model(name)})
+            if path == "/api/ollama/models/cancel":
+                manager = _load("models.manager")
+                name = self._text(body, "name")
+                if not name:
+                    raise ValueError("model name is required")
+                return self._json(200, {"download": manager.cancel_download(name)})
+            if path == "/api/ollama/models/remove":
+                manager = _load("models.manager")
+                name = self._text(body, "name")
+                if not name:
+                    raise ValueError("model name is required")
+                return self._json(200, manager.remove_model(name))
             if path == "/api/setup/complete":
                 save_settings = _load("config").save_settings
                 return self._json(200, {"settings": save_settings({"first_run_complete": True})})
@@ -4210,6 +4345,10 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -
     except KeyboardInterrupt: pass
     finally:
         handler.sessions.shutdown()
+        try:
+            _load("models.manager").shutdown()
+        except Exception:
+            pass
         server.server_close()
         try:
             if json.loads(runtime_file.read_text(encoding="utf-8")).get("pid") == os.getpid(): runtime_file.unlink()

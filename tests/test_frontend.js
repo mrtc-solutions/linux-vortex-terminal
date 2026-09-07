@@ -8,6 +8,7 @@ const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const index = read('frontend/index.html');
 const workspace = read('frontend/workspace.js');
 const app = read('frontend/app.js');
+const models = read('frontend/models.js');
 const styles = read('frontend/styles.css');
 const backend = read('backend/vortex_backend.py');
 const probeCache = read('backend/probe_cache.py');
@@ -39,7 +40,37 @@ assert.ok(backend.includes('delete_report'), 'report delete route is served');
 const workspacePy = read('backend/workspace.py');
 assert.ok(workspacePy.includes('UPDATE reports SET title=? WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?)'), 'renaming a conversation renames its reports');
 assert.ok(app.includes('data-next-step'), 'analysis next steps render as clickable chips');
-assert.ok(app.includes('try { setupMatrix(); } catch'), 'matrix canvas failure never blocks app wiring');
+// The falling-rain background must be gone entirely: no canvas, no renderer,
+// no CSS keyframe/surface, and no config default to re-enable it.
+assert.ok(!index.includes('id="matrix"') && !index.includes('class="noise"'), 'matrix canvas/noise surfaces are removed');
+assert.ok(!app.includes('setupMatrix'), 'matrix renderer is removed from app wiring');
+assert.ok(!styles.includes('#matrix') && !styles.includes('.noise'), 'matrix/noise CSS rules are removed');
+assert.ok(!backend.includes('"matrix": "medium"'), 'matrix settings default is removed');
+// The Local AI / Models view exists and is wired to the Ollama management API.
+assert.ok(index.includes('id="view-models"') && index.includes('data-view="models"'), 'Models view and nav entry exist');
+assert.ok(index.includes('assets/models.js'), 'Models view loads its dedicated module');
+assert.ok(models.includes("api('/api/ollama')"), 'models module loads runtime + catalog status');
+assert.ok(models.includes('/api/ollama/install'), 'models module can install Ollama');
+assert.ok(models.includes('/api/ollama/models/pull'), 'models module can pull a model');
+assert.ok(models.includes('/api/ollama/models/cancel'), 'models module can cancel a download');
+assert.ok(models.includes('/api/ollama/models/remove'), 'models module can remove a model');
+// The Agents view must surface the local AI runtime + model pool (Ollama and
+// the local LLMs) with real actions, not just the external agent council, so
+// the operator can install Ollama and download models without hunting for the
+// Models view. The agent council itself stays advisory-only and non-fabricated.
+assert.ok(index.includes('id="agents-local-ai"'), 'Agents view surfaces the local AI panel');
+assert.ok(index.includes('id="view-agents"') && index.includes('data-view-target="models"'), 'Agents view links to the full Models view');
+assert.ok(models.includes('renderAgentsLocalAi'), 'models module renders the Agents local-AI panel');
+assert.ok(models.includes('>INSTALL OLLAMA<'), 'Agents panel offers the real Ollama install action');
+assert.ok(models.includes('install &amp; start Ollama first'), 'model downloads gate on an installed+started runtime');
+assert.ok(models.includes("data-local-ai-pull"), 'Agents panel wires per-model DOWNLOAD actions');
+// Failure/status text is escaped exactly once: values are interpolated raw and
+// the whole line is escaped at the final interpolation. Double-escaping made
+// TLS/URL errors render as literal `&lt;...&gt;` instead of real text.
+assert.ok(models.includes("job.error ? ': ' + job.error"), 'install failure text is escaped exactly once');
+assert.ok(models.includes("'<p>' + esc(line) + '</p>'"), 'install line is escaped at the final interpolation');
+assert.ok(models.includes("(job.last_status || job.status)"), 'download status text is escaped exactly once');
+assert.ok(models.includes("'<div class=\"model-meta\">' + esc(statusLine)"), 'download status is escaped at the final interpolation');
 // Analysis is verdict-first and quantitative; one conversation spans reloads.
 assert.ok(app.includes('VERDICT · '), 'analysis renders an explicit verdict header');
 assert.ok(app.includes('${esc(verdict.passed ?? 0)}/${esc(verdict.total_commands ?? 0)} commands passed'), 'verdict shows pass counts');
@@ -125,7 +156,7 @@ assert.ok(/not parse_package_request\(lower\)\[0\] and not parse_service\(lower\
 // matching backend route. Dynamic segments are reduced to their literal prefix,
 // so `/api/operations/${id}/approve` is checked against `path.startswith(...)`.
 const frontendMatches = [];
-for (const source of [app, workspace]) {
+for (const source of [app, workspace, models]) {
   for (const match of source.matchAll(/api\(\s*`([^`]+)`/g)) frontendMatches.push(match[1]);
   for (const match of source.matchAll(/api\(\s*'([^']+)'/g)) frontendMatches.push(match[1]);
 }

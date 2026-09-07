@@ -8,9 +8,118 @@ from typing import Any
 def _with_local_ai(base: str, advisory: dict[str, Any] | None) -> str:
     advisory = advisory or {}
     message = str(advisory.get("message") or "").strip()
-    if advisory.get("state") != "responded" or not message:
-        return base
-    return (base.rstrip() + " Local AI: " + message).strip()
+    if advisory.get("state") == "responded" and message:
+        return (base.rstrip() + " Local AI: " + message).strip()
+    fallback = advisory.get("fallback") or {}
+    if fallback.get("used"):
+        note = (
+            f"Secondary agents checked: {fallback.get('agents_available', 0)} present, "
+            f"{fallback.get('agents_missing', 0)} missing; deterministic advisor used."
+        )
+        return (base.rstrip() + " " + note).strip()
+    return base
+
+
+def _secondary_roster() -> list[dict[str, Any]]:
+    """Honest per-agent availability for the secondary (fallback) advisory layer.
+
+    The agent council is the deterministic secondary layer that answers when the
+    primary local model is unavailable. Every agent is reported by its real
+    installed/missing status; external agents are advisory-only and are never
+    invoked, so their contribution is an honest status string rather than
+    invented model output.
+    """
+    try:
+        from agents.council import discover
+    except ImportError:
+        from backend.agents.council import discover
+    roster: list[dict[str, Any]] = []
+    for item in discover():
+        health = item.get("health") or {}
+        healthy = bool(health.get("healthy"))
+        state = item.get("status") or ("installed" if healthy else "missing")
+        name = item.get("name") or item.get("id")
+        if healthy:
+            contribution = (
+                f"{name} is installed. Advisory-only secondary agent; VORTEX does not "
+                "invoke its model-backed workflow without a reviewed non-executing consult "
+                "interface, so no agent output is fabricated."
+            )
+        else:
+            contribution = str(health.get("message") or f"{name} is not installed.")
+        roster.append({
+            "id": item.get("id"),
+            "name": name,
+            "state": state,
+            "healthy": healthy,
+            "availability": item.get("availability") or health.get("availability"),
+            "execution_mode": item.get("execution_mode"),
+            "contribution": contribution[:400],
+            "fabricated": False,
+        })
+    return roster
+
+
+def compose_secondary_advisory(primary: dict[str, Any] | None, council: dict[str, Any] | None = None, plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Fall back to the agent council when the primary local model did not respond.
+
+    This is the single source of truth for "primary local LLM → secondary agent
+    council". It never fabricates model output: the only substantive content is
+    the deterministic advisor's honest commentary (missing tools, legal
+    adapters), and every other agent is reported by its real status. When the
+    primary model did respond, the result is passed through unchanged with an
+    explicit ``fallback.used == False`` marker.
+    """
+    primary = dict(primary or {})
+    if primary.get("state") == "responded":
+        primary["fallback"] = {"used": False, "reason": "primary local model responded"}
+        return primary
+    council = council or {}
+    consultations = list(council.get("consultations") or [])
+    responded = [item for item in consultations if str(item.get("state")) == "responded"]
+    content = " ".join(str(item.get("message") or "").strip() for item in responded).strip()
+    roster = _secondary_roster()
+    available = [item for item in roster if item["healthy"]]
+    missing = [item for item in roster if not item["healthy"]]
+    primary_state = primary.get("state") or "unavailable"
+    label = "disabled" if primary_state == "disabled" else "unavailable"
+    reason = str(
+        primary.get("message")
+        or ((primary.get("synthesis") or {}).get("unknowns"))
+        or f"primary local model {label}"
+    )
+    if content:
+        summary = f"Deterministic advisor: {content[:360]}"
+    else:
+        summary = f"{len(available)} agent(s) present, {len(missing)} missing. No model output was fabricated."
+    return {
+        **primary,
+        "state": "fallback",
+        "provider": "agent-council",
+        "fallback": {
+            "used": True,
+            "primary_state": primary_state,
+            "reason": reason[:240],
+            "agents_checked": len(roster),
+            "agents_available": len(available),
+            "agents_missing": len(missing),
+            "summary": summary[:600],
+        },
+        "agents": roster,
+        "synthesis": {
+            "state": "deterministic-fallback",
+            "fact_summary": content[:400],
+            "meaning": "",
+            "unknowns": f"Primary local model {label} ({reason[:160]}).",
+            "next_steps": [],
+            "caution": "Secondary agent-council advisory is deterministic and honest; no local model text was generated.",
+            "model": None,
+        },
+        "message": (
+            f"Local AI {label}; {len(roster)} secondary agents checked "
+            f"({len(available)} present, {len(missing)} missing). {content}"
+        ).strip(),
+    }
 
 
 def interpret_operation(plan: dict[str, Any], operation: dict[str, Any]) -> str:
@@ -66,17 +175,21 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
     except ImportError:
         from backend.episode import observe
     observation = observe(plan)
+    procedure = workspace.matching_procedure(plan.get("kind") or request)
+    if procedure:
+        plan.setdefault("notes", []).insert(0, f"Retrieved validated procedure {procedure['name']} (used {procedure.get('uses', 1)} time(s)). Commands still come from reviewed adapters.")
+    # The agent council is consulted before the local model so that, when the
+    # primary local model is unavailable, the deterministic secondary advisory
+    # is composed from the same consultation instead of fabricated text.
+    started = time.monotonic()
+    council = consult(plan, task, observation=observation)
+    latency = int((time.monotonic() - started) * 1000)
     local_ai = local_ai_advise(request, plan=plan, phase="plan", settings=settings)
+    local_ai = compose_secondary_advisory(local_ai, council, plan)
     plan_workers = list(plan.get("workers") or [])
     if plan_workers:
         plan_workers = [item for item in plan_workers if item.get("id") != "local-model"]
     plan["workers"] = plan_workers + advisory_workers(local_ai)
-    procedure = workspace.matching_procedure(plan.get("kind") or request)
-    if procedure:
-        plan.setdefault("notes", []).insert(0, f"Retrieved validated procedure {procedure['name']} (used {procedure.get('uses', 1)} time(s)). Commands still come from reviewed adapters.")
-    started = time.monotonic()
-    council = consult(plan, task, observation=observation)
-    latency = int((time.monotonic() - started) * 1000)
     for item in council.get("consultations") or []:
         workspace.record_agent_run(str(item.get("agent") or "unknown"), str(item.get("state") or "unavailable"), task["id"], latency, {"message": item.get("message")})
     engagement = workspace.enrich_engagement(store.get_engagement(engagement_id)) if engagement_id else None
@@ -259,7 +372,7 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                         if task.get("conversation_id"):
                             workspace.add_message(task["conversation_id"], "vortex", f"Objective not fully met. Starting a reviewed follow-up: {objective['next_request']}")
                         workspace.update_task(task_id, plan_id=nxt["id"], state="EXECUTING", result=result)
-                        executor.start(nxt, True, nxt["approval_token"], False, settings.get("offline") is True)
+                        executor.start(nxt, True, nxt["approval_token"], False, settings.get("offline") is True, settings=settings)
                         return report
             if stop_reason:
                 result["replan_budget"] = {**budget, "stopped": stop_reason}

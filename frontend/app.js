@@ -1,6 +1,6 @@
 /* Vortex renderer. In Electron all requests go through the typed preload bridge;
    the relative fetch fallback keeps the local preview useful without Electron. */
-const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, sessions: [], activeSessionId: null, paneIds: [], sessionSeqs: {}, sessionTimer: null, matrix: 'medium', plain: false };
+const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, sessions: [], activeSessionId: null, paneIds: [], sessionSeqs: {}, sessionTimer: null, plain: false };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 const fmtDate = (value) => { if (!value) return '—'; try { return new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(value)); } catch { return value; } };
@@ -12,7 +12,7 @@ const api = async (path, options = {}) => {
   return payload;
 };
 function toast(message, bad = false) { const el = $('toast'); el.textContent = message; el.style.borderColor = bad ? 'var(--red)' : 'var(--cyan)'; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 4200); }
-function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); }
+function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`)); document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view)); $('view-title').textContent = view.toUpperCase(); if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); if (view === 'models' && typeof window.loadModels === 'function') window.loadModels(); }
 function statusClass(status) { return ['succeeded','success'].includes(status) ? 'badge-green' : ['failed','timed_out','interrupted'].includes(status) ? 'badge-red' : status === 'planned' || status === 'awaiting_confirmation' ? 'badge-amber' : 'badge-muted'; }
 function statusLabel(status) { return ({succeeded:'VERIFIED OK',failed:'FAILED',timed_out:'TIMED OUT',interrupted:'INTERRUPTED',unavailable:'TOOL MISSING',running:'RUNNING',started:'STARTED',planned:'CONFIRM REQUIRED',awaiting_confirmation:'PREFLIGHT COMPLETE',clarified:'PLAN ONLY',rejected:'BLOCKED',unknown_after_crash:'UNKNOWN AFTER CRASH'}[status] || String(status || 'STANDBY').toUpperCase()); }
 async function loadDoctor(refresh = false) { try { const data = await api(`/api/doctor${refresh ? '?fresh=1' : ''}`); state.doctor = data.doctor; renderDoctor(); } catch (e) { $('side-context').textContent = 'backend offline'; toast(e.message, true); } }
@@ -126,6 +126,7 @@ function renderPlan(plan) { state.plan = plan; const badge = $('plan-badge'); ba
  $('plan-content').className = 'plan-card'; $('plan-content').innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>OBJECTIVE / ${esc(plan.kind.replace('_',' '))}</span>${esc(plan.request)}</div><span class="badge ${statusClass(plan.status)}">${esc(statusLabel(plan.status))}</span></div><ul class="plan-notes">${notes}</ul>${suggestions ? `<div class="suggestion-row"><small>TRY ONE OF THESE</small>${suggestions}</div>` : ''}${knowledge ? `<div class="knowledge-row"><small>LOCAL CAPABILITIES</small>${knowledge}</div>` : ''}${commands}${rootHint}<div class="worker-row">WORKERS · ${worker}</div>${plan.approval_required && plan.status === 'planned' && !rootRequired ? `<div class="approval"><small>⌁ ${esc(plan.approval_phrase)}</small><button class="approve-button" id="approve-plan">APPROVE &amp; EXECUTE</button></div>` : ''}`;
  $('approve-plan')?.addEventListener('click', approvePlan);
  document.querySelectorAll('[data-suggestion]').forEach(btn => btn.addEventListener('click', () => { if (typeof window.makePlan === 'function') window.makePlan(btn.dataset.suggestion); }));
+ if (typeof window.updateAiOpsHud === 'function') window.updateAiOpsHud({ plan });
 }
 let planSubmitBusy = false;
 async function makePlan(request) {
@@ -245,36 +246,6 @@ async function createEngagement() {
   try { const data = await api('/api/engagements',{method:'POST',body}); state.engagements.unshift(data.engagement); state.activeEngagementId = data.engagement.id; renderEngagements(); $('engagement-form').hidden=true; toast('Engagement scope created. Targets are rechecked at execution.'); } catch(e) { toast(e.message,true); }
 }
 async function verifyAudit() { try { const data = await api('/api/audit/verify'); const el = $('audit-result'); el.className = `audit-strip ${data.audit.valid ? 'valid':'invalid'}`; el.innerHTML = `<span class="status-dot"></span> ${data.audit.valid ? `AUDIT CHAIN VERIFIED · ${data.audit.checked} event(s)` : `AUDIT CHAIN INVALID · ${esc(data.audit.error)}`}`; } catch(e) { toast(e.message,true); } }
-function setupMatrix() {
-  const canvas = $('matrix'), ctx = canvas.getContext('2d'); let columns = [], frame = 0;
-  const GLYPH_SET = '01アイウエオカキクケコサシスセソタチツテトナニヌネノABCDEF'.split('');
-  function resize(){
-    canvas.width=innerWidth;canvas.height=innerHeight;
-    columns=Array(Math.ceil(canvas.width/16)).fill(0).map(()=>({y:Math.random()*-70,speed:.55+Math.random()*.85,idx:Math.floor(Math.random()*GLYPH_SET.length),head:true}));
-  }
-  function tick(){
-    if (state.matrix === 'off' || state.plain || matchMedia('(prefers-reduced-motion: reduce)').matches) { ctx.clearRect(0,0,canvas.width,canvas.height); return; }
-    if ((frame++ % (state.matrix === 'high' ? 1 : state.matrix === 'low' ? 3 : 2)) !== 0) return;
-    ctx.globalAlpha=1; ctx.shadowBlur=0;
-    ctx.fillStyle='rgba(8,9,11,.12)';ctx.fillRect(0,0,canvas.width,canvas.height);
-    ctx.font='13px "JetBrains Mono",ui-monospace,monospace';ctx.textBaseline='top';
-    for (let i=0;i<columns.length;i++) {
-      const col=columns[i];
-      const glyph=GLYPH_SET[col.idx];
-      // bright head with a soft glow, then a short dimmer tail for a smooth stream.
-      ctx.globalAlpha=.95; ctx.shadowColor='rgba(0,212,170,.95)'; ctx.shadowBlur=state.matrix==='high'?14:8;
-      ctx.fillStyle='rgba(0,212,170,1)'; ctx.fillText(glyph,i*16,col.y*16);
-      ctx.shadowBlur=0; ctx.fillStyle='rgba(0,212,170,.42)'; ctx.globalAlpha=.42;
-      ctx.fillText(GLYPH_SET[(col.idx+1)%GLYPH_SET.length],i*16,(col.y-1)*16);
-      ctx.fillStyle='rgba(0,212,170,.16)'; ctx.globalAlpha=.16;
-      ctx.fillText(GLYPH_SET[(col.idx+2)%GLYPH_SET.length],i*16,(col.y-2)*16);
-      col.y+=col.speed;
-      if (Math.random()>.985){ col.idx=Math.floor(Math.random()*GLYPH_SET.length); col.speed=.55+Math.random()*.85; }
-      if (col.y*16>canvas.height+64 || Math.random()>.985) { col.y=Math.random()*-70; col.idx=Math.floor(Math.random()*GLYPH_SET.length); col.speed=.55+Math.random()*.85; }
-    }
-    ctx.globalAlpha=1; ctx.shadowBlur=0;
-  }
-  resize();addEventListener('resize',resize);(function loop(){tick();requestAnimationFrame(loop)})(); }
 function terminalMetrics() {
   const host = $('terminal-panes');
   const width = (host && host.clientWidth) || Math.max(640, innerWidth - 280);
@@ -322,7 +293,18 @@ function sessionOutput(sessionId) { return Array.from(document.querySelectorAll(
 function appendAnsi(element, data) {
   if (!element._vortexTerminal) element._vortexTerminal = new window.VortexTerminal(100, 30, 5000);
   element._vortexTerminal.feed(data);
-  element._vortexTerminal.render(element);
+  // Coalesce multiple PTY chunks that arrive within one animation frame into a
+  // single full-buffer render. High-frequency output no longer triggers one
+  // innerHTML rebuild per chunk, which removed the largest source of terminal
+  // jank without perceptibly delaying display.
+  if (element._renderScheduled) return;
+  element._renderScheduled = true;
+  const flush = () => {
+    element._renderScheduled = false;
+    if (element._vortexTerminal) element._vortexTerminal.render(element);
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+  else setTimeout(flush, 0);
 }
 function ensureSessionPane(sessionId) {
   const host = $('terminal-panes');
@@ -400,9 +382,13 @@ function streamSession(sessionId) {
     es.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
+        const before = state.session?.status;
         applySessionPayload(sessionId, data);
-        state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();
+        state.session = activeSession();
+        renderSessionState();
         const status = data.session?.status;
+        const changed = before !== status;
+        if (changed) { renderSessionTabs(); renderSessionPanes(); }
         if (!data.session || !['starting', 'running'].includes(status)) { es.close(); delete state.sessionStreams[sessionId]; }
       } catch (_) { /* keep listening */ }
     };
@@ -418,13 +404,18 @@ async function pollSessions() {
   const tick = async () => {
     state.sessionTimer = null;
     const live = state.sessions.filter(session => session.status === 'running' && !state.sessionStreams?.[session.id]);
+    let dirty = false;
     for (const session of live) {
       try {
         const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/events?since=${state.sessionSeqs[session.id] || 0}`);
+        const before = session.status;
         applySessionPayload(session.id, data);
+        if (before !== session.status || (data.events || []).length) dirty = true;
       } catch (e) { toast(e.message, true); }
     }
-    state.session = activeSession(); renderSessionTabs(); renderSessionPanes(); renderSessionState();
+    state.session = activeSession();
+    renderSessionState();
+    if (dirty) { renderSessionTabs(); renderSessionPanes(); }
     if (state.sessions.some(session => session.status === 'running')) state.sessionTimer = setTimeout(tick, 220);
   };
   await tick();
@@ -465,12 +456,20 @@ async function killSession() {
   try { await api(`/api/sessions/${encodeURIComponent(session.id)}/kill`, {method:'POST', body:{}}); toast('PTY group cancellation requested.'); }
   catch (e) { toast(e.message, true); }
 }
-async function resizeSession() {
+let resizeTimer = null;
+function resizeSession() {
+  // Window resizes (including terminal maximize/minimize) can fire dozens of
+  // times while dragging. Debounce the resize POST so the sidecar does not
+  // receive a PTY ioctl storm.
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(resizeSessionNow, 160);
+}
+async function resizeSessionNow() {
   const session = activeSession();
   if (!session || session.status !== 'running') return;
   try { const cols = Math.max(40, Math.min(220, Math.floor(innerWidth / 8))); await api(`/api/sessions/${encodeURIComponent(session.id)}/resize`, {method:'POST', body:{cols, rows:30}}); const output = sessionOutput(session.id); if (output?._vortexTerminal) { output._vortexTerminal.resize(cols, 30); output._vortexTerminal.render(output); } }
   catch (_) { /* resize is best effort while a PTY is closing */ }
 }
 
-function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; try { setupMatrix(); } catch (_) { /* matrix rain is decorative; a canvas failure must never block app wiring */ } document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('download-deb')?.addEventListener('click', downloadDeb); $('download-deb-settings')?.addEventListener('click', downloadDeb); $('theme-toggle').addEventListener('click',()=>{state.matrix=state.matrix==='off'?'medium':'off';toast(state.matrix==='off'?'Matrix rain paused.':'Matrix rain resumed.');}); $('matrix-setting').addEventListener('change',e=>{state.matrix=e.target.value;toast(`Matrix intensity: ${e.target.value}`)}); $('plain-theme').addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function init() { if (typeof window.makePlan !== 'function') window.makePlan = makePlan; document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('download-deb')?.addEventListener('click', downloadDeb); $('download-deb-settings')?.addEventListener('click', downloadDeb); $('plain-theme')?.addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
 addEventListener('DOMContentLoaded', init);

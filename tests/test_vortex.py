@@ -393,6 +393,63 @@ class VortexCoreTests(unittest.TestCase):
         finally:
             sessions.shutdown()
 
+    def test_session_cap_is_enforced_under_concurrency(self):
+        # The cap check and the slot insert must be atomic. Before the fix, N
+        # concurrent create() calls could all observe a running count below the
+        # cap and then each fork a PTY, overshooting max_sessions.
+        import concurrent.futures
+        sessions = SessionManager(self.store, idle_seconds=120, max_sessions=3)
+        live = []
+
+        def create_one(_):
+            try:
+                info = sessions.create(name="burst", cwd_raw=self.tmp.name, shell="/bin/sh",
+                                       command=["/bin/sh", "-c", "sleep 5"])
+                live.append(info)
+                return True
+            except PolicyError:
+                return False
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+                outcomes = list(ex.map(create_one, range(12)))
+            created = sum(1 for ok in outcomes if ok)
+            self.assertEqual(created, 3, f"expected exactly max_sessions=3 to succeed, got {created}")
+            running = sum(1 for item in sessions.list() if item.get("status") == "running")
+            self.assertLessEqual(running, 3, f"live running sessions overshot the cap: {running}")
+        finally:
+            for info in live:
+                sessions.kill(info["id"])
+            sessions.shutdown()
+
+    def test_session_resolves_relative_command_to_real_binary(self):
+        # A relative argv[0] is an executable identity, not shell text. It must
+        # resolve to the real installed binary instead of silently running the
+        # default shell in its place.
+        sessions = SessionManager(self.store, idle_seconds=120)
+        try:
+            session = sessions.create(name="rel", cwd_raw=self.tmp.name, shell="/bin/sh", command=["printf", "relative-ok"])
+            self.assertTrue(session["command"][0].endswith("printf"), f"resolved argv0 was {session['command'][0]!r}")
+            for _ in range(150):
+                info = sessions.info(session["id"])
+                events = sessions.events_since(session["id"])["events"]
+                if any("relative-ok" in event["data"] for event in events) and info and info["status"] not in ("starting", "running"):
+                    break
+                time.sleep(.02)
+            self.assertTrue(any("relative-ok" in event["data"] for event in events), "relative command did not produce its output")
+        finally:
+            sessions.shutdown()
+
+    def test_session_rejects_unknown_relative_command(self):
+        # An unknown relative executable must be rejected up front, never
+        # replaced with the default shell.
+        sessions = SessionManager(self.store, idle_seconds=120)
+        try:
+            with self.assertRaises(PolicyError):
+                sessions.create(name="bad", cwd_raw=self.tmp.name, shell="/bin/sh", command=["no-such-vortex-cmd-xyz"])
+        finally:
+            sessions.shutdown()
+
     def test_apt_preflight_parser_extracts_impact_counts(self):
         output = '''The following NEW packages will be installed:
   ripgrep

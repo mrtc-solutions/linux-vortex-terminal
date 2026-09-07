@@ -338,6 +338,29 @@ class WorkspaceTests(unittest.TestCase):
         decision = evaluate(plan, {"auto_low_risk": True}, engagement)
         self.assertTrue(decision["blocked"])
 
+    def test_primary_local_ai_unavailable_falls_back_to_agent_council(self):
+        # With no Ollama runtime the primary local model cannot respond. The
+        # turn must still consult the agent council as the secondary layer and
+        # report an honest fallback state rather than fabricated model text.
+        from backend.orchestrate import run_turn
+        result = run_turn(
+            self.store, self.workspace, None, "whoami",
+            cwd=self.cwd, engagement_id=None, conversation_id=None,
+            settings={"profile": "safe", "offline": False},
+        )
+        local_ai = result["local_ai"]
+        if local_ai.get("state") == "fallback":
+            self.assertTrue(local_ai["fallback"]["used"])
+            self.assertGreaterEqual(local_ai["fallback"]["agents_checked"], 10)
+            self.assertGreaterEqual(len(local_ai["agents"]), 10)
+            self.assertEqual(local_ai["synthesis"]["state"], "deterministic-fallback")
+        else:
+            # A healthy runtime is equally honest: no fallback was needed.
+            self.assertEqual(local_ai.get("state"), "responded")
+        # The council is always consulted and stored for the task.
+        self.assertIn("council", result["task"]["result"])
+        self.assertIn("local_ai", result["task"]["result"])
+
     def test_agent_install_is_proposal_only(self):
         from backend.agents.install import proposal
         item = proposal("cai")

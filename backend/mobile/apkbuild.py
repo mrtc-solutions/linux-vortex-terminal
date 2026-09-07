@@ -117,7 +117,7 @@ def sync_payload(sidecar_url: str, dest: Path) -> dict[str, Any]:
     www.mkdir(parents=True)
     frontend = repo_root() / "frontend"
     copied: list[str] = []
-    for name in ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "styles.css"):
+    for name in ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "models.js", "hud.js", "styles.css"):
         src = frontend / name
         if src.is_file():
             shutil.copy2(src, www / name)
