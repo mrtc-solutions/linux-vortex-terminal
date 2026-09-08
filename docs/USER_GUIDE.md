@@ -103,9 +103,9 @@ Remove that directory if you also want history, tasks, and the audit DB gone.
 
 ```bash
 # requires dpkg-deb on a Linux builder
-VORTEX_VERSION=0.2.21 packaging/deb/build.sh
+VORTEX_VERSION=0.2.22 packaging/deb/build.sh
 # then, as an administrator of that machine:
-# sudo dpkg -i dist/deb/linux-vortex-terminal_0.2.21_all.deb
+# sudo dpkg -i dist/deb/linux-vortex-terminal_0.2.22_all.deb
 ```
 
 The package does not start a daemon, create user data, or install agents.
@@ -207,13 +207,18 @@ vortex serve --bind-host 127.0.0.1 --bind-port 8765
 # open http://127.0.0.1:8765/
 ```
 
-Preview bind (Arena / shared lab preview only):
+Preview bind (local loopback; `make preview` and `npm run preview` agree):
 
 ```bash
 npm run preview
 # or
-python3 backend/vortex_backend.py --host 0.0.0.0 --port 4173
+make preview
+# equivalent:
+python3 backend/vortex_backend.py --host 127.0.0.1 --port 4173
 ```
+
+A non-loopback bind (`0.0.0.0` or a LAN address) is refused unless you pass a
+capability token of at least 32 characters (`--token` / `VORTEX_SIDECAR_TOKEN`).
 
 In the UI:
 

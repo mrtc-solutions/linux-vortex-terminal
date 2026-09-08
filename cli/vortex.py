@@ -244,7 +244,7 @@ def authorize_privileged_handoff(non_interactive=False):
         raise PermissionError(broker.get('reason') or 'trusted sudo is unavailable')
     if non_interactive or not sys.stdin.isatty() or not sys.stderr.isatty():
         raise PermissionError('root-required plans need an interactive terminal for OS authentication')
-    print('\nVORTEX is handing privilege authentication to the operating system. It cannot read or store your password.', file=sys.stderr)
+    print('\nVORTEX is handing privilege authentication to the operating system. It cannot read or store your password. The OS may cache this authentication for a short timestamp window (commonly about 15 minutes); that cache is operating-system behaviour, not a VORTEX credential store.', file=sys.stderr)
     result = subprocess.run([broker['realpath'], '-v'], stdin=None, stdout=None, stderr=None, check=False, env={
         key: value for key, value in os.environ.items()
         if key in {'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM'}
@@ -357,7 +357,7 @@ def main(argv=None):
     parser.add_argument('--yes', action='store_true', help='skip the interactive prompt only for a policy-valid plan')
     parser.add_argument('--format', choices=('text', 'json', 'md'), default='text', help='output format')
     parser.add_argument('--profile', choices=('safe', 'standard', 'expert'), default='safe', help='policy friction profile')
-    parser.add_argument('--version', action='version', version='vortex 0.2.21')
+    parser.add_argument('--version', action='version', version='vortex 0.2.22')
     sub = parser.add_subparsers(dest='subcommand')
     for name in ('ask', 'plan'):
         p = sub.add_parser(name); p.add_argument('request')

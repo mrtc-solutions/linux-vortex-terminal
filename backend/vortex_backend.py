@@ -73,7 +73,7 @@ except ImportError:  # direct `python backend/vortex_backend.py`
     from probe_cache import TTLCache
 
 SCHEMA_VERSION = 1
-APP_VERSION = "0.2.21"
+APP_VERSION = "0.2.22"
 REDACTION_RE = re.compile(
     r"(?i)(bearer\s+|password\s*[=:]\s*|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*|secret\s*[=:]\s*)([^\s,;]+)"
 )
@@ -102,12 +102,15 @@ CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # PTY output is durable enough for reconnects, but it must not turn a noisy
 # interactive process into an unbounded memory or SQLite allocation. A single
-# read is at most 64 KiB; these limits therefore bound the normal-case live ring
-# to 4 MiB and each retained session replay to 8 MiB (sanitisation can expand a
-# pathological bidi-heavy chunk slightly, but both event counts remain fixed).
+# read is at most 64 KiB. Event counts are high enough for typical small
+# terminal chunks (hundreds of lines of scrollback) while the live ring is
+# separately capped at 4 MiB so a pathological 64 KiB-per-event stream cannot
+# grow without bound. Persisted replay keeps more events because typical
+# chunks are far smaller than the read size.
 PTY_READ_BYTES = 64 * 1024
-PTY_MEMORY_EVENTS = 64
-PTY_PERSISTED_EVENTS = 128
+PTY_MEMORY_EVENTS = 400
+PTY_PERSISTED_EVENTS = 800
+PTY_MEMORY_BYTES = 4 * 1024 * 1024
 PTY_REPLAY_SESSIONS = 20
 
 # stdout and stderr reader threads may get ahead of the executor, but by no
@@ -1215,7 +1218,12 @@ class SessionManager:
             session["_event_seq"] += 1
             session["last_activity"] = now_iso()
             event = {"seq": session["_event_seq"], "at": session["last_activity"], "stream": stream, "data": text}
-            self.events[session_id].append(event)
+            ring = self.events[session_id]
+            ring.append(event)
+            total = sum(len(item.get("data") or "") for item in ring)
+            while total > PTY_MEMORY_BYTES and ring:
+                dropped = ring.popleft()
+                total -= len(dropped.get("data") or "")
             self.store.save_session_event(session_id, event)
             self.store.update_session(session)
 
@@ -1604,14 +1612,53 @@ def adapter_command(adapter_id: str, executable: str, argv: list[str], cwd: Path
 
 
 def safe_git_argv(*args: str) -> list[str]:
-    """Build read-only Git argv without hooks, fsmonitor, pagers, or ext-diff."""
+    """Build read-only Git argv without hooks, aliases, filters, pagers, or ext-diff.
+
+    Local ``.git/config`` still loads (it is the repository being inspected), so
+    every subcommand we invoke is a Git builtin and the matching alias is
+    blanked. Combined with ``safe_git_env``, user/system gitconfig cannot inject
+    shell aliases, hooks, fsmonitor, ssh helpers, or pager/diff drivers.
+    """
+    command = next((arg for arg in args if arg and not arg.startswith("-")), "")
+    alias_override = ["-c", f"alias.{command}="] if command and re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,32}", command) else []
     return [
-        "git", "--no-pager",
+        "git", "--no-pager", "--no-replace-objects",
         "-c", "core.hooksPath=/dev/null",
         "-c", "core.fsmonitor=false",
+        "-c", "core.useBuiltinFSMonitor=false",
         "-c", "diff.external=",
+        "-c", "diff.tool=",
+        "-c", "merge.tool=",
+        "-c", "core.sshCommand=",
+        "-c", "core.editor=",
+        "-c", "sequence.editor=",
+        "-c", "gpg.program=",
+        "-c", "gpg.ssh.program=",
+        "-c", "filter.lfs.smudge=",
+        "-c", "filter.lfs.process=",
+        "-c", "interactive.diffFilter=",
+        "-c", "log.showSignature=false",
+        *alias_override,
         *args,
     ]
+
+
+def safe_git_env() -> dict[str, str]:
+    """Ignore user/system Git config so only the inspected repository remains."""
+    return {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
+def git_command(adapter_id: str, cwd: Path, *args: str, explanation: str = "") -> dict[str, Any]:
+    spec = adapter_command(adapter_id, "git", safe_git_argv(*args), cwd, required="git", explanation=explanation)
+    spec["env_additions"] = safe_git_env()
+    return spec
 
 
 def local_container_runtime() -> tuple[str, list[str]] | None:
@@ -2568,41 +2615,41 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no commit history was observed.")
         else:
-            specs.append(adapter_command("linux.development.git-log", "git", safe_git_argv("log", "--oneline", "--decorate", "-n", "50"), cwd, required="git", explanation="Show at most 50 observed commit summary lines with Git hooks, fsmonitor, external diff, and pagers disabled."))
+            specs.append(git_command("linux.development.git-log", cwd, "log", "--oneline", "--decorate", "-n", "50", explanation="Show at most 50 observed commit summary lines with Git hooks, aliases, filters, fsmonitor, external diff, and pagers disabled."))
             status = "planned"; notes.append("Read-only Git history; no commit, rebase, reset, push, or network operation is included.")
     elif any(phrase in lower for phrase in ("git branch", "git branches", "list branches", "show branches")):
         kind = "plan"
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no branches were observed.")
         else:
-            specs.append(adapter_command("linux.development.git-branches", "git", safe_git_argv("branch", "--all", "--verbose", "--no-abbrev"), cwd, required="git", explanation="List observed local and remote-tracking branches with hooks, fsmonitor, external diff, and pagers disabled."))
+            specs.append(git_command("linux.development.git-branches", cwd, "branch", "--all", "--verbose", "--no-abbrev", explanation="List observed local and remote-tracking branches with hooks, aliases, filters, fsmonitor, external diff, and pagers disabled."))
             status = "planned"; notes.append("Read-only branch listing; no checkout, create, delete, push, or network operation is included.")
     elif any(phrase in lower for phrase in ("git remote", "git remotes", "show remotes", "list remotes")):
         kind = "plan"
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no remotes were observed.")
         else:
-            specs.append(adapter_command("linux.development.git-status", "git", safe_git_argv("remote", "-v"), cwd, required="git", explanation="List configured Git remote URLs without contacting them; hooks, fsmonitor, external diff, and pagers are disabled."))
+            specs.append(git_command("linux.development.git-status", cwd, "remote", "-v", explanation="List configured Git remote URLs without contacting them; hooks, aliases, filters, fsmonitor, external diff, and pagers are disabled."))
             status = "planned"; notes.append("Read-only remote configuration; no network operation is performed.")
     elif any(phrase in lower for phrase in ("git stash", "show stash", "list stashes")):
         kind = "plan"
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no stashes were observed.")
         else:
-            specs.append(adapter_command("linux.development.git-status", "git", safe_git_argv("stash", "list"), cwd, required="git", explanation="List observed Git stash entries without applying, dropping, or popping any stash; external execution features are disabled."))
+            specs.append(git_command("linux.development.git-status", cwd, "stash", "list", explanation="List observed Git stash entries without applying, dropping, or popping any stash; external execution features are disabled."))
             status = "planned"; notes.append("Read-only stash listing; no stash is applied, popped, dropped, or modified.")
     elif any(phrase in lower for phrase in ("git diff", "repository diff", "show diff", "working tree diff")) or ("changeset" in lower and "git" in lower):
         kind = "plan"
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no diff was observed.")
         else:
-            specs.append(adapter_command("linux.development.git-diff", "git", safe_git_argv("diff", "--no-ext-diff", "--no-textconv", "--stat", "--patch", "--color=never"), cwd, required="git", explanation="Show the observed working-tree diff without staging or modifying files; hooks, fsmonitor, external diff/textconv, and pagers are disabled."))
+            specs.append(git_command("linux.development.git-diff", cwd, "diff", "--no-ext-diff", "--no-textconv", "--stat", "--patch", "--color=never", explanation="Show the observed working-tree diff without staging or modifying files; hooks, aliases, filters, fsmonitor, external diff/textconv, and pagers are disabled."))
             status = "planned"; notes.append("Read-only unified diff; no file is changed by the observation.")
     elif any(word in lower for word in ("git status", "repository status", "git hygiene", "check my repo")):
         if probe_executable("git")["state"] != "installed":
             status = "unavailable"; missing.append("git"); notes.append("TOOL MISSING: git; no repository state was observed.")
         else:
-            specs.append(adapter_command("linux.development.git-status", "git", safe_git_argv("status", "--short", "--branch"), cwd, required="git", explanation="Show the current branch and working-tree changes with hooks, fsmonitor, external diff, and pagers disabled."))
+            specs.append(git_command("linux.development.git-status", cwd, "status", "--short", "--branch", explanation="Show the current branch and working-tree changes with hooks, aliases, filters, fsmonitor, external diff, and pagers disabled."))
             status = "planned"; notes.append("Read-only Git status; no hooks, checkout, reset, clean, push, or network operation is included.")
     elif any(word in lower for word in ("disk", "space", "large file", "cache", "inode", "filesystem")) or any(phrase in lower for phrase in ("mounted filesystems", "mounted filesystem", "show mounts", "list mounts")) or lower.strip() in {"df", "df -h", "df -hT", "du"}:
         kind = "plan"

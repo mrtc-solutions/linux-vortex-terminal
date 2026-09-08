@@ -39,3 +39,15 @@ No cloud model is contacted by default. Local Ollama inference is restricted to
 a validated loopback HTTP endpoint, uses bounded responses and proxy-disabled
 connections, and receives minimized/redacted advisory context. Model output
 cannot create commands, approve a plan, or override Guardian.
+
+## Privilege handoff
+
+Root-required apt/systemd mutations never run over HTTP. The interactive CLI
+authenticates on the real TTY with OS `sudo -v` (the password is never visible
+to VORTEX), then executes only the already-typed argv as `sudo -n -- …`. The
+operating system may cache that authentication for a short timestamp window
+(commonly about 15 minutes). That cache is sudo's behaviour, not a VORTEX
+credential store. Do not start VORTEX itself with `sudo`.
+
+Non-loopback sidecar binds require a capability token of at least 32
+characters. `make preview` and `npm run preview` bind `127.0.0.1` only.

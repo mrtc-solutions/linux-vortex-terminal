@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import threading
 import time
@@ -276,11 +277,19 @@ class VortexCoreTests(unittest.TestCase):
         git_plan = build_plan(self.store, 'show git diff', self.tmp.name)
         if git_plan['status'] == 'planned':
             argv = git_plan['commands'][0]['argv']
+            env = git_plan['commands'][0]['env_additions']
             self.assertIn('--no-pager', argv)
+            self.assertIn('--no-replace-objects', argv)
+            self.assertIn('core.hooksPath=/dev/null', argv)
             self.assertIn('core.fsmonitor=false', argv)
             self.assertIn('diff.external=', argv)
+            self.assertIn('alias.diff=', argv)
             self.assertIn('--no-ext-diff', argv)
             self.assertIn('--no-textconv', argv)
+            self.assertEqual(env.get('GIT_CONFIG_GLOBAL'), '/dev/null')
+            self.assertEqual(env.get('GIT_CONFIG_SYSTEM'), '/dev/null')
+            self.assertEqual(env.get('GIT_CONFIG_NOSYSTEM'), '1')
+            self.assertEqual(env.get('GIT_ATTR_NOSYSTEM'), '1')
 
     def test_pty_sanitizer_keeps_sgr_and_removes_osc(self):
         value = sanitize_pty('\x1b[31mred\x1b[0m\x1b]0;malicious-title\x07\x1b[2K\n')
@@ -1067,6 +1076,97 @@ The following packages will be upgraded:
         self.assertEqual(rollback['rollback_source_operation'], operation['id'])
         self.assertEqual(rollback['status'], 'planned')
         self.assertNotIn('operation_finished', rollback['request'])
+
+    def test_git_status_plan_blanks_the_status_alias_and_isolates_config(self):
+        plan = build_plan(self.store, "git status", self.tmp.name)
+        if plan["status"] != "planned":
+            self.skipTest("git is unavailable")
+        spec = plan["commands"][0]
+        self.assertEqual(spec["adapter_id"], "linux.development.git-status")
+        self.assertIn("alias.status=", spec["argv"])
+        self.assertEqual(spec["env_additions"]["GIT_CONFIG_GLOBAL"], "/dev/null")
+        self.assertEqual(spec["env_additions"]["GIT_TERMINAL_PROMPT"], "0")
+
+    def test_git_command_ignores_global_config_and_custom_aliases(self):
+        if shutil.which("git") is None:
+            self.skipTest("git is unavailable")
+        repo = Path(self.tmp.name) / "git-isolation"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        evil = Path(self.tmp.name) / "evil.gitconfig"
+        evil.write_text("[alias]\n    status = !printf PWNED\\n    pwn = !printf PWNED\\n[core]\n    sshCommand = printf PWNED\\n", encoding="utf-8")
+        spec = vtx_backend.git_command("linux.development.git-status", repo, "status", "--short", "--branch")
+        env = vtx_backend.minimal_env(False, spec["env_additions"])
+        env["HOME"] = str(Path(self.tmp.name))
+        # A hostile GIT_CONFIG_GLOBAL must not override the adapter isolation.
+        env["GIT_CONFIG_GLOBAL"] = str(evil)
+        env.update(spec["env_additions"])
+        proc = subprocess.run(spec["argv"], cwd=str(repo), env=env, capture_output=True, text=True, timeout=10)
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        self.assertNotIn("PWNED", combined)
+        self.assertEqual(proc.returncode, 0)
+
+    def test_preview_makefile_and_npm_preview_are_loopback(self):
+        root = Path(__file__).resolve().parent.parent
+        makefile = (root / "Makefile").read_text(encoding="utf-8")
+        package = (root / "package.json").read_text(encoding="utf-8")
+        self.assertIn("--host 127.0.0.1 --port 4173", makefile)
+        self.assertNotIn("--host 0.0.0.0 --port 4173", makefile)
+        self.assertIn("--host 127.0.0.1 --port 4173", package)
+        self.assertNotIn("--host 0.0.0.0 --port 4173", package)
+
+    def test_pty_scrollback_is_usable_and_byte_capped(self):
+        self.assertGreaterEqual(vtx_backend.PTY_MEMORY_EVENTS, 256)
+        self.assertGreaterEqual(vtx_backend.PTY_PERSISTED_EVENTS, 512)
+        self.assertEqual(vtx_backend.PTY_MEMORY_BYTES, 4 * 1024 * 1024)
+        self.assertLessEqual(vtx_backend.PTY_MEMORY_EVENTS * vtx_backend.PTY_READ_BYTES, 32 * 1024 * 1024)
+
+    def test_pty_live_ring_drops_oldest_events_when_over_byte_cap(self):
+        sessions = SessionManager(self.store, idle_seconds=120)
+        session_id = "byte-cap"
+        original = vtx_backend.PTY_MEMORY_BYTES
+        started = now_iso()
+        try:
+            record = {
+                "id": session_id, "name": "byte-cap", "shell": "/bin/sh",
+                "cwd": self.tmp.name, "command": ["/bin/true"], "pid": None,
+                "cols": 80, "rows": 24, "status": "running", "started_at": started,
+                "ended_at": None, "last_activity": started, "exit_code": None,
+                "signal": None, "termination_reason": None, "_event_seq": 0,
+            }
+            self.store.save_session({key: value for key, value in record.items() if not str(key).startswith("_")})
+            with sessions.lock:
+                sessions.sessions[session_id] = record
+                sessions.events[session_id] = vtx_backend.deque(maxlen=vtx_backend.PTY_MEMORY_EVENTS)
+            vtx_backend.PTY_MEMORY_BYTES = 64
+            sessions._append_event(session_id, "a" * 50)
+            sessions._append_event(session_id, "b" * 50)
+            with sessions.lock:
+                ring = list(sessions.events[session_id])
+                sessions.sessions.pop(session_id, None)
+                sessions.events.pop(session_id, None)
+            self.assertEqual(len(ring), 1)
+            self.assertTrue(ring[0]["data"].startswith("b"))
+        finally:
+            vtx_backend.PTY_MEMORY_BYTES = original
+            sessions.shutdown()
+
+    def test_app_version_is_consistent_across_surfaces(self):
+        root = Path(__file__).resolve().parent.parent
+        self.assertEqual(vtx_backend.APP_VERSION, "0.2.22")
+        self.assertIn(f"version='vortex {vtx_backend.APP_VERSION}'", (root / "cli" / "vortex.py").read_text(encoding="utf-8"))
+        self.assertIn(f'"version": "{vtx_backend.APP_VERSION}"', (root / "package.json").read_text(encoding="utf-8"))
+        html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+        self.assertIn(f"VORTEX {vtx_backend.APP_VERSION}", html)
+        self.assertNotIn("0.2.21", html)
+        from backend.mobile.apkbuild import VERSION_CODE, VERSION_NAME
+        self.assertEqual(VERSION_NAME, vtx_backend.APP_VERSION)
+        self.assertEqual(VERSION_CODE, 222)
+
+    def test_privilege_handoff_documents_sudo_timestamp_window(self):
+        source = Path(__file__).resolve().parent.parent.joinpath("cli", "vortex.py").read_text(encoding="utf-8")
+        self.assertIn("timestamp window", source)
+        self.assertIn("15 minutes", source)
 
     def test_analysis_does_not_invent_findings(self):
         op = {"status": "succeeded", "commands": [], "workers": []}
