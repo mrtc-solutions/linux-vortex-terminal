@@ -10,7 +10,7 @@ export PATH
 # emits a placeholder artifact. Run this on a Linux builder with dpkg-deb.
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out="${1:-$root/dist/deb}"
-version="${VORTEX_VERSION:-0.2.21}"
+version="${VORTEX_VERSION:-0.2.22}"
 package="linux-vortex-terminal"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT

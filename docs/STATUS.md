@@ -1,11 +1,16 @@
 # Current implementation status
 
-VORTEX 0.2.21 is a real Linux application. Production paths use installed host
+VORTEX 0.2.22 is a real Linux application. Production paths use installed host
 tools, typed argv, and observed output only. Test doubles exist only inside
 controlled tests.
 
-**Automated validation is passing:** 193 Python tests, plus JS terminal,
-window-control, frontend smoke, and frontend runtime smoke suites.
+**Automated validation is passing:** the Python unittest suite plus JS terminal,
+window-control, frontend smoke, frontend auth, and frontend runtime smoke suites.
+
+## 0.2.22 — remaining hardening closed
+
+Loopback preview alignment, Git config isolation, usable PTY scrollback with a
+4 MiB live cap, sudo timestamp documentation, and a version bump to 0.2.22.
 
 ## 0.2.21 — local-AI-first advisory routing and install-flow audit
 
@@ -142,9 +147,9 @@ already provided by the pipeline.
 
 ## Latest validation summary
 
-- `python3 -m unittest discover -s tests` → PASS (`Ran 245 tests ... OK`)
-- `npm test` → PASS (245 tests + terminal emulator/window control/frontend
-  smoke/frontend runtime smoke all PASS)
+- `python3 -m unittest discover -s tests` → PASS (`Ran 395 tests ... OK`)
+- `npm test` → PASS (395 Python tests + terminal emulator/window control/frontend
+  smoke/frontend auth/frontend runtime/HUD/responsive suites all PASS)
 - `npm run lint` → PASS
 - `VORTEX_REAL_ACCEPTANCE=1 ... ./tests/linux_acceptance.sh` → PASS
 - Live sidecar HTTP probe (36 endpoints, all 200) + `POST /api/workspace/turn`,

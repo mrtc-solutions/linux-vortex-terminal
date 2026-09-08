@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.22 — 2026-09-07
+
+Final hardening pass after the 0.2.21 network/auth/privilege work. Remaining
+review findings are closed so the tree is consistent at every layer.
+
+- `make preview` binds `127.0.0.1` like `npm run preview`. Non-loopback binds
+  still require a 32+ character capability token.
+- Git adapters isolate user/system gitconfig (`GIT_CONFIG_GLOBAL=/dev/null`,
+  `GIT_CONFIG_NOSYSTEM=1`), blank the invoked alias, and disable hooks,
+  fsmonitor, replace refs, ssh/gpg helpers, LFS filters, and ext-diff/textconv.
+- PTY live ring is 400 events / 4 MiB (persisted replay 800 events) so typical
+  small terminal chunks have usable scrollback without unbounded memory.
+- Privilege handoff documents the OS `sudo -v` timestamp window (~15 minutes)
+  in the CLI prompt, SECURITY.md, and USER_GUIDE. VORTEX still never sees the
+  password.
+- Version identity is 0.2.22 / APK code 222 across sidecar, CLI, frontend,
+  APK, and `.deb`.
+
 ## Unreleased — 2026-09-06
 
 Local AI lifecycle: **Install Ollama** and a **model download manager** join the

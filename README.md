@@ -45,9 +45,10 @@ export PATH="$HOME/.local/bin:$PATH"
 ./vortex host-tools --json
 ./vortex mobile apk --sidecar-url http://127.0.0.1:8765/
 
-# Local workbench (127.0.0.1) or Arena preview (0.0.0.0)
+# Local workbench (127.0.0.1). Preview targets the same loopback bind.
 ./vortex serve --bind-host 127.0.0.1 --bind-port 8765
 npm run preview
+make preview
 ```
 
 Step-by-step install and use: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
@@ -57,7 +58,7 @@ Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 Install semantics are explicit:
 - `vortex install --user` and `scripts/install-user.sh` write only a user-local launcher.
 - The **Dependencies** text entry accepts one exact Debian package, `ollama`, or a validated `model:tag`. Debian packages become persisted, Guardian-gated apt plans; **OPEN INSTALL TERMINAL** runs the exact saved plan in a managed PTY.
-- VORTEX remains unprivileged, performs a fresh preflight, asks twice, and hands only the final typed root mutation to trusted OS `sudo`; never start VORTEX itself with `sudo`.
+- VORTEX remains unprivileged, performs a fresh preflight, asks twice, and hands only the final typed root mutation to trusted OS `sudo` (`sudo -v` on the real TTY, then `sudo -n --`). The OS may cache that authentication for a short timestamp window (commonly ~15 minutes); that is sudo, not a VORTEX credential store. Never start VORTEX itself with `sudo`.
 - The in-app Ollama installer downloads the official user-space release only after confirmation, enforces the release size and published SHA-256, extracts privately, verifies the executable and loopback API, and supports cancellation/retry. Missing `zstd` produces its reviewed apt prerequisite plan before the large download.
 - Model pulls validate the exact tag, verify it through the loopback API, and activate the selected advisory role only after success. Offline mode blocks downloads but not owner-local loopback inference.
 

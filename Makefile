@@ -10,7 +10,7 @@ audit:
 	@echo "Run cargo-audit/cargo-deny only if a future Rust auxiliary is introduced."
 
 preview:
-	python3 backend/vortex_backend.py --host 0.0.0.0 --port 4173
+	python3 backend/vortex_backend.py --host 127.0.0.1 --port 4173
 
 install-user:
 	bash scripts/install-user.sh

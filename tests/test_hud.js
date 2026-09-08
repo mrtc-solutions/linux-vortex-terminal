@@ -33,7 +33,7 @@ const HEALTH = {
   backend: 'online',
   health: {
     components: {
-      core: { state: 'healthy', version: '0.2.21' },
+      core: { state: 'healthy', version: '0.2.22' },
       database: { state: 'healthy' },
       terminal_engine: { state: 'healthy' },
       agent_council: { state: 'healthy', available: '0/0', agents: [] },
