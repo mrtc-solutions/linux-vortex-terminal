@@ -165,13 +165,18 @@ function createWindow() {
     }
   });
   mainWindow = win;
-  trustedWebContents.add(win.webContents.id);
+  // Keep the primitive identity, rather than dereferencing webContents during
+  // teardown. Electron destroys webContents before the BrowserWindow `closed`
+  // event on some window managers, which previously raised "Object has been
+  // destroyed" while closing the app.
+  const webContentsId = win.webContents.id;
+  trustedWebContents.add(webContentsId);
   attachWindowState(win);
   secureNavigation(win);
   win.setMenuBarVisibility(false);
   win.once('ready-to-show', () => win.show());
   win.on('closed', () => {
-    trustedWebContents.delete(win.webContents.id);
+    trustedWebContents.delete(webContentsId);
     if (mainWindow === win) mainWindow = null;
   });
   win.loadURL(`${sidecarUrl}/`).catch(error => {

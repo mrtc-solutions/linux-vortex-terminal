@@ -713,7 +713,12 @@
       detail.hidden = false;
       detail.textContent = 'Loading proposal…';
       try {
-        const data = await api('/api/dependencies/proposal?id=' + encodeURIComponent(itemId));
+        // Agent guidance is a local static response; do not wait behind the
+        // optional dependency AI-hint path before showing operator feedback.
+        const isAgentRequest = String(itemId || '').startsWith('agent:');
+        const data = isAgentRequest
+          ? await api('/api/agents/' + encodeURIComponent(String(itemId).slice(6)) + '/install')
+          : await api('/api/dependencies/proposal?id=' + encodeURIComponent(itemId));
         const item = data.install || {};
         const commands = (item.commands || []).map(line => esc(line)).join('\n');
         const canPlan = item.method === 'apt' && item.plan_request && !item.installed;
@@ -721,7 +726,7 @@
         const sourceHtml = /^https?:\/\//i.test(source)
           ? `<a class="report-dl" href="${esc(source)}" target="_blank" rel="noopener noreferrer">${esc(source)}</a>`
           : esc(source);
-        const isAgent = item.kind === 'agent';
+        const isAgent = item.kind === 'agent' || Boolean(item.agent);
         const note = isAgent
           ? '<p class="form-note">VORTEX cannot download or run third-party agent code — review the repository above and install it yourself, then return to the Agents view. Local AI (Ollama + models) is installed from the Agents or Models view instead.</p>'
           : (canPlan

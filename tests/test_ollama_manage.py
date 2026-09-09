@@ -97,6 +97,15 @@ class OllamaManagerTests(unittest.TestCase):
         self.assertTrue(status["platform"]["offline"])
         self.assertEqual(manager._server_env()["OLLAMA_HOST"], "127.0.0.1:11459")
 
+    def test_start_reuses_existing_external_loopback_service(self):
+        with patch("backend.models.manager._locate_binary", return_value="/bin/true"), \
+             patch("backend.models.manager._api_version", return_value="0.9.9"), \
+             patch("backend.models.manager.subprocess.Popen") as popen:
+            result = manager.start_server()
+        self.assertEqual(result["state"], "external")
+        self.assertFalse(result["managed"])
+        popen.assert_not_called()
+
     def test_activate_model_requires_live_exact_tag_and_persists_role(self):
         with patch("backend.models.manager._ollama_tags", return_value=["acme/local:7b"]):
             preference = manager.activate_model("acme/local:7b", "primary")

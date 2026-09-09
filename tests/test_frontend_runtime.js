@@ -141,7 +141,7 @@ for (const [view, endpoint] of Object.entries(expectLoad)) {
 // and a mapped apt tool must produce a real CREATE APT PLAN action.
 (async () => {
   await global.openDependency('agent:test');
-  assert.ok(fetched.some(url => url.includes('/api/dependencies/proposal')), 'agent install opens the proposal route');
+  assert.ok(fetched.some(url => url.includes('/api/agents/test/install')), 'agent install opens its direct proposal route');
   assert.ok(!String(elements['dep-detail'].innerHTML).includes('CREATE APT PLAN'), 'agent proposal stays operator-controlled');
 
   await global.openDependency('tool:podman');
