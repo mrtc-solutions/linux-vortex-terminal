@@ -20,7 +20,8 @@
   }
   function pollable() {
     if (install().status === 'preparing' || install().status === 'downloading' || install().status === 'verifying' || install().status === 'installing' || install().status === 'starting' || install().status === 'cancelling') return true;
-    return Object.keys(activeJobs()).length > 0;
+    var server = host().server || {};
+    return Object.keys(activeJobs()).length > 0 || server.state === 'starting';
   }
 
   function fmtBytes(bytes) {
@@ -91,13 +92,14 @@
     var apiState = runtime.api_state || 'unknown';
     var installed = runtime.installed;
     var server = runtime.server || {};
+    var serviceReady = apiState === 'healthy';
     var platform = runtime.platform || {};
     var rows = [
       statusRow('INSTALLED', installed ? 'yes · ' + (runtime.path || 'ollama') : 'not found', installed ? 'ok' : 'bad'),
       statusRow('VERSION', runtime.version || runtime.api_version || 'unknown', runtime.version ? 'ok' : 'warn'),
       statusRow('SERVICE', apiState + (runtime.api_reason ? ' · ' + runtime.api_reason : ''), stateClass(apiState)),
       statusRow('ENDPOINT', runtime.endpoint || '—', ''),
-      statusRow('SERVER', server.managed ? 'vortex-managed · ' + (server.state || 'stopped') : 'externally managed', stateClass(server.state)),
+      statusRow('SERVER', server.managed ? 'vortex-managed · ' + (server.state || 'stopped') : (serviceReady ? 'external service · running' : 'not managed by VORTEX'), serviceReady || server.state === 'running' ? 'ok' : stateClass(server.state)),
       statusRow('ARCH', platform.arch + (platform.supported_arch === false ? ' (no user-space build)' : ''), platform.supported_arch === false ? 'bad' : ''),
       statusRow('ARCHIVE HELPER', platform.zstd_available ? 'zstd available' : 'zstd missing — install it in Dependencies', platform.zstd_available ? 'ok' : 'warn'),
       statusRow('OFFLINE', platform.offline ? 'yes — install/download disabled' : 'no', platform.offline ? 'warn' : 'ok'),
@@ -121,8 +123,12 @@
       var actionHtml = '';
       if (!installed) {
         actionHtml = installActive ? '<button class="text-button danger" id="cancel-install-ollama">CANCEL INSTALL</button>' : '<button class="primary-button" id="install-ollama-btn">INSTALL OLLAMA</button>';
+      } else if (serviceReady && !server.managed) {
+        actionHtml = '<span class="form-note">EXTERNAL SERVICE ACTIVE</span>';
       } else if (server.state !== 'running') {
-        actionHtml = '<button class="primary-button" id="start-ollama-btn">START SERVICE</button>';
+        actionHtml = server.state === 'starting'
+          ? '<button class="primary-button" id="start-ollama-btn" disabled>STARTING SERVICE…</button>'
+          : '<button class="primary-button" id="start-ollama-btn">START SERVICE</button>';
       } else {
         actionHtml = '<button class="text-button" id="stop-ollama-btn">STOP SERVICE</button>';
       }
@@ -317,6 +323,7 @@
     var server = runtime.server || {};
     var running = server.state === 'running';
     var apiState = runtime.api_state || 'unknown';
+    var serviceReady = apiState === 'healthy';
     var installJob = runtime.install || {};
     var installActive = installJob.status === 'preparing' || installJob.status === 'downloading' || installJob.status === 'verifying' || installJob.status === 'installing' || installJob.status === 'starting' || installJob.status === 'cancelling';
 
@@ -327,8 +334,12 @@
       runtimeAction = '<span class="spinner"></span><span class="form-note" style="margin:0">' + esc(installJob.step || 'Installing…') + '</span><button class="text-button danger" data-local-ai="cancel-install">CANCEL</button>';
     } else if (!installed) {
       runtimeAction = '<button class="primary-button" data-local-ai="install">INSTALL OLLAMA</button>';
+    } else if (serviceReady && !server.managed) {
+      runtimeAction = '<span class="form-note" style="margin:0">EXTERNAL SERVICE ACTIVE</span>';
     } else if (!running) {
-      runtimeAction = '<button class="primary-button" data-local-ai="start">START SERVICE</button>';
+      runtimeAction = server.state === 'starting'
+        ? '<button class="primary-button" data-local-ai="start" disabled>STARTING SERVICE…</button>'
+        : '<button class="primary-button" data-local-ai="start">START SERVICE</button>';
     } else {
       runtimeAction = '<button class="text-button" data-local-ai="stop">STOP SERVICE</button>';
     }
@@ -345,7 +356,7 @@
         controls = '<span class="form-note" style="margin:0">' + esc(activeRoles.length ? 'active: ' + activeRoles.join(' · ') : 'not assigned') + '</span><button class="text-button" data-local-ai-remove="' + esc(item.installed_name || item.name) + '">REMOVE</button>';
       } else if (active) {
         controls = '<span class="spinner"></span><span class="form-note" style="margin:0">' + esc(job.status) + '</span>';
-      } else if (!installed || !running) {
+      } else if (!installed || !serviceReady) {
         controls = '<span class="form-note" style="margin:0">install &amp; start Ollama first</span>';
       } else {
         controls = '<button class="primary-button" data-local-ai-pull="' + esc(item.name) + '">DOWNLOAD &amp; USE</button>';
@@ -414,7 +425,7 @@
     if (!grid) return;
     var files = snapshot.files || [];
     if (!files.length) {
-      grid.innerHTML = '<div class="empty-inline">No *.gguf files found. Place Llama-3.2-3B-Instruct-Q4_K_M.gguf and Qwen2.5-3B-Instruct-Q4_K_M.gguf in ~/linux-vortex-terminal/models.</div>';
+      grid.innerHTML = '<div class="empty-inline">No *.gguf files found. Place Llama-3.2-3B-Instruct-Q4_K_M.gguf plus a Qwen2.5-3B or Qwen3-4B GGUF in ~/linux-vortex-terminal/models.</div>';
       return;
     }
     grid.innerHTML = files.map(function (item) {
@@ -529,11 +540,16 @@
   }
 
   async function startServer() {
+    if (modelsState.busy.server) return;
+    setBusy('server', true);
     try {
-      await api('/api/ollama/server/start', { method: 'POST', body: {} });
-      toast('Ollama service starting on 127.0.0.1:11434.');
+      var result = await api('/api/ollama/server/start', { method: 'POST', body: {} });
+      var server = result.server || {};
+      if (server.state !== 'running') throw new Error((server.logs || []).slice(-1)[0] || 'Ollama did not remain running.');
+      toast('Ollama service is running on 127.0.0.1:11434.');
       await loadModels();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toast(e.message || 'Unable to start Ollama service.', true); await loadModels(); }
+    finally { setBusy('server', false); }
   }
 
   async function stopServer() {

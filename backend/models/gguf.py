@@ -48,6 +48,13 @@ KNOWN_FILES = (
     "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
     "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
 )
+
+
+def _is_curated_file(name: str) -> bool:
+    """Recognize supported Qwen GGUF names, including Qwen3 4B variants."""
+    # Community quantized filenames often include date/release suffixes. Every
+    # Qwen file uses the reviewed Qwen template and is a valid planner fallback.
+    return name in KNOWN_FILES or detect_family(name) == "qwen"
 ROLE_DEFAULTS = {
     # fast conversation + explanation
     "fast": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
@@ -332,7 +339,7 @@ def scan(models_dir: str | None = None, *, use_cache: bool = True) -> dict[str, 
                 "version": header.get("version"),
                 "family": detect_family(name),
                 "quant": detect_quant(name),
-                "curated": name in KNOWN_FILES,
+                "curated": _is_curated_file(name),
                 "ram": ram_fit(size if isinstance(size, int) else None),
             })
             if len(files) >= MAX_GGUF_FILES:
@@ -342,7 +349,10 @@ def scan(models_dir: str | None = None, *, use_cache: bool = True) -> dict[str, 
         "files": files,
         "valid_files": [item for item in files if item.get("valid")],
         "curated_present": sorted({item["name"] for item in files if item.get("valid") and item.get("curated")}),
-        "curated_missing": [name for name in KNOWN_FILES if name not in {item["name"] for item in files if item.get("valid")}],
+        "curated_missing": [
+            name for name in KNOWN_FILES
+            if not any(item.get("valid") and (item.get("name") == name or (detect_family(name) == "qwen" and item.get("family") == "qwen")) for item in files)
+        ],
     }
     _SCAN_CACHE.update({"at": now, "key": cache_key, "value": value})
     return value

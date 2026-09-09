@@ -705,6 +705,18 @@ def start_server() -> dict[str, Any]:
     binary = _locate_binary()
     if not binary:
         raise PolicyError("Ollama is not installed on this host.")
+    # A system/user service may already own the configured loopback endpoint.
+    # Do not start a competing `ollama serve` process (which just exits on the
+    # occupied port) and make the successful external runtime explicit.
+    existing_version = _api_version(timeout=0.8)
+    if existing_version:
+        with _LOCK:
+            if _SERVER.get("proc") is None or _SERVER["proc"].poll() is not None:
+                _SERVER["state"] = "external"
+                _SERVER["binary"] = binary
+                _SERVER["logs"].append("[vortex] using existing loopback Ollama service")
+        _invalidate_router_status()
+        return {**_server_summary(), "state": "external", "managed": False, "api_version": existing_version}
     with _LOCK:
         proc = _SERVER.get("proc")
         if proc is not None and proc.poll() is None:
@@ -728,12 +740,24 @@ def start_server() -> dict[str, Any]:
         )
         _SERVER["proc"] = proc
         _SERVER["thread"] = drain_thread
-        _SERVER["state"] = "running"
+        # Report a transitional state until the process has survived its first
+        # scheduler turn. This keeps the UI responsive without pretending that
+        # a port-conflict or bad runtime is a running service.
+        _SERVER["state"] = "starting"
         _SERVER["binary"] = binary
         _SERVER["logs"].append(f"[vortex] started ollama serve pid={proc.pid}")
         drain_thread.start()
         _invalidate_router_status()
-        return _server_summary()
+    time.sleep(0.15)
+    with _LOCK:
+        still_running = _SERVER.get("proc") is proc and proc.poll() is None
+        if still_running:
+            _SERVER["state"] = "running"
+    summary = _server_summary()
+    if not still_running:
+        raise PolicyError("Ollama exited while starting: " + (summary.get("logs") or ["no diagnostic output"])[-1])
+    _invalidate_router_status()
+    return _server_summary()
 
 
 def stop_server() -> dict[str, Any]:
