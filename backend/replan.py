@@ -9,7 +9,25 @@ ACHIEVED_KINDS = {
 }
 
 
-def evaluate_objective(plan: dict[str, Any], operation: dict[str, Any] | None) -> dict[str, Any]:
+def _replan_hint(plan: dict[str, Any], verdict: dict[str, Any], settings: dict[str, Any] | None) -> dict[str, Any]:
+    """Best-effort AI commentary on the objective verdict. Never raises."""
+    try:
+        try:
+            from models.assist import assist as _assist
+        except ImportError:
+            from backend.models.assist import assist as _assist  # type: ignore
+        return _assist(
+            "replan",
+            f"Explain objective verdict for {plan.get('kind')}: achieved={verdict.get('achieved')}, "
+            f"replan={verdict.get('replan')}. {verdict.get('reason')}",
+            plan=plan,
+            settings=settings or {},
+        )
+    except Exception:
+        return {"function": "replan", "available": False, "hint": ""}
+
+
+def _verdict(plan: dict[str, Any], operation: dict[str, Any] | None) -> dict[str, Any]:
     kind = plan.get("kind") or ""
     status = (operation or {}).get("status") if operation else plan.get("status")
     commands = (operation or {}).get("commands") or []
@@ -44,3 +62,14 @@ def evaluate_objective(plan: dict[str, Any], operation: dict[str, Any] | None) -
         if status == "succeeded":
             return {"achieved": True, "replan": False, "reason": "Observed terminal outcome reached.", "next_request": None}
     return {"achieved": False, "replan": False, "reason": "Insufficient evidence to declare the objective complete.", "next_request": None}
+
+
+def evaluate_objective(plan: dict[str, Any], operation: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Deterministic verdict plus a best-effort AI commentary (``ai_hint``).
+
+    The verdict itself never depends on model output; the hint is attached
+    for operator convenience and degrades to unavailable without effect.
+    """
+    verdict = _verdict(plan, operation or None)
+    verdict["ai_hint"] = _replan_hint(plan, verdict, settings)
+    return verdict

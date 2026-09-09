@@ -374,8 +374,95 @@
     });
   }
 
+  function gguf() { return (modelsState.catalog && modelsState.catalog.gguf) || {}; }
+
+  function renderGguf() {
+    var box = $('gguf-status');
+    var grid = $('gguf-grid');
+    var badge = $('gguf-badge');
+    if (!box) return;
+    var snapshot = gguf();
+    var state = snapshot.state || 'unknown';
+    if (badge) {
+      badge.textContent = state.replace('-', ' ').toUpperCase();
+      badge.className = 'badge ' + (state === 'healthy' ? 'badge-green' : (state === 'unavailable' || state === 'disabled' ? 'badge-muted' : 'badge-amber'));
+    }
+    if (!snapshot || typeof snapshot.state !== 'string') {
+      box.innerHTML = '<div class="empty-inline">GGUF status is unavailable from the sidecar.</div>';
+      if (grid) grid.innerHTML = '';
+      return;
+    }
+    var engine = snapshot.engine || {};
+    var tuning = snapshot.tuning || {};
+    var rows = [
+      statusRow('STATE', state + (snapshot.reason ? ' · ' + snapshot.reason : ''), stateClass(state, ['healthy', 'ready'])),
+      statusRow('ENGINE', (engine.python ? 'llama-cpp-python' : (engine.cli || 'none')) + ' · ' + (engine.detail || engine.state || ''), engine.state === 'ready' || engine.state === 'test-double' ? 'ok' : 'warn'),
+      statusRow('TUNING', tuning.profile ? (tuning.profile + ' · ctx ' + tuning.n_ctx + ' · threads ' + tuning.n_threads) : '—', ''),
+      statusRow('LOADED', snapshot.loaded || 'none resident (single-slot policy)', ''),
+      statusRow('CURATED', ((snapshot.curated_present || []).join(', ') || 'none') + (((snapshot.curated_missing || []).length) ? ' · missing: ' + snapshot.curated_missing.join(', ') : ''), (snapshot.curated_missing || []).length ? 'warn' : 'ok'),
+      statusRow('DIRECTORIES', (snapshot.directories || []).join(' · ') || '—', ''),
+    ];
+    ['primary', 'planner', 'fast', 'specialist'].forEach(function (role) {
+      var pref = (snapshot.roles || {})[role];
+      if (!pref) return;
+      var value = pref.state === 'active'
+        ? (pref.resolved || pref.configured) + (pref.family_fallback ? ' · family fallback' : '')
+        : (pref.configured || 'not configured') + ' · unavailable (fuzzy router falls back)';
+      rows.push(statusRow('ROLE · ' + role.toUpperCase(), value, pref.state === 'active' ? 'ok' : 'warn'));
+    });
+    box.innerHTML = rows.join('');
+    if (!grid) return;
+    var files = snapshot.files || [];
+    if (!files.length) {
+      grid.innerHTML = '<div class="empty-inline">No *.gguf files found. Place Llama-3.2-3B-Instruct-Q4_K_M.gguf and Qwen2.5-3B-Instruct-Q4_K_M.gguf in ~/linux-vortex-terminal/models.</div>';
+      return;
+    }
+    grid.innerHTML = files.map(function (item) {
+      var ram = item.ram || {};
+      var fit = ram.fits_8gb === true ? 'FITS 8 GB' : (ram.fits_8gb === false ? 'TIGHT ON 8 GB' : 'RAM UNKNOWN');
+      var badgeCls = item.valid ? (ram.fits_8gb === false ? 'badge-amber' : 'badge-green') : 'badge-muted';
+      var badgeText = item.valid ? (item.curated ? 'CURATED · ' + fit : 'VALID · ' + fit) : 'INVALID';
+      var detail = item.valid
+        ? ((item.size_gb != null ? item.size_gb + ' GB' : '') + ' · ' + (item.family || '') + ' ' + (item.quant || '') + ' · ~' + (ram.resident_mb != null ? ram.resident_mb + ' MB resident' : 'resident unknown'))
+        : (item.reason || 'failed validation');
+      return '<article class="model-card ' + (item.valid ? 'installed' : 'failed') + '"><span class="badge ' + badgeCls + '">' + badgeText + '</span>' +
+        '<h3>' + esc(item.name) + '</h3>' +
+        '<div class="model-meta">' + esc(detail) + '</div>' +
+        '<div class="model-meta">' + esc(item.path || '') + '</div>' +
+        (item.valid
+          ? '<div class="model-controls role-controls">' + roleSelect(item, 'primary', false) +
+            '<button class="secondary-button" data-activate-gguf="' + esc(item.name) + '">USE FOR ROLE</button></div>'
+          : '') +
+        '</article>';
+    }).join('');
+    grid.querySelectorAll('[data-activate-gguf]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var select = btn.parentElement && btn.parentElement.querySelector('.model-role-select');
+        activateGguf(btn.dataset.activateGguf, select ? select.value : 'primary');
+      });
+    });
+  }
+
+  async function activateGguf(name, role) {
+    name = String(name || '').trim();
+    role = String(role || '').trim();
+    if (!name || !role || modelsState.busy['gguf:' + name]) return;
+    setBusy('gguf:' + name, true);
+    try {
+      var data = await api('/api/models/gguf/activate', { method: 'POST', body: { file: name, role: role } });
+      var preference = data.preference || {};
+      toast((preference.model || name) + ' is now active for ' + (preference.role || role) + ' on-device advisory work.');
+      await loadModels();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      setBusy('gguf:' + name, false);
+    }
+  }
+
   function renderModels() {
     renderStatus();
+    renderGguf();
     renderGrid();
     renderDownloadsStrip();
     renderAgentsLocalAi();

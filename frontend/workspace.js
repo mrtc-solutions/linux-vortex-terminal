@@ -176,7 +176,13 @@
       const data = await api(`/api/agents${refresh ? '?fresh=1' : ''}`);
       $('agent-grid').innerHTML = (data.agents || []).map(agent => {
         const healthy = !!agent.health?.healthy;
-        return `<article class="tool-card ${healthy ? 'installed' : 'absent'}"><span class="badge ${healthy ? 'badge-green' : 'badge-muted'}">${esc((agent.status || 'missing').toUpperCase())}</span><h3>${esc(agent.name)}</h3><div class="tool-family">${esc(agent.trust_level)} · ${esc(agent.execution_mode)}</div><p>${esc(agent.health?.message || agent.notes || '')}<br><span class="tool-path">${esc(agent.source || 'no verified repository')}</span><br>${esc(agent.version || 'Version unavailable')}</p>${healthy ? '' : `<button class="text-button" data-agent-install="${esc(agent.id)}">INSTALL PROPOSAL</button>`}</article>`;
+        const upstream = agent.upstream || {};
+        const repo = upstream.repository || agent.source || '';
+        const repoHtml = /^https?:\/\//i.test(repo)
+          ? `<a class="report-dl" href="${esc(repo)}" target="_blank" rel="noopener noreferrer">${esc(repo)}</a>`
+          : `<span class="tool-path">${esc(repo || 'no verified repository')}</span>`;
+        const sync = upstream.sync_state ? `<br>UPSTREAM ${esc(String(upstream.sync_state).toUpperCase())}${upstream.sync?.sha ? ' · ' + esc(String(upstream.sync.sha).slice(0, 12)) : ''}` : '';
+        return `<article class="tool-card ${healthy ? 'installed' : 'absent'}"><span class="badge ${healthy ? 'badge-green' : 'badge-muted'}">${esc((agent.status || 'missing').toUpperCase())}</span><h3>${esc(agent.name)}</h3><div class="tool-family">${esc(agent.trust_level)} · ${esc(agent.execution_mode)} · ${esc(upstream.consult || 'advisory')}</div><p>${esc(agent.health?.message || agent.notes || '')}<br>${repoHtml}<br>${esc(agent.version || 'Version unavailable')}${sync}</p>${healthy ? '' : `<button class="text-button" data-agent-install="${esc(agent.id)}">INSTALL PROPOSAL</button>`}</article>`;
       }).join('');
       document.querySelectorAll('[data-agent-install]').forEach(btn => btn.addEventListener('click', async () => {
         const original = btn.textContent;

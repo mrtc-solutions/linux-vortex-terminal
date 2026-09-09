@@ -503,33 +503,60 @@ def _ollama_model_pool_proposal(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def proposal_for(item_id: str) -> dict[str, Any]:
+def _deps_hint(item_id: str, proposal: dict[str, Any], settings: dict[str, Any] | None) -> dict[str, Any]:
+    """Best-effort AI explanation of a dependency proposal. Never raises."""
+    try:
+        try:
+            from models.assist import assist as _assist
+        except ImportError:
+            from backend.models.assist import assist as _assist  # type: ignore
+        return _assist(
+            "deps",
+            f"Explain dependency proposal for {item_id}: {proposal.get('message')}",
+            context={"id": item_id, "requires_root": proposal.get("requires_root", False)},
+            settings=settings or {},
+        )
+    except Exception:
+        return {"function": "deps", "available": False, "hint": ""}
+
+
+def proposal_for(item_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     data = inventory()
     item = next((row for row in data["items"] if row["id"] == item_id or row["name"] == item_id), None)
     if not item:
         return {"id": item_id, "state": "unknown", "auto_install": False, "message": "Unknown dependency."}
     if item["id"] == "runtime:ollama":
-        return _ollama_runtime_proposal(item)
+        proposal = _ollama_runtime_proposal(item)
+        proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
+        return proposal
     if item["id"] == "data:ollama-models":
-        return _ollama_model_pool_proposal(item)
+        proposal = _ollama_model_pool_proposal(item)
+        proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
+        return proposal
     if item["installed"]:
         if item.get("state") == "blocked":
             flags = ", ".join(item.get("security_flags") or ["path-safety warning"])
-            return {
+            proposal = {
                 **item,
                 "auto_install": False,
                 "message": f"Already present on this host at {item.get('path') or 'an existing path'}, but VORTEX flagged it for review ({flags}). Reinstall is not required.",
             }
-        return {**item, "auto_install": False, "message": "Already present on this host. No install is required."}
+            proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
+            return proposal
+        proposal = {**item, "auto_install": False, "message": "Already present on this host. No install is required."}
+        proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
+        return proposal
     if item["kind"] == "agent":
         extra = _agent_proposal(item["name"])
-        return {
+        proposal = {
             **item,
             **extra,
             "id": item["id"],
             "auto_install": False,
             "message": extra.get("message") or "Install this agent yourself after reviewing source and license.",
         }
+        proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
+        return proposal
     if item.get("method") == "apt" and item.get("apt_package"):
         pkg = item["apt_package"]
         install_message = (
@@ -542,7 +569,7 @@ def proposal_for(item_id: str) -> dict[str, Any]:
                 f"{item['title']} are used only as operator-provided scan inputs. "
                 "VORTEX will build a reviewed apt plan for the distro wordlist package and will not substitute /etc/passwd or another sensitive file."
             )
-        return {
+        proposal = {
             **item,
             "auto_install": False,
             "requires_root": True,
@@ -556,7 +583,9 @@ def proposal_for(item_id: str) -> dict[str, Any]:
             "plan_request": f"install package {pkg}",
             "message": install_message,
         }
-    return {
+        proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
+        return proposal
+    proposal = {
         **item,
         "auto_install": False,
         "commands": [
@@ -565,3 +594,5 @@ def proposal_for(item_id: str) -> dict[str, Any]:
         ],
         "message": "No reviewed apt package is mapped. Install remains operator-controlled.",
     }
+    proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
+    return proposal

@@ -4,11 +4,14 @@ const MAX_ROUTE_LENGTH = 2048;
 const SAFE_ID = '[A-Za-z0-9._:@-]+';
 
 const GET_ROUTES = [
-  /^\/api\/(?:doctor|tools|engagements|history|reports|sessions|dashboard|health|ollama|settings|setup|agents|conversations|tasks|memory|learning|findings|models)$/,
+  /^\/api\/(?:doctor|tools|engagements|history|reports|sessions|dashboard|health|ollama|settings|setup|agents|conversations|tasks|memory|learning|findings|models|search)$/,
   /^\/api\/tools\/host$/,
   /^\/api\/system\/health$/,
   /^\/api\/audit\/verify$/,
   /^\/api\/assets\/graph$/,
+  /^\/api\/models\/gguf$/,
+  /^\/api\/agents\/upstream$/,
+  /^\/api\/assist\/coverage$/,
   /^\/api\/dependencies(?:\/proposal)?$/,
   new RegExp(`^/api/operations/${SAFE_ID}$`),
   new RegExp(`^/api/sessions/${SAFE_ID}/events$`),
@@ -17,9 +20,11 @@ const GET_ROUTES = [
 ];
 
 const POST_ROUTES = [
-  /^\/api\/(?:engagements|sessions|conversations|palette|settings|secrets|execute)$/,
+  /^\/api\/(?:engagements|sessions|conversations|palette|settings|secrets|execute|assist)$/,
   /^\/api\/(?:mobile\/apk|desktop\/deb|workspace\/turn|tools\/host\/rescan|control\/stop-all|setup\/complete|dependencies\/(?:plan|execute))$/,
   /^\/api\/ollama\/(?:install(?:\/cancel)?|server\/(?:start|stop)|models\/(?:pull|activate|cancel|remove))$/,
+  /^\/api\/models\/gguf\/activate$/,
+  /^\/api\/agents\/upstream\/refresh$/,
   new RegExp(`^/api/engagements/${SAFE_ID}/close$`),
   new RegExp(`^/api/operations/${SAFE_ID}/approve$`),
   new RegExp(`^/api/sessions/${SAFE_ID}/(?:input|kill|resize)$`),

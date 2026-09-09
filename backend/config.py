@@ -29,6 +29,15 @@ DEFAULTS = {
     "model_timeout_seconds": 12,
     "model_max_parallel": 2,
     "model_keepalive": "0m",
+    "gguf_enabled": True,
+    "models_dir": "",
+    "gguf_primary": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "gguf_planner": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+    "gguf_fast": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "gguf_specialist": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+    "gguf_ctx": 2048,
+    "gguf_threads": 4,
+    "gguf_timeout_seconds": 20,
     "first_run_complete": False,
     "host_tool_access": False,
 }
@@ -92,6 +101,12 @@ def _load_settings_unlocked() -> dict[str, Any]:
         data["ai_verbosity"] = "balanced"
     data["model_timeout_seconds"] = max(2, min(int(data.get("model_timeout_seconds") or 12), 60))
     data["model_max_parallel"] = max(1, min(int(data.get("model_max_parallel") or 2), 3))
+    data["gguf_ctx"] = max(512, min(int(data.get("gguf_ctx") or 2048), 8192))
+    data["gguf_threads"] = max(1, min(int(data.get("gguf_threads") or 4), 8))
+    data["gguf_timeout_seconds"] = max(2, min(int(data.get("gguf_timeout_seconds") or 20), 120))
+    data["models_dir"] = str(data.get("models_dir") or "")[:300]
+    for _role in ("gguf_primary", "gguf_planner", "gguf_fast", "gguf_specialist"):
+        data[_role] = str(data.get(_role) or "")[:160]
     data["auto_low_risk"] = data["profile"] in {"standard", "expert"}
     data["auto_medium_risk"] = False
     data["allow_root"] = False
@@ -127,6 +142,12 @@ def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
             current["ai_verbosity"] = "balanced"
         current["model_timeout_seconds"] = max(2, min(int(current.get("model_timeout_seconds") or 12), 60))
         current["model_max_parallel"] = max(1, min(int(current.get("model_max_parallel") or 2), 3))
+        current["gguf_ctx"] = max(512, min(int(current.get("gguf_ctx") or 2048), 8192))
+        current["gguf_threads"] = max(1, min(int(current.get("gguf_threads") or 4), 8))
+        current["gguf_timeout_seconds"] = max(2, min(int(current.get("gguf_timeout_seconds") or 20), 120))
+        current["models_dir"] = str(current.get("models_dir") or "")[:300]
+        for _role in ("gguf_primary", "gguf_planner", "gguf_fast", "gguf_specialist"):
+            current[_role] = str(current.get(_role) or "")[:160]
         # Safe always confirms. HTTP/settings cannot unlock medium auto-run or root.
         current["auto_low_risk"] = current["profile"] in {"standard", "expert"}
         current["auto_medium_risk"] = False

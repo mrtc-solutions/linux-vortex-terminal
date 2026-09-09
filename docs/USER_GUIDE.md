@@ -144,20 +144,28 @@ desktop workbench.
 
 VORTEX is MIT-licensed (`LICENSE`, `GET /api/license`, Settings → License).
 
-### Optional local AI (Ollama, loopback only)
+### Optional local AI (on-device GGUF first, Ollama loopback second)
 
 VORTEX is local-AI-first only in an **advisory** sense. Deterministic planning,
 Guardian, and the typed executor remain authoritative.
 
-- Default endpoint: `http://127.0.0.1:11434`
-- Endpoint is clamped to loopback-only settings
-- Recommended local model pool: `phi4-mini:3.8b`, `qwen3:4b`, `llama3.2:3b`
-- Optional specialist: `gemma3:4b`
+- **Primary:** your own GGUF files in `~/linux-vortex-terminal/models/` —
+  `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (fast/conversation) and
+  `Qwen2.5-3B-Instruct-Q4_K_M.gguf` (planner/analysis). Tuned for 8 GB RAM /
+  ~2 GHz CPU (one resident model, 2048 ctx). See `docs/LOCAL_GGUF.md`.
+- **Secondary:** Ollama loopback pool, default endpoint
+  `http://127.0.0.1:11434` (clamped to loopback-only settings).
+  Recommended pool: `phi4-mini:3.8b`, `qwen3:4b`, `llama3.2:3b`;
+  optional specialist `gemma3:4b`.
+- **Fallback:** fuzzy routing (GGUF → Ollama → agent council →
+  deterministic core) demotes a delaying/failing primary automatically.
+  Every function also carries a best-effort `ai_hint`.
 
 Check live status:
 
 ```bash
 vortex model status --json
+vortex model test --json
 vortex deps --json
 vortex benchmark --json
 ```
