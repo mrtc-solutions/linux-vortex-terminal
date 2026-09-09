@@ -1444,13 +1444,59 @@ def catalog(status: dict[str, Any] | None = None, settings: dict[str, Any] | Non
                 "active_roles": [role for role, pref in preferences.items() if pref.get("resolved") == name],
                 "description": "Model installed on this host, outside the curated catalog.",
             })
+    try:
+        try:
+            from .gguf import status as gguf_status
+        except ImportError:
+            try:
+                from models.gguf import status as gguf_status  # type: ignore
+            except ImportError:
+                from backend.models.gguf import status as gguf_status  # type: ignore
+        gguf = gguf_status(settings or load_settings())
+    except Exception as exc:
+        gguf = {"provider": "gguf", "state": "unavailable", "reason": f"gguf probe failed: {str(exc)[:160]}"}
     return {
         "items": items,
         "extras": extras,
         "downloads": live_jobs,
         "runtime": status,
         "routing_preferences": preferences,
+        "gguf": gguf,
     }
+
+
+_GGUF_ROLE_SETTINGS = {
+    "primary": "gguf_primary", "planner": "gguf_planner",
+    "fast": "gguf_fast", "specialist": "gguf_specialist",
+}
+
+
+def activate_gguf(filename: str, role: str) -> dict[str, Any]:
+    """Persist a GGUF advisory role after verifying the exact local file."""
+    filename = str(filename or "").strip()
+    role = str(role or "").strip().lower()
+    if not filename or len(filename) > 160 or "/" in filename or "\\" in filename or filename.startswith("."):
+        raise ValueError("GGUF filename is invalid")
+    if role not in _GGUF_ROLE_SETTINGS:
+        raise ValueError("model role must be primary, planner, fast, or specialist")
+    try:
+        try:
+            from .gguf import scan as gguf_scan
+        except ImportError:
+            try:
+                from models.gguf import scan as gguf_scan  # type: ignore
+            except ImportError:
+                from backend.models.gguf import scan as gguf_scan  # type: ignore
+        found = gguf_scan(load_settings().get("models_dir"))
+    except Exception as exc:
+        raise PolicyError(f"GGUF scan failed: {str(exc)[:160]}")
+    entry = next((item for item in (found.get("valid_files") or []) if item.get("name") == filename), None)
+    if entry is None:
+        raise PolicyError("The requested GGUF file was not found or failed validation on this host.")
+    setting = _GGUF_ROLE_SETTINGS[role]
+    saved = save_settings({setting: filename})
+    _invalidate_router_status()
+    return {"role": role, "setting": setting, "model": saved[setting], "state": "active", "provider": "gguf"}
 
 
 def _describe(meta: dict[str, Any]) -> str:

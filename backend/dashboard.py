@@ -122,10 +122,26 @@ def collect(store: Any, workspace: Any, settings: dict[str, Any] | None = None) 
         "multi_model": bool(recommended.get("multi_model")),
         "message": local_ai.get("reason") or local_ai.get("message"),
     }
+    try:
+        try:
+            from models.assist import assist as _assist
+        except ImportError:
+            from backend.models.assist import assist as _assist  # type: ignore
+        ai_hint = _assist(
+            "dashboard",
+            f"Summarize host state: {installed} tools installed, {len(running_sessions)} sessions running, "
+            f"{len(active_engagements)} active engagements, AI {ai_state}.",
+            context={"tools": {"installed": installed, "unavailable": unavailable, "blocked": blocked},
+                     "sessions_running": len(running_sessions), "ai_state": ai_state},
+            settings=settings,
+        )
+    except Exception:
+        ai_hint = {"function": "dashboard", "available": False, "hint": ""}
     return {
         "host": doctor,
         "system": system,
         "ai": ai,
+        "ai_hint": ai_hint,
         "session": {
             "total": len(sessions),
             "running": len(running_sessions),

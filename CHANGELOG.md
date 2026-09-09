@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased — 2026-09-09
+
+On-device GGUF primary, fuzzy provider routing, per-function AI assistance,
+and agent upstream tracking. No simulation: every new surface degrades to an
+honest unavailable state when its files, engine, or network are absent.
+
+- New **GGUF provider** (`backend/models/gguf.py`): discovers and validates
+  `*.gguf` files (`~/linux-vortex-terminal/models` by default), with the two
+  curated models Llama-3.2-3B-Instruct-Q4_K_M (fast/primary) and
+  Qwen2.5-3B-Instruct-Q4_K_M (planner/specialist). Tuned for 8 GB RAM /
+  ~2 GHz CPU: single resident model, 2048 ctx, ≤4 threads, mmap weights,
+  llama-cpp-python or llama-cli engines, per-family chat templates.
+- New **fuzzy router** (`backend/models/fuzzy.py`): GGUF → Ollama → agent
+  council → deterministic core, blending availability, latency EWMA, RAM
+  pressure, and phase fit. Every real call feeds back, so a delaying or
+  failing primary yields to the secondary automatically.
+- `advise()` is provider-aware (per-item `provider`, latency recording) and
+  `model_status()` reports `providers` + `fuzzy` winner/ranking; `vortex
+  model test` runs a real smoke completion.
+- New **universal assistance** (`backend/models/assist.py`, 16 functions):
+  plan, explain, palette, search, dashboard, assets, health, deps, replan,
+  report, memory, engagement, session, interpret, verify, and error paths
+  carry `ai_hint`. Advisory only; nothing blocks and nothing breaks without
+  a model. New endpoints `POST /api/assist`, `GET /api/assist/coverage`.
+- New **GGUF endpoints** `GET /api/models/gguf` and
+  `POST /api/models/gguf/activate` (role persistence after file
+  verification; traversal-safe), plus a Models-view GGUF panel and updated
+  desktop preload allowlist.
+- New **agent upstream tracking** (`backend/agents/upstream.py`): every
+  secondary assistant links its original repository with license, install
+  guide, and consult status; operator-triggered `POST
+  /api/agents/upstream/refresh` checks GitHub HEAD (offline-safe, bounded).
+  HALO/DarkMoon stay honestly `unverified` — no URL invented.
+- Council `discover()` and install proposals now carry upstream metadata;
+  Agents view renders repository links and sync state.
+- New suite `tests/test_gguf_fuzzy.py` (32 tests) and operator guide
+  `docs/LOCAL_GGUF.md`.
+
 ## 0.2.22 — 2026-09-07
 
 Final hardening pass after the 0.2.21 network/auth/privilege work. Remaining

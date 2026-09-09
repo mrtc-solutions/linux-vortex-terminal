@@ -34,7 +34,20 @@ def resource_budget() -> dict[str, Any]:
 
 
 def discover() -> list[dict[str, Any]]:
-    return [adapter.metadata() for adapter in ADAPTERS.values()]
+    try:
+        from .upstream import enrich
+    except ImportError:
+        try:
+            from agents.upstream import enrich  # type: ignore
+        except ImportError:
+            from backend.agents.upstream import enrich  # type: ignore
+    out: list[dict[str, Any]] = []
+    for adapter in ADAPTERS.values():
+        try:
+            out.append(enrich(adapter.manifest.id, adapter.metadata()))
+        except Exception:
+            out.append(adapter.metadata())
+    return out
 
 
 def select_agents(plan: dict[str, Any]) -> list[str]:

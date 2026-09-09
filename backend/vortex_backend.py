@@ -4315,6 +4315,16 @@ class VortexHandler(BaseHTTPRequestHandler):
                 settings = _load("config").load_settings()
                 runtime = manager.runtime_status()
                 return self._json(200, {"ollama": runtime, "models": manager.catalog(runtime, settings)})
+            if path == "/api/models/gguf":
+                gguf = _load("models.gguf")
+                settings = _load("config").load_settings()
+                return self._json(200, {"gguf": gguf.status(settings)})
+            if path == "/api/agents/upstream":
+                upstream = _load("agents.upstream")
+                return self._json(200, {"upstream": upstream.table()})
+            if path == "/api/assist/coverage":
+                assist_module = _load("models.assist")
+                return self._json(200, {"coverage": assist_module.coverage()})
             if path == "/api/settings":
                 load_settings = _load("config").load_settings
                 return self._json(200, {"settings": load_settings()})
@@ -4336,7 +4346,8 @@ class VortexHandler(BaseHTTPRequestHandler):
                 deps = _load("dependencies")
                 query = urllib.parse.parse_qs(parsed.query)
                 item_id = self._query_text(query, "id", "")
-                return self._json(200, {"install": deps.proposal_for(item_id)})
+                settings = _load("config").load_settings()
+                return self._json(200, {"install": deps.proposal_for(item_id, settings)})
             if path == "/api/sandbox":
                 from sandbox import isolation_status
                 return self._json(200, {"sandbox": isolation_status()})
@@ -4370,10 +4381,12 @@ class VortexHandler(BaseHTTPRequestHandler):
                     limit_i = int(limit)
                 except (TypeError, ValueError):
                     limit_i = 200
-                return self._json(200, {"graph": self.workspace.asset_graph(max(1, min(limit_i, 500)))})
+                settings = _load("config").load_settings()
+                return self._json(200, {"graph": self.workspace.asset_graph(max(1, min(limit_i, 500)), settings)})
             if path == "/api/search":
                 query = urllib.parse.parse_qs(parsed.query)
-                return self._json(200, {"search": self.workspace.search_all(self._query_text(query, "q", "", limit=200))})
+                settings = _load("config").load_settings()
+                return self._json(200, {"search": self.workspace.search_all(self._query_text(query, "q", "", limit=200), settings=settings)})
             if path == "/api/dashboard":
                 load_settings = _load("config").load_settings
                 collect = _load("dashboard").collect
@@ -4796,8 +4809,34 @@ class VortexHandler(BaseHTTPRequestHandler):
                     raise ValueError("palette request is required")
                 if len(request) > 8000:
                     raise ValueError("palette request is too long")
-                result = run_palette(self.store, self.workspace, request, cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), offline=self._flag(body, "offline"))
+                settings = _load("config").load_settings()
+                result = run_palette(self.store, self.workspace, request, cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), offline=self._flag(body, "offline"), settings=settings)
                 return self._json(200, result)
+            if path == "/api/assist":
+                assist_module = _load("models.assist")
+                settings = _load("config").load_settings()
+                function = (self._text(body, "function") or "interpret")[:40]
+                request_text = (self._text(body, "request") or "")[:1500]
+                context = body.get("context") if isinstance(body.get("context"), dict) else {}
+                return self._json(200, {"assist": assist_module.assist(function, request_text, context=context, settings=settings)})
+            if path == "/api/models/gguf/activate":
+                manager = _load("models.manager")
+                filename = self._text(body, "file") or self._text(body, "name") or ""
+                role = (self._text(body, "role") or "primary")[:20]
+                try:
+                    preference = manager.activate_gguf(filename, role)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"preference": preference})
+            if path == "/api/agents/upstream/refresh":
+                upstream = _load("agents.upstream")
+                settings = _load("config").load_settings()
+                agent = self._optional_str(body, "agent")
+                if agent is not None and (len(agent) > 40 or not agent.replace("-", "").replace("_", "").isalnum()):
+                    raise ValueError("agent id is invalid")
+                return self._json(200, {"refresh": upstream.refresh(agent, offline=settings.get("offline") is True)})
             if path == "/api/execute":
                 plan_id = self._optional_str(body, "plan_id")
                 if not plan_id:

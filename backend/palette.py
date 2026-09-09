@@ -156,6 +156,24 @@ def _run_query(store: Any, workspace: Any, query: str, term: str) -> tuple[str, 
     return query, []
 
 
+def _palette_hint(meta: dict[str, Any], result: dict[str, Any], settings: dict[str, Any] | None) -> dict[str, Any]:
+    """Best-effort AI explanation of a palette result. Never raises."""
+    try:
+        try:
+            from models.assist import assist as _assist
+        except ImportError:
+            from backend.models.assist import assist as _assist  # type: ignore
+        plan = result.get("plan") or {}
+        if plan:
+            prompt = f"Explain palette command {meta.get('command')}: planned kind {plan.get('kind')}, status {plan.get('status')}."
+            return _assist("palette", prompt, plan=plan, settings=settings or {})
+        query = meta.get("query") or meta.get("command")
+        prompt = f"Briefly explain palette query {query} results for the operator."
+        return _assist("palette", prompt, context={"query": query}, settings=settings or {})
+    except Exception:
+        return {"function": "palette", "available": False, "hint": ""}
+
+
 def run_palette(
     store: Any,
     workspace: Any,
@@ -164,6 +182,7 @@ def run_palette(
     cwd: str | None = None,
     engagement_id: str | None = None,
     offline: bool = False,
+    settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a palette command and return an inspectable result.
 
@@ -183,11 +202,15 @@ def run_palette(
         except ImportError:
             from backend.vortex_backend import build_plan
         plan = build_plan(store, meta["request"], cwd, engagement_id, offline=offline)
-        return {"palette": meta, "plan": plan}
+        result = {"palette": meta, "plan": plan}
+        result["ai_hint"] = _palette_hint(meta, result, settings)
+        return result
 
     if kind == "query":
         key, value = _run_query(store, workspace, meta["query"], meta.get("term") or "")
-        return {"palette": meta, key: value}
+        result = {"palette": meta, key: value}
+        result["ai_hint"] = _palette_hint(meta, result, settings)
+        return result
 
     # help / unknown / search_help: show the reviewed palette, optionally with a
     # read-only help plan.

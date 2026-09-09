@@ -500,17 +500,19 @@ def main(argv=None):
             workspace = Workspace(store)
             emit({'benchmark': run_suite(store, workspace, execution_manager(workspace), args.cwd)}, args.as_json); return 0
         if args.subcommand == 'palette':
+            from backend.config import load_settings as _load_settings
             from backend.palette import run_palette
             from backend.workspace import Workspace
             request = ' '.join(getattr(args, 'request', []) or [])
             if not request:
                 request = '/help'
-            emit(run_palette(store, Workspace(store), request, cwd=args.cwd, engagement_id=args.engagement_id, offline=args.offline), args.as_json)
+            emit(run_palette(store, Workspace(store), request, cwd=args.cwd, engagement_id=args.engagement_id, offline=args.offline, settings=_load_settings()), args.as_json)
             return 0
         if args.subcommand == 'search':
+            from backend.config import load_settings as _load_settings
             from backend.workspace import Workspace
             term = ' '.join(getattr(args, 'term', []) or [])
-            emit({'search': Workspace(store).search_all(term)}, args.as_json)
+            emit({'search': Workspace(store).search_all(term, settings=_load_settings())}, args.as_json)
             return 0
         if args.subcommand == 'dashboard':
             from backend import dashboard
@@ -519,8 +521,9 @@ def main(argv=None):
             emit({'dashboard': dashboard.collect(store, Workspace(store), _load_settings())}, args.as_json)
             return 0
         if args.subcommand == 'assets':
+            from backend.config import load_settings as _load_settings
             from backend.workspace import Workspace
-            emit({'graph': Workspace(store).asset_graph(getattr(args, 'limit', 200))}, args.as_json)
+            emit({'graph': Workspace(store).asset_graph(getattr(args, 'limit', 200), _load_settings())}, args.as_json)
             return 0
         if args.subcommand == 'conversations':
             from backend.workspace import Workspace
@@ -583,12 +586,18 @@ def main(argv=None):
             emit({'prune': store.prune(args.history_days, args.output_days)}, args.as_json); return 0
         if args.subcommand == 'model':
             from backend.config import load_settings as _load_settings
-            from backend.models.router import model_status
-            model = model_status(_load_settings())
+            from backend.models.router import advise, model_status
+            settings = _load_settings()
+            model = model_status(settings)
             if args.action == 'use':
-                model['message'] = 'Provider selection is automatic and local-first in this build. Change model_* settings if you need different routing preferences.'
+                model['message'] = 'Provider selection is automatic and fuzzy local-first (GGUF primary, Ollama secondary, agent council fallback). Change gguf_* or model_* settings to adjust role preferences.'
+            if args.action == 'test':
+                probe = advise('Explain what whoami does on Linux.', plan={"kind": "identity", "risk": "low", "status": "planned", "commands": []}, phase='conversation', settings=settings)
+                model['smoke_test'] = {"state": probe.get("state"), "provider": probe.get("provider"), "route": probe.get("route"), "message": (probe.get("message") or "")[:400]}
+                emit({'model': model}, args.as_json)
+                return 0 if probe.get("state") == "responded" else EXIT_CODES['unavailable']
             emit({'model': model}, args.as_json)
-            return 0 if args.action in ('status', 'list', 'use') else EXIT_CODES['unavailable']
+            return 0
         if args.subcommand == 'shell':
             return shell_command(args.shell, args.action, getattr(args, 'yes', False), args.as_json)
         if args.subcommand == 'session':
@@ -649,9 +658,15 @@ def main(argv=None):
         if args.subcommand == 'audit':
             result = {'audit': store.verify_audit()}; emit(result, args.as_json); return 0 if result['audit']['valid'] else EXIT_CODES['integrity_failure']
         if args.subcommand == 'explain':
+            from backend.config import load_settings as _load_settings
+            from backend.models.assist import assist as _assist
             plan = build_plan(store, 'explain ' + ' '.join(args.request), args.cwd, args.engagement_id, args.offline)
             plan['approval_required'] = False
-            emit({'explanation': plan}, args.as_json)
+            try:
+                hint = _assist("explain", ' '.join(args.request), plan=plan, settings=_load_settings())
+            except Exception:
+                hint = {"function": "explain", "available": False, "hint": ""}
+            emit({'explanation': plan, 'ai_hint': hint}, args.as_json)
             return 0
         if args.subcommand == 'report':
             operation = store.get_operation(args.history_id)

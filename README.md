@@ -7,9 +7,12 @@ Linux-native, AI-assisted authorized cybersecurity and Linux operations workbenc
 VORTEX turns a natural-language objective into an inspectable plan, checks tools
 actually installed on the host, evaluates the plan with an independent Guardian,
 runs only typed argv through one local Python authority, and records observed
-evidence. Local-AI-first advisory routing uses verified models from a
-loopback-only Ollama runtime, with explicit primary/planner/fast/specialist roles
-and truthful deterministic fallback; planning and Guardian remain authoritative.
+evidence. Advisory routing is fuzzy local-first: your own on-device GGUF files
+(Llama-3.2-3B fast, Qwen2.5-3B planner) answer first, a loopback-only Ollama
+pool is secondary, the agent council advises deterministically when no model
+responds, and the deterministic core always works; planning and Guardian remain
+authoritative. Every user-facing function carries a best-effort AI hint that
+degrades honestly when no model answers.
 Missing tools, agents, Docker, and
 models are reported as unavailable, and tools found in unsafe/user-writable
 locations are shown as present-but-blocked for review rather than silently
@@ -108,6 +111,10 @@ UNAVAILABLE), or **Not implemented**.
 | Offline mode, privacy mode, lab-mode flag | Implemented |
 | STOP ALL kill switch | Implemented + tested |
 | Local-AI advisory routing via Ollama loopback + model roles | Implemented + tested; concurrent primary/verifier calls, visible role resolution/fallback, advisory only |
+| On-device GGUF primary (Llama-3.2-3B + Qwen2.5-3B) with 8 GB tuning | Implemented + tested; validated files, single resident model, llama-cpp-python or llama-cli engines, honest unavailable without an engine |
+| Fuzzy provider routing (GGUF → Ollama → council → deterministic) | Implemented + tested; latency/RAM/availability blending with per-call feedback and inspectable ranking |
+| Per-function AI assistance (`ai_hint` on 16 functions) | Implemented + tested; advisory only, never blocks, every function works without a model |
+| Agent upstream tracking (original repositories + HEAD checks) | Implemented + tested; offline-safe table, operator-triggered refresh, unverified agents never invented |
 | Docker/Podman isolation probe | Implemented; UNAVAILABLE when no runtime is installed |
 | Plugin JSON manifests (no plugin code execution) | Implemented |
 | Security tests: injection, prompt-injection text, Guardian | Implemented + tested |

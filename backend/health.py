@@ -139,12 +139,28 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
         "storage": {"state": "healthy" if storage is None or storage < 95 else "warning", "used_percent": storage, "path": str(data_dir)},
         "sandbox": isolation,
     }
+    try:
+        try:
+            from models.assist import assist as _assist
+        except ImportError:
+            from backend.models.assist import assist as _assist  # type: ignore
+        degraded = sorted(name for name, item in components.items() if isinstance(item, dict) and item.get("state") not in {"healthy", "empty"})
+        ai_hint = _assist(
+            "health",
+            f"Explain subsystem health: {installed} tools detected, {agent_healthy} agents healthy, "
+            f"local AI {local_ai_state}" + (f", attention: {', '.join(degraded[:6])}" if degraded else ", all nominal") + ".",
+            context={"degraded": degraded[:8], "local_ai_state": local_ai_state},
+            settings=settings,
+        )
+    except Exception:
+        ai_hint = {"function": "health", "available": False, "hint": ""}
     return {
         "product": "VORTEX",
         "offline": settings.get("offline") is True,
         "privacy_mode": settings.get("privacy_mode") or "local",
         "host": doctor,
         "components": components,
+        "ai_hint": ai_hint,
         "tools": tools,
         "which_git": bool(shutil.which("git")),
         "which_python": bool(shutil.which("python3")),

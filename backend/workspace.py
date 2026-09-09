@@ -605,7 +605,18 @@ class Workspace:
             return {"excluded_targets": [], "environment": None, "owner": None}
         return {"excluded_targets": json.loads(row["excluded_json"]), "environment": row["environment"] or None, "owner": row["owner"] or None}
 
-    def search_all(self, term: str, limit: int = 100) -> dict[str, Any]:
+    def _ai_hint(self, function: str, prompt: str, context: dict[str, Any] | None = None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Best-effort AI hint for workspace reads. Never raises."""
+        try:
+            try:
+                from models.assist import assist as _assist
+            except ImportError:
+                from backend.models.assist import assist as _assist  # type: ignore
+            return _assist(function, prompt, context=context or {}, settings=settings or {})
+        except Exception:
+            return {"function": function, "available": False, "hint": ""}
+
+    def search_all(self, term: str, limit: int = 100, settings: dict[str, Any] | None = None) -> dict[str, Any]:
         """Cross-layer global search (history, conversation, findings, evidence,
         reports, sessions, tasks, memory).
 
@@ -676,7 +687,14 @@ class Workspace:
 
         results.sort(key=lambda item: item.get("at") or "", reverse=True)
         results = results[:limit]
-        return {"term": term, "total": len(results), "results": results}
+        layers = sorted({str(item.get("layer")) for item in results})
+        hint = self._ai_hint(
+            "search",
+            f"Summarize search for '{term}': {len(results)} result(s) across {', '.join(layers) or 'no layers'}.",
+            {"term": term, "total": len(results), "layers": layers},
+            settings,
+        )
+        return {"term": term, "total": len(results), "results": results, "ai_hint": hint}
 
     def enrich_engagement(self, item: dict[str, Any] | None) -> dict[str, Any] | None:
         if not item:
@@ -697,7 +715,7 @@ class Workspace:
             item["effective_status"] = item.get("status")
         return item
 
-    def asset_graph(self, limit: int = 200) -> dict[str, Any]:
+    def asset_graph(self, limit: int = 200, settings: dict[str, Any] | None = None) -> dict[str, Any]:
         """Derive an asset graph from observed store records.
 
         Nodes come only from records that actually exist (engagements, findings,
@@ -777,10 +795,17 @@ class Workspace:
         by_type: dict[str, int] = {}
         for item in nodes_list:
             by_type[item["type"]] = by_type.get(item["type"], 0) + 1
+        hint = self._ai_hint(
+            "assets",
+            f"Explain asset graph: {len(nodes_list)} node(s), {len(edges_list)} edge(s), types {by_type}.",
+            {"nodes": len(nodes_list), "edges": len(edges_list), "by_type": by_type},
+            settings,
+        )
         return {
             "nodes": nodes_list,
             "edges": edges_list,
             "summary": {"nodes": len(nodes_list), "edges": len(edges_list), "by_type": by_type},
+            "ai_hint": hint,
         }
 
     def _graph_operation(self, operation: dict[str, Any], node: Any, edge: Any, target_node: Any, engagement_node: Any, limit: int) -> None:
