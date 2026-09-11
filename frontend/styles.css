@@ -834,7 +834,7 @@ body.electron-shell .surface-window { top: var(--native-titlebar-height); }
 /* ---- plain high-contrast mode ---- */
 .plain-mode { --cyan: #d9d9df; --green: #d9d9df; --amber: #d9d9df; --violet: #d9d9df; }
 .plain-mode .primary-button, .plain-mode .command-bar button { background: #dedee2; color: #111; }
-.plain-mode body::before { display: none; }
+body.plain-mode::before, body.plain-mode::after { display: none; }
 
 /* ============================================================
    RESPONSIVE — HUD collapses gracefully, terminal stays accessible
@@ -970,5 +970,169 @@ body.electron-shell .surface-window { top: var(--native-titlebar-height); }
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
-  body::before { display: none; }
+  body::before, body::after { display: none; }
+}
+
+/* ============================================================
+   VORTEX OPERATIONS CONSOLE
+   Design-only hierarchy pass.  Existing selectors, controls, states, and
+   renderer behavior remain unchanged; these rules provide the shared command
+   deck treatment described in DESIGN_REDESIGN_PLAN.md.
+   ============================================================ */
+:root {
+  --bg-0: #010302;
+  --bg-1: #050906;
+  --bg-2: #09110a;
+  --surface: #09110a;
+  --surface-2: #0d180f;
+  --surface-3: #16261a;
+  --border: #2b4930;
+  --border-soft: rgba(117, 171, 120, .24);
+  --green: #63ff91;
+  --green-2: #29d960;
+  --cyan: #7de7d1;
+  --text: #f0f8f1;
+  --muted: #acc3af;
+  --dim: #7e9a82;
+  --shadow: 0 24px 72px rgba(0, 0, 0, .58);
+  --radius: 4px;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  opacity: .16;
+  background: linear-gradient(transparent 50%, rgba(0, 0, 0, .18) 50%);
+  background-size: 100% 4px;
+}
+.app-shell { z-index: 2; }
+
+/* Navigation becomes an intentional map of the operating workflow. */
+.sidebar {
+  width: 252px;
+  flex-basis: 252px;
+  padding: 22px 12px 16px;
+  background: linear-gradient(180deg, rgba(7, 14, 8, .985), rgba(1, 4, 2, .99));
+  box-shadow: 14px 0 45px rgba(0, 0, 0, .16);
+}
+.brand { margin-bottom: 18px; padding-bottom: 20px; }
+.brand-mark { width: 34px; height: 34px; }
+.brand-name { letter-spacing: 3.4px; }
+.side-label { padding: 0 12px 8px; color: var(--green-2); font-size: 8px; }
+.nav-zone-label { margin-top: 16px; border-top: 1px solid rgba(125, 231, 209, .12); padding-top: 14px; }
+.nav-zone, .nav-secondary { display: block; }
+.nav-secondary { margin-top: 14px; padding-top: 0; }
+.nav-item {
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  margin: 1px 0;
+}
+.nav-item:hover { border-color: rgba(99, 255, 145, .22); background: rgba(99, 255, 145, .075); }
+.nav-item.active {
+  background: linear-gradient(90deg, rgba(99, 255, 145, .20), rgba(99, 255, 145, .025));
+  box-shadow: inset 3px 0 0 var(--green), 0 0 18px rgba(99, 255, 145, .05);
+  border-color: rgba(99, 255, 145, .18);
+}
+.system-chip { border-radius: var(--radius); background: linear-gradient(135deg, rgba(99, 255, 145, .08), rgba(125, 231, 209, .025)); }
+
+/* The top bar acts as a restrained status line, not a competing dashboard. */
+.topbar {
+  min-height: 64px;
+  padding: 10px 32px;
+  border-bottom-color: rgba(125, 231, 209, .18);
+  background: linear-gradient(180deg, rgba(8, 14, 9, .96), rgba(3, 7, 4, .92));
+}
+.breadcrumb { color: var(--green); }
+.telemetry-chip { border-radius: 999px; background: rgba(9, 20, 11, .82); padding: 5px 10px; }
+.top-actions { column-gap: 9px; }
+.avatar { border-radius: 50%; border-color: var(--green-2); background: rgba(99, 255, 145, .08); }
+
+/* Shared framed surface language. */
+.content { max-width: 1680px; padding: 34px 40px 72px; }
+.panel, .report-card, .tool-card, .engagement-card {
+  border-radius: var(--radius);
+  background: linear-gradient(145deg, rgba(15, 25, 16, .96), rgba(4, 10, 5, .96));
+  box-shadow: 0 14px 38px rgba(0, 0, 0, .16);
+}
+.panel::before { width: 58px; background: linear-gradient(90deg, var(--green), var(--cyan)); }
+.panel-head { min-height: 64px; padding: 15px 18px; }
+.panel-kicker { color: var(--cyan); }
+.section-heading { margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid rgba(125, 231, 209, .14); }
+.section-heading h1 { font-size: clamp(27px, 2.3vw, 36px); font-weight: 650; letter-spacing: -.9px; }
+.section-heading p { max-width: 760px; line-height: 1.55; }
+.badge { border-radius: 999px; padding: 5px 9px; }
+.secondary-button, .text-button { border-radius: 3px; }
+.primary-button, .command-bar button { border-radius: 3px; box-shadow: 0 4px 16px rgba(99, 255, 145, .16); }
+.danger-btn { background: rgba(255, 70, 85, .06); }
+
+/* Command deck: request intent, reviewed plan, and observed evidence are the
+   visual sequence.  This changes no data placement or execution state. */
+.workspace-grid { grid-template-columns: minmax(300px, .92fr) minmax(400px, 1.36fr) minmax(264px, .78fr); gap: 16px; }
+.chat-column { padding: 4px 2px; }
+.chat-column > h1 { font-size: clamp(32px, 3vw, 44px); letter-spacing: -1.6px; margin: 9px 0 10px; }
+.chat-column > h1 em { color: var(--green); font-style: normal; text-shadow: 0 0 24px rgba(99, 255, 145, .22); }
+.hero-copy { max-width: 47ch; line-height: 1.65; }
+.chat-thread {
+  min-height: 232px;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(4, 10, 5, .78), rgba(8, 17, 9, .5));
+}
+.chat-msg { border-radius: 3px; }
+.command-bar { height: 58px; border-radius: var(--radius); border-color: rgba(99, 255, 145, .36); }
+.command-bar:focus-within { box-shadow: 0 0 0 3px rgba(99, 255, 145, .12), 0 12px 30px rgba(0, 0, 0, .18); }
+.quick-actions { grid-template-columns: repeat(2, 1fr); margin-bottom: 0; }
+.quick-actions button { border-radius: var(--radius); min-height: 70px; }
+.live-column { display: grid; gap: 12px; }
+.plan-panel { min-height: 332px; }
+.live-output { min-height: 176px; max-height: 264px; border-radius: var(--radius); margin: 0; padding: 16px; box-shadow: inset 0 1px 0 rgba(99, 255, 145, .08); }
+.context-column { border-left: 1px solid rgba(125, 231, 209, .12); padding-left: 16px; }
+.context-column .panel { margin-bottom: 14px; }
+.activity-panel { margin-top: 16px; }
+
+/* Evidence and terminal retain the darkest, highest-contrast working surface. */
+.terminal-window { border-radius: var(--radius); border-color: rgba(99, 255, 145, .38); overflow: hidden; box-shadow: var(--shadow); }
+.terminal-toolbar { background: linear-gradient(90deg, #081009, #0d190e); }
+.terminal-tab { border-bottom-width: 2px; color: var(--green); }
+.terminal-body { background: radial-gradient(700px 340px at 85% 0%, rgba(41, 217, 96, .055), transparent 65%), #030704; }
+.terminal-input-row { background: rgba(6, 12, 7, .92); }
+.notice { border-radius: var(--radius); }
+
+/* Lists and management surfaces use a calmer, data-first cadence. */
+.activity-item { padding: 16px 2px; }
+.activity-item:hover { background: rgba(99, 255, 145, .025); }
+.report-card, .tool-card { padding: 20px; min-height: 154px; }
+.engagement-card { border-radius: var(--radius); }
+.audit-strip { border-radius: var(--radius); background: rgba(9, 18, 10, .52); }
+.setting-card { border-radius: var(--radius); }
+
+@media (max-width: 1180px) {
+  .sidebar { width: 215px; flex-basis: 215px; }
+  .workspace-grid { grid-template-columns: minmax(0, 1fr) minmax(300px, .9fr); }
+  .context-column { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; border-left: 0; border-top: 1px solid rgba(125, 231, 209, .12); padding: 16px 0 0; }
+  .context-column .panel { margin-bottom: 0; }
+}
+
+@media (max-width: 800px) {
+  body::after { display: none; }
+  .sidebar { width: 62px; flex-basis: 62px; }
+  .nav-zone-label { border-top: 0; margin-top: 13px; padding-top: 0; }
+  .content { padding: 24px 18px 56px; }
+  .topbar { padding: 9px 18px; }
+  .workspace-grid, .context-column { grid-template-columns: minmax(0, 1fr); }
+  .context-column { display: block; }
+  .context-column .panel { margin-bottom: 14px; }
+}
+
+@media (max-width: 600px) {
+  .content { padding: 20px 12px 48px; }
+  .topbar { padding: 8px 12px; }
+  .section-heading { padding-bottom: 14px; margin-bottom: 18px; }
+  .quick-actions { grid-template-columns: minmax(0, 1fr); }
+  .command-bar { height: 54px; }
+  .chat-thread { min-height: 190px; }
 }

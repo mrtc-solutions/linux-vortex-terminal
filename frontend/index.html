@@ -92,25 +92,32 @@
         <div class="brand-mark"><span>◢</span><i></i></div>
         <div><div class="brand-name">ARENA AI</div><div class="brand-sub">VORTEX COMMAND CENTER</div></div>
       </div>
-      <div class="side-label">WORKSPACE</div>
+      <div class="side-label">OPERATIONS</div>
       <nav id="nav">
         <button class="nav-item active" data-view="overview"><span class="nav-icon">✦</span>New Task</button>
-        <button class="nav-item" data-view="conversations"><span class="nav-icon">☰</span>Conversations</button>
         <button class="nav-item" data-view="terminal"><span class="nav-icon">›_</span>Terminal</button>
         <button class="nav-item" data-view="tasks"><span class="nav-icon">▣</span>Tasks</button>
-        <button class="nav-item" data-view="reports"><span class="nav-icon">▤</span>Reports</button>
         <button class="nav-item" data-view="engagements"><span class="nav-icon">◎</span>Engagements</button>
+      </nav>
+      <div class="side-label nav-zone-label">INVESTIGATE</div>
+      <nav class="nav-zone" aria-label="Investigation navigation">
+        <button class="nav-item" data-view="conversations"><span class="nav-icon">☰</span>Conversations</button>
+        <button class="nav-item" data-view="reports"><span class="nav-icon">▤</span>Reports</button>
         <button class="nav-item" data-view="activity"><span class="nav-icon">◈</span>Activity</button>
         <button class="nav-item" data-view="assets"><span class="nav-icon">⌗</span>Assets</button>
       </nav>
-      <div class="side-spacer"></div>
-      <div class="system-chip"><span class="pulse"></span><div><strong id="privacy-chip">LOCAL CORE</strong><small id="side-context">checking host…</small></div><span class="lock">⌁</span></div>
-      <nav class="nav-secondary">
+      <div class="side-label nav-zone-label">INTELLIGENCE</div>
+      <nav class="nav-zone" aria-label="Intelligence navigation">
         <button class="nav-item" data-view="agents"><span class="nav-icon">◉</span>Agents</button>
         <button class="nav-item" data-view="tools"><span class="nav-icon">⊞</span>Tools</button>
         <button class="nav-item" data-view="memory"><span class="nav-icon">▦</span>Memory</button>
         <button class="nav-item" data-view="learning"><span class="nav-icon">↻</span>Learning</button>
         <button class="nav-item" data-view="models"><span class="nav-icon">AI</span>Models</button>
+      </nav>
+      <div class="side-spacer"></div>
+      <div class="system-chip"><span class="pulse"></span><div><strong id="privacy-chip">LOCAL CORE</strong><small id="side-context">checking host…</small></div><span class="lock">⌁</span></div>
+      <nav class="nav-secondary">
+        <div class="side-label nav-zone-label">CONTROL</div>
         <button class="nav-item" data-view="system"><span class="nav-icon">♡</span>System</button>
         <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Settings</button>
         <button class="nav-item" id="open-help" title="VORTEX Help" aria-label="Open Help"><span class="nav-icon">?</span>Help</button>

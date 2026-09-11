@@ -31,6 +31,18 @@ assert.ok(index.includes('aria-label="Close engagement form"'), 'symbol-only clo
 assert.ok(app.includes("setAttribute('aria-current', 'page')"), 'active SPA navigation exposes aria-current');
 assert.ok(app.includes("setAttribute('aria-hidden', String(!active))"), 'inactive SPA views expose their hidden state');
 assert.ok(app.includes("bad ? 'alert' : 'status'") && app.includes("bad ? 'assertive' : 'polite'"), 'error toasts are announced assertively');
+// The visual navigation redesign groups the existing destinations by intent,
+// but it must never remove or duplicate a route/control while doing so.
+for (const zone of ['OPERATIONS', 'INVESTIGATE', 'INTELLIGENCE', 'CONTROL']) {
+  assert.ok(index.includes(`>${zone}</div>`), `${zone} navigation zone is labeled`);
+}
+const viewButtons = [...index.matchAll(/<button class="nav-item[^>]*data-view="([^"]+)"/g)].map(match => match[1]);
+assert.strictEqual(new Set(viewButtons).size, viewButtons.length, 'each routed navigation destination appears exactly once');
+for (const view of ['overview', 'terminal', 'tasks', 'engagements', 'conversations', 'reports', 'activity', 'assets', 'agents', 'tools', 'memory', 'learning', 'models', 'system', 'settings']) {
+  assert.ok(viewButtons.includes(view), `${view} remains reachable from the reorganized navigation`);
+}
+assert.ok(styles.includes('body.plain-mode::before, body.plain-mode::after { display: none; }'), 'plain theme disables decorative backgrounds');
+assert.ok(styles.includes('body::before, body::after { display: none; }'), 'reduced motion disables decorative backgrounds');
 const hexLuminance = value => {
   const channels = value.match(/[0-9a-f]{2}/gi).map(channel => parseInt(channel, 16) / 255)
     .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
