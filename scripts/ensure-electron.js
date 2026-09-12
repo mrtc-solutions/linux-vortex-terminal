@@ -80,8 +80,10 @@ function isInstalled(version) {
 /**
  * npm-injected config (npm_config_electron_mirror, ...) outranks ELECTRON_*
  * environment variables inside @electron/get, so a stale/broken .npmrc
- * value would shadow our fallback. Strip those keys for fallback attempts
- * to guarantee the intended mirror is what actually gets used.
+ * value would shadow our fallback mirrors. npm exports .npmrc values as
+ * env vars into lifecycle scripts, so strip those keys from the whole
+ * child environment for fallback attempts to guarantee the intended
+ * mirror is what actually gets used.
  */
 function clearNpmMirrorConfig(env) {
   const patterns = [
@@ -94,9 +96,10 @@ function clearNpmMirrorConfig(env) {
   return env;
 }
 
-function attempt(version, label, envOverrides) {
+function attempt(version, label, overrides, stripNpmConfig = false) {
   log(`downloading Electron v${version} (${label}) ...`);
-  const env = { ...process.env, force_no_cache: 'true', ...envOverrides };
+  const env = stripNpmConfig ? clearNpmMirrorConfig({ ...process.env }) : { ...process.env };
+  Object.assign(env, overrides);
   const result = spawnSync(process.execPath, [INSTALL_JS], {
     cwd: ROOT,
     stdio: 'inherit',
@@ -135,7 +138,7 @@ function remediation(version) {
 }
 
 /** Returns true when a usable Electron binary is present afterwards. */
-function ensureElectron(options = {}) {
+function ensureElectron() {
   const version = electronVersion();
   if (!version || !fs.existsSync(INSTALL_JS)) {
     log('node_modules/electron is missing — run `npm install` first (devDependency electron is required).');
@@ -146,12 +149,12 @@ function ensureElectron(options = {}) {
     return true;
   }
 
-  if (attempt(version, 'default source')) return true;
+  if (attempt(version, 'default source', {})) return true;
   for (const mirror of FALLBACK_MIRRORS) {
-    const used = attempt(version, `mirror ${mirror}`, clearNpmMirrorConfig({
+    const used = attempt(version, `mirror ${mirror}`, {
       ELECTRON_MIRROR: mirror,
       ELECTRON_CUSTOM_DIR: '{{ version }}'
-    }));
+    }, true);
     if (used) return true;
   }
 
@@ -161,7 +164,7 @@ function ensureElectron(options = {}) {
 
 if (require.main === module) {
   const required = process.argv.slice(2).includes('--required');
-  const ok = ensureElectron({ required });
+  const ok = ensureElectron();
   if (!ok && required) process.exit(1);
 }
 

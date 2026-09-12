@@ -24,7 +24,7 @@ function main() {
     process.exit(1);
   }
 
-  if (!ensureElectron({ required: true })) {
+  if (!ensureElectron()) {
     // ensureElectron already printed exact remediation; preview is the
     // zero-Electron way to test the workbench on this host.
     process.exit(1);
