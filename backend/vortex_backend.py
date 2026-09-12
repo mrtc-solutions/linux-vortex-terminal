@@ -4485,6 +4485,9 @@ class VortexHandler(BaseHTTPRequestHandler):
                 item_id = self._query_text(query, "id", "")
                 settings = _load("config").load_settings()
                 return self._json(200, {"install": deps.proposal_for(item_id, settings)})
+            if path == "/api/install/commands":
+                settings = _load("config").load_settings()
+                return self._json(200, _load("install_commands").assemble(settings))
             if path == "/api/sandbox":
                 from sandbox import isolation_status
                 return self._json(200, {"sandbox": isolation_status()})

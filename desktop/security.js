@@ -10,6 +10,7 @@ const GET_ROUTES = [
   /^\/api\/audit\/verify$/,
   /^\/api\/assets\/graph$/,
   /^\/api\/models\/gguf$/,
+  /^\/api\/install\/commands$/,
   /^\/api\/agents\/upstream$/,
   /^\/api\/assist\/coverage$/,
   /^\/api\/dependencies(?:\/proposal)?$/,

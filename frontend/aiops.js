@@ -10,6 +10,7 @@
     routing: null,
     gguf: null,
     lastTurn: null,
+    install: null,
     timer: null
   };
 
@@ -190,6 +191,10 @@
     }
   }
 
+  function turnRow(label, spanHtml) {
+    return '<div class="ai-ops-turn-row"><label>' + esc(label) + '</label><span>' + spanHtml + '</span></div>';
+  }
+
   function renderLastTurn() {
     var section = box('ai-ops-turn-section');
     var host = box('ai-ops-turn');
@@ -205,32 +210,72 @@
     var synthesis = localAi.synthesis || {};
     var rows = [];
     if (selected.length) {
-      rows.push('<div class="ai-ops-turn-row"><label>RAN</label><span>' + selected.map(function (item) {
+      rows.push(turnRow('RAN', selected.map(function (item) {
         return esc((item.provider || 'model') + ':' + (item.model || '?') + ' (' + (item.role || 'advisory') + ')');
-      }).join(' · ') + '</span></div>');
+      }).join(' · ')));
     } else {
-      rows.push('<div class="ai-ops-turn-row"><label>RAN</label><span>no model responded — ' + esc(localAi.message || 'deterministic path only') + '</span></div>');
+      rows.push(turnRow('RAN', 'no model responded — deterministic core produced the result'));
     }
+    // The agent's own explanation of this turn — its "thinking", verbatim.
+    if (localAi.message) rows.push(turnRow('THINKING', esc(localAi.message)));
+    if (route.reason || route.strategy) rows.push(turnRow('STRATEGY', [route.reason, route.strategy].filter(Boolean).map(esc).join(' · ')));
+    var prefs = route.preferences || {};
+    var roleBits = ['primary', 'planner', 'fast', 'specialist'].reduce(function (acc, role) {
+      var p = prefs[role];
+      if (!p) return acc;
+      acc.push(role + ' ' + (p.resolved || p.configured || '?') + ' (' + (p.state || 'unknown') + ')');
+      return acc;
+    }, []);
+    if (roleBits.length) rows.push(turnRow('MODELS SET', roleBits.map(esc).join(' · ')));
     if (responses.length) {
-      rows.push('<div class="ai-ops-turn-row"><label>LATENCY</label><span>' + responses.map(function (r) {
+      rows.push(turnRow('LATENCY', responses.map(function (r) {
         return esc((r.model || '?') + ' ' + (r.latency_ms != null ? r.latency_ms + ' ms' : 'n/a'));
-      }).join(' · ') + '</span></div>');
+      }).join(' · ')));
     }
-    rows.push('<div class="ai-ops-turn-row"><label>CONFIDENCE</label><span>' + esc(fuzzy.confidence || 'unavailable') + ' · ' + esc(fuzzy.evidence_basis || 'plan-only') + '</span></div>');
-    if (synthesis.fact_summary) rows.push('<div class="ai-ops-turn-row"><label>FACTS</label><span>' + esc(synthesis.fact_summary) + '</span></div>');
-    if (synthesis.meaning) rows.push('<div class="ai-ops-turn-row"><label>MEANING</label><span>' + esc(synthesis.meaning) + '</span></div>');
-    if (synthesis.unknowns) rows.push('<div class="ai-ops-turn-row"><label>UNKNOWN</label><span>' + esc(synthesis.unknowns) + '</span></div>');
+    rows.push(turnRow('CONFIDENCE', esc(fuzzy.confidence || 'unavailable') + ' · ' + esc(fuzzy.evidence_basis || 'plan-only')));
+    if (synthesis.fact_summary) rows.push(turnRow('FACTS', esc(synthesis.fact_summary)));
+    if (synthesis.meaning) rows.push(turnRow('MEANING', esc(synthesis.meaning)));
+    if (synthesis.unknowns) rows.push(turnRow('UNKNOWN', esc(synthesis.unknowns)));
     var guardian = turn.guardian || (turn.operation && turn.operation.analysis && turn.operation.analysis.guardian) || null;
     if (guardian && (guardian.decision || guardian.risk)) {
-      rows.push('<div class="ai-ops-turn-row"><label>GUARDIAN</label><span>' + esc(guardian.decision || '') + (guardian.risk ? ' · risk ' + esc(guardian.risk) : '') + '</span></div>');
+      rows.push(turnRow('GUARDIAN', esc(guardian.decision || '') + (guardian.risk ? ' · risk ' + esc(guardian.risk) : '')));
     }
     host.innerHTML = rows.join('');
+  }
+
+  async function loadInstallAll() {
+    var section = box('ai-ops-install-section');
+    var host = box('ai-ops-install');
+    if (!section || !host) return;
+    try {
+      var data = await api('/api/install/commands');
+      var payload = data.install_commands || {};
+      aiops.install = payload;
+      var sections = payload.sections || [];
+      if (!sections.length) { section.hidden = true; return; }
+      section.hidden = false;
+      var combined = payload.combined || '';
+      host.innerHTML =
+        '<p class="form-note">' + esc(sections.length) + ' item(s) missing on this host. Copy the whole block and paste it into your main Linux terminal, then return and click REFRESH ALL. VORTEX never runs any of this itself.</p>' +
+        '<div class="command-actions"><button class="secondary-button" data-aiops-copy-all>COPY ALL COMMANDS</button>' +
+        '<button class="secondary-button" data-aiops-terminal-all>OPEN IN TERMINAL</button></div>' +
+        '<pre class="install-commands">' + esc(combined) + '</pre>';
+      host.querySelector('[data-aiops-copy-all]').addEventListener('click', function () {
+        if (typeof copyText === 'function') copyText(combined, 'All install commands copied — paste them in your main Linux terminal.');
+      });
+      host.querySelector('[data-aiops-terminal-all]').addEventListener('click', function () {
+        if (typeof openInTerminal === 'function') openInTerminal(combined, 'Install everything missing');
+      });
+    } catch (e) {
+      if (!aiops.install) host.innerHTML = '<div class="empty-inline">Install block unavailable: ' + esc(e.message) + '</div>';
+    }
   }
 
   function renderAll() {
     renderSteps();
     renderHelp(aiops.routing, aiops.gguf);
     renderLastTurn();
+    loadInstallAll();
   }
 
   function ensureVisible() {

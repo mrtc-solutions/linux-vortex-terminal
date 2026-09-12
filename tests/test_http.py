@@ -453,6 +453,19 @@ class HttpApiTests(unittest.TestCase):
         self.assertGreaterEqual(router_inv2.call_count, 1, "?fresh=1 must force a fresh routing status")
         vtx_backend.clear_probe_caches()
 
+    def test_install_commands_endpoint_returns_live_missing_stack(self):
+        payload = self._json("GET", "/api/install/commands")
+        block = payload["install_commands"]
+        self.assertIn("combined", block)
+        self.assertIn("sections", block)
+        self.assertIsInstance(block["nothing_missing"], bool)
+        if not block["nothing_missing"]:
+            self.assertIn("VORTEX AI stack", block["combined"])
+            self.assertGreaterEqual(len(block["sections"]), 1, "a host always has at least one missing AI layer to report honestly")
+            for section in block["sections"]:
+                self.assertTrue(section.get("id"))
+                self.assertTrue(section.get("commands") or section.get("title"))
+
     def test_head_static_asset_returns_headers_without_body(self):
         request = urllib.request.Request(self.base + "/assets/app.js", method="HEAD")
         with urllib.request.urlopen(request, timeout=5) as response:
