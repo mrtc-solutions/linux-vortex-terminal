@@ -127,14 +127,13 @@ _CAPABILITIES_CACHE: TTLCache = TTLCache(10.0)
 _DEPENDENCIES_CACHE: TTLCache = TTLCache(10.0)
 _TOOLS_REGISTRY_CACHE: TTLCache = TTLCache(10.0)
 _TOOLS_CACHE: TTLCache = TTLCache(10.0)
-_ADAPTERS_CACHE: TTLCache = TTLCache(10.0)
 _DOCTOR_CACHE: TTLCache = TTLCache(10.0)
 _HOST_TOOLS_CACHE: TTLCache = TTLCache(10.0)
 
 
 def clear_probe_caches() -> None:
     """Force a fresh probe pass. Used by tests, refresh actions, and fresh listings."""
-    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _ADAPTERS_CACHE, _DOCTOR_CACHE, _HOST_TOOLS_CACHE):
+    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _DOCTOR_CACHE, _HOST_TOOLS_CACHE):
         cache.clear()
     try:
         _load("tools.hostscan").invalidate_host_scan_cache()
@@ -416,7 +415,6 @@ def _compute_safe_dirs(raw_path: str) -> tuple[list[str], list[str]]:
         try:
             resolved = Path(directory).expanduser().resolve(strict=True)
             st = resolved.stat()
-            mode = stat.S_IMODE(st.st_mode)
             if not resolved.is_dir() or _is_user_writable_directory(resolved, st):
                 rejected.append(str(resolved))
             else:
@@ -4477,7 +4475,6 @@ class VortexHandler(BaseHTTPRequestHandler):
                     _DEPENDENCIES_CACHE.invalidate("inventory")
                     _TOOLS_CACHE.invalidate("catalog")
                     _TOOLS_REGISTRY_CACHE.invalidate("inventory")
-                    _ADAPTERS_CACHE.invalidate("manifest")
                 return self._json(200, {"dependencies": _DEPENDENCIES_CACHE.get("inventory", deps.inventory)})
             if path == "/api/dependencies/proposal":
                 deps = _load("dependencies")
@@ -4488,9 +4485,6 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/install/commands":
                 settings = _load("config").load_settings()
                 return self._json(200, _load("install_commands").assemble(settings))
-            if path == "/api/sandbox":
-                from sandbox import isolation_status
-                return self._json(200, {"sandbox": isolation_status()})
             if path == "/api/secrets":
                 secret_status = _load("secretstore").status
                 return self._json(200, {"secrets": secret_status()})
@@ -4534,23 +4528,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if _query_flag(query, "fresh"):
                     _invalidate_probe_lookups()
                 return self._json(200, {"dashboard": collect(self.store, self.workspace, load_settings())})
-            if path == "/api/learning/agents":
-                return self._json(200, {"scores": self.workspace.agent_scores()})
             if path == "/api/tools/route":
                 from tools.router import route
                 query = urllib.parse.parse_qs(parsed.query)
                 return self._json(200, {"route": route(self._query_text(query, "q", ""))})
-            if path == "/api/plugins":
-                from plugins.loader import list_manifests
-                return self._json(200, {"plugins": list_manifests()})
-            if path == "/api/tools/registry":
-                from tools.registry import by_category
-                query = urllib.parse.parse_qs(parsed.query)
-                if _query_flag(query, "fresh"):
-                    _invalidate_probe_lookups()
-                    _TOOLS_REGISTRY_CACHE.invalidate("inventory")
-                tools = _TOOLS_REGISTRY_CACHE.get("inventory", lambda: _load("tools.registry").inventory())
-                return self._json(200, {"tools": tools, "categories": by_category(tools)})
             if path == "/api/reports/system":
                 render_system = _load("reports.engine").render_system
                 query = urllib.parse.parse_qs(parsed.query)
@@ -4718,25 +4699,6 @@ class VortexHandler(BaseHTTPRequestHandler):
                         for name, meta in TOOL_CATALOG.items()
                     ]
                 return self._json(200, {"tools": _TOOLS_CACHE.get("catalog", _tools_inventory)})
-            if path == "/api/adapters":
-                query = urllib.parse.parse_qs(parsed.query)
-                if _query_flag(query, "fresh"):
-                    _invalidate_probe_lookups()
-                    _ADAPTERS_CACHE.invalidate("manifest")
-                def _adapters_inventory() -> list[dict[str, Any]]:
-                    return [
-                        {
-                            "id": adapter_id,
-                            **manifest,
-                            "tool_state": [
-                                probe_executable(tool, include_version=False)["state"]
-                                for tool in manifest["tool"].split("+")
-                                if tool != "multiple"
-                            ],
-                        }
-                        for adapter_id, manifest in ADAPTER_MANIFESTS.items()
-                    ]
-                return self._json(200, {"adapters": _ADAPTERS_CACHE.get("manifest", _adapters_inventory)})
             if path == "/api/sessions": return self._json(200, {"sessions": self.sessions.list()})
             if path.startswith("/api/sessions/"):
                 parts = path.split("/")
@@ -4805,7 +4767,6 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self._write(data)
                 return
             if path == "/api/audit/verify": return self._json(200, {"audit": self.store.verify_audit()})
-            if path == "/api/store/integrity": return self._json(200, {"integrity": self.store.integrity_check()})
             if path.startswith("/api/plans/"):
                 plan = self.store.get_plan(path.rsplit("/", 1)[-1])
                 if not plan:
@@ -5287,9 +5248,6 @@ class VortexHandler(BaseHTTPRequestHandler):
                     raise PolicyError("operation plan was not found")
                 report = finish_task(self.workspace, task_id, operation, plan)
                 return self._json(200, {"operation": operation, "report": report, "task": self.workspace.get_task(task_id)})
-            if path == "/api/benchmark":
-                from benchmark import run_suite
-                return self._json(200, {"benchmark": run_suite(self.store, self.workspace, self.executor, self._optional_str(body, "cwd"))})
             if path == "/api/tools/host/rescan":
                 _invalidate_probe_lookups()
                 _HOST_TOOLS_CACHE.invalidate("scan")

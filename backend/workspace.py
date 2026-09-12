@@ -580,11 +580,6 @@ class Workspace:
         with self.store.lock, self.store.connect() as db:
             db.execute("INSERT INTO agent_runs VALUES (?,?,?,?,?,?,?)", (secrets.token_hex(16), now_iso(), agent_id, task_id, state, int(latency_ms), canonical(payload or {})))
 
-    def agent_scores(self) -> list[dict[str, Any]]:
-        with self.store.connect() as db:
-            rows = db.execute("SELECT agent_id, COUNT(*) AS runs, SUM(CASE WHEN state='responded' THEN 1 ELSE 0 END) AS useful, AVG(latency_ms) AS avg_ms FROM agent_runs GROUP BY agent_id").fetchall()
-        return [dict(row) for row in rows]
-
     def create_engagement(self, item: dict[str, Any], excluded: list[str] | None, environment: str | None = None, owner: str | None = None) -> None:
         """Persist authorization and its exclusion scope in one transaction."""
         with self.store.lock, self.store.connect() as db:

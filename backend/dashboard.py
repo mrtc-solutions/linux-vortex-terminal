@@ -9,7 +9,6 @@ no such subsystem is implemented.
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -63,12 +62,10 @@ def _count_interfaces() -> int | None:
 def collect(store: Any, workspace: Any, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build a live dashboard.  Missing subsystems report ``unavailable``."""
     try:
-        from config import load_settings
         from models.router import model_status
         from tools.registry import inventory
         from vortex_backend import detect_context, probe_executable
     except ImportError:
-        from backend.config import load_settings
         from backend.models.router import model_status
         from backend.tools.registry import inventory
         from backend.vortex_backend import detect_context, probe_executable
@@ -105,7 +102,6 @@ def collect(store: Any, workspace: Any, settings: dict[str, Any] | None = None) 
 
     storage = _disk_percent(doctor.get("cwd") or str(Path.home()))
     ai_state = local_ai.get("state") or "disabled"
-    model_pool = model.get("pool") or model
     recommended = local_ai.get("recommended") or {}
 
     system = {

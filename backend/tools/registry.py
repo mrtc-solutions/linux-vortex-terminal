@@ -115,11 +115,3 @@ def _classify_license(name: str) -> str:
         except ImportError:
             return "unknown"
     return (KALI_CATALOG.get(name) or {}).get("license") or "unknown"
-
-
-def by_category(items: list[dict[str, Any]] | None = None) -> dict[str, list[dict[str, Any]]]:
-    """Group a supplied inventory, avoiding a second full host probe when available."""
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for item in items if items is not None else inventory():
-        grouped.setdefault(str(item["category"]), []).append(item)
-    return grouped

@@ -278,13 +278,6 @@
     loadInstallAll();
   }
 
-  function ensureVisible() {
-    var win = box('ai-ops-window');
-    if (!win) return false;
-    if (win.hidden && window.VortexWindows && window.VortexWindows.showSurface) window.VortexWindows.showSurface(win);
-    return !win.hidden;
-  }
-
   async function loadAiOps(fresh) {
     var host = box('ai-ops-steps');
     if (host && !aiops.routing) host.innerHTML = '<div class="empty-inline">Opening connection trace…</div>';

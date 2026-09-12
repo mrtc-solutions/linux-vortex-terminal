@@ -63,7 +63,7 @@ any remaining inaccuracies.
 | Wordlist dependency proposal | Done + tested |
 | Node/npm/pnpm/yarn/Go health/setup visibility | Done + tested |
 | Docker/Podman runtime probe | Done + tested; execution remains limited |
-| Third-party agent non-interactive consult execution | Not implemented |
+| Third-party agent code execution | Out of scope by design — VORTEX never downloads or executes it |
 | Docker/Podman sandbox execution | Not implemented |
 | sqlmap / msf execution adapters | Not implemented |
 | MCP | Not implemented |

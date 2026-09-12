@@ -577,7 +577,7 @@ def proposal_for(item_id: str, settings: dict[str, Any] | None = None) -> dict[s
             "license": "distro package",
             "permissions": ["root-required", "apt-network", "no-password-capture"],
             "commands": [
-                f"sudo apt-get update",
+                "sudo apt-get update",
                 f"sudo apt-get install --assume-yes --no-remove {pkg}",
             ],
             "plan_request": f"install package {pkg}",
