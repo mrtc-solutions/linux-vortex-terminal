@@ -643,7 +643,6 @@ function init() {
   $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true));
   $('download-apk')?.addEventListener('click', downloadApk);
   $('download-apk-settings')?.addEventListener('click', downloadApk);
-  $('download-deb')?.addEventListener('click', downloadDeb);
   $('download-deb-settings')?.addEventListener('click', downloadDeb);
   $('plain-theme')?.addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');});
   $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')});

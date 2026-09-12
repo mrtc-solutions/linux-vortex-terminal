@@ -310,7 +310,6 @@ body.electron-shell .app-titlebar { display: flex; }
 .skeleton.short { width: 70%; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
-.activity-panel { margin-top: 14px; }
 .text-button, .secondary-button {
   background: rgba(57, 255, 106, .025); border: 1px solid var(--border);
   color: var(--muted); font-size: 9px; letter-spacing: 1px; padding: 8px 11px;
@@ -417,7 +416,7 @@ body.electron-shell .app-titlebar { display: flex; }
 
 /* ---- overview workspace ---- */
 .workspace-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(340px, 1.2fr); gap: 14px; align-items: start; }
-.workspace-grid > *, .chat-column, .live-column, .plan-column { min-width: 0; }
+.workspace-grid > *, .chat-column, .plan-column { min-width: 0; }
 .chat-thread { min-height: 260px; max-height: 400px; overflow: auto; border: 1px solid var(--border-soft); background: rgba(7, 17, 22, .66); padding: 14px; margin: 12px 0; }
 .chat-empty { color: var(--dim); font-size: 12px; line-height: 1.6; }
 .chat-msg { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border-soft); background: rgba(10, 20, 26, .5); }
@@ -468,9 +467,7 @@ body.electron-shell .app-titlebar { display: flex; }
 .qa-icon.green { color: var(--green); }
 .qa-arrow { color: var(--dim); margin-left: auto; }
 
-/* ---- AI operations + diagnostics HUD ---- */
-.ai-ops-grid { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start; }
-.pipeline { display: flex; flex-direction: column; gap: 0; }
+/* ---- AI operations + diagnostics HUD ---- */.pipeline { display: flex; flex-direction: column; gap: 0; }
 .pipeline-stage {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 2px; color: var(--dim); font-size: 9px; letter-spacing: 1px;
@@ -483,8 +480,6 @@ body.electron-shell .app-titlebar { display: flex; }
 .pipeline-stage.active .stage-node { background: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
 .pipeline-stage.fail { color: var(--red); }
 .pipeline-stage.fail .stage-node { background: var(--red); border-color: var(--red); }
-.ai-ops-readout { display: grid; grid-template-columns: 1fr; gap: 8px; }
-.ai-ops-readout .context-row { padding: 7px 0; }
 
 .diag-list { padding: 12px 18px 14px; }
 .diag-row {
@@ -499,17 +494,6 @@ body.electron-shell .app-titlebar { display: flex; }
 .diag-value .dot.off { background: var(--red); box-shadow: 0 0 7px var(--red); }
 .diag-value .dot.unknown { background: var(--dim); box-shadow: none; }
 
-.telemetry-panel .context-row { padding: 8px 0; }
-.telemetry-panel .meter { display: inline-block; width: 44px; height: 5px; background: var(--surface-3); vertical-align: 1px; margin-left: 8px; overflow: hidden; }
-.telemetry-panel .meter i { display: block; height: 100%; background: var(--green); }
-
-/* ---- event stream ---- */
-.event-feed { max-height: 240px; overflow: auto; }
-.event-row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 10px; }
-.event-row:last-child { border: 0; }
-.event-row time { color: var(--dim); font-family: var(--mono); flex: none; font-size: 9px; }
-.event-row .event-kind { color: var(--cyan); font-family: var(--mono); flex: none; width: 84px; font-size: 9px; letter-spacing: .6px; }
-.event-row .event-body { color: var(--muted); font-family: var(--mono); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- surface windows ---- */
 .surface-window { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(1, 4, 2, .91); z-index: 30; }
@@ -640,15 +624,8 @@ body.electron-shell .window-tray { bottom: 40px; }
 
 .eyebrow { display: flex; align-items: center; gap: 9px; color: var(--cyan); margin-bottom: 14px; }
 .eyebrow-line { display: inline-block; width: 22px; height: 1px; background: var(--cyan); box-shadow: 0 0 9px var(--cyan); }
-.hero-row { display: flex; justify-content: space-between; min-height: 165px; }
-.hero-row h1, .section-heading h1 { font-weight: 600; }
-.hero-row h1 { font-size: 37px; letter-spacing: -1.8px; line-height: 1.1; margin: 0; }
-.hero-row h1 em { color: var(--green); font-style: normal; font-weight: 700; }
 .hero-copy { color: var(--muted); line-height: 1.65; margin: 15px 0 0; }
 .hero-copy strong { color: var(--text); font-weight: 500; }
-.hero-art { width: 250px; height: 163px; position: relative; overflow: hidden; margin-right: 12px; opacity: .88; }
-.hero-art img { position: absolute; width: 250px; height: 180px; object-fit: contain; right: -5px; top: -4px; filter: drop-shadow(0 0 19px rgba(0, 255, 102, .15)); }
-.art-glow { position: absolute; right: 48px; bottom: 2px; width: 140px; height: 10px; background: var(--green); filter: blur(18px); opacity: .2; }
 
 /* ---- toast ---- */
 .toast {
@@ -839,12 +816,6 @@ body.electron-shell .window-tray { bottom: 40px; }
 .about-license-box strong { display: block; font-size: 12px; color: var(--cyan); margin-bottom: 8px; }
 .about-license-box p { font-size: 11px; color: var(--muted); line-height: 1.65; margin: 0 0 8px; }
 .about-license-box p:last-child { margin-bottom: 0; }
-.about-attr-list { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border-soft); margin: 10px 0; }
-.about-attr-row { display: flex; align-items: center; gap: 14px; padding: 9px 13px; border-bottom: 1px solid var(--border-soft); font-size: 11px; }
-.about-attr-row:last-child { border-bottom: 0; }
-.about-attr-row span:first-child { flex: 0 0 100px; color: var(--text); font-weight: 600; }
-.about-attr-license { flex: 0 0 130px; color: var(--muted); font-family: var(--mono); font-size: 10px; }
-.about-attr-row a { color: var(--cyan); font-size: 10px; text-decoration: none; }
 
 /* ============================================================
    LOCAL AI / MODEL MANAGEMENT
@@ -865,7 +836,6 @@ body.electron-shell .window-tray { bottom: 40px; }
 .ollama-install p { color: var(--muted); font-size: 11px; line-height: 1.6; margin: 0 0 10px; }
 .ollama-install ol { color: var(--muted); font-size: 11px; line-height: 1.7; padding-left: 20px; margin: 0 0 12px; }
 .ollama-install pre { margin: 0 0 12px; padding: 11px; background: var(--bg-0); border: 1px solid var(--border-soft); color: var(--cyan); font: 11px/1.55 var(--mono); white-space: pre-wrap; word-break: break-all; }
-.ollama-install .install-note { border: 1px solid rgba(255, 176, 32, .4); background: rgba(255, 176, 32, .05); color: var(--amber); padding: 10px 13px; font-size: 10px; margin: 0 0 12px; }
 .model-subhead { margin-top: 4px; }
 .model-actions { display: flex; align-items: center; gap: 9px; min-width: 0; flex-wrap: wrap; }
 .model-actions input { height: 34px; min-width: 240px; border: 1px solid var(--border); background: var(--bg-0); color: var(--text); outline: 0; padding: 0 10px; font: 11px var(--mono); }
@@ -936,8 +906,6 @@ body.plain-mode::before, body.plain-mode::after { display: none; }
   .section-heading > :last-child { max-width: 100%; }
   .quick-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-grid, .tool-grid { grid-template-columns: minmax(0, 1fr); }
-  .hero-row { flex-direction: column; min-height: 0; }
-  .hero-art { max-width: 100%; margin: 16px auto 0; }
   .command-bar button { font-size: 0; padding: 0 12px; }
   .command-bar button .spark { font-size: 16px; padding: 0; }
   .backend-status { display: none; }
@@ -964,7 +932,6 @@ body.plain-mode::before, body.plain-mode::after { display: none; }
   .about-hero { flex-direction: column; text-align: center; }
   .about-grid { grid-template-columns: minmax(0, 1fr); }
   .about-section-full { grid-column: 1; }
-  .about-attr-row { flex-wrap: wrap; }
 }
 
 @media (max-width: 600px) {
@@ -1160,7 +1127,6 @@ body::after {
 .plan-column { display: grid; gap: 12px; }
 .plan-panel { min-height: 332px; }
 .live-output { min-height: 176px; max-height: 264px; border-radius: var(--radius); margin: 0; padding: 16px; box-shadow: inset 0 1px 0 rgba(99, 255, 145, .08); }
-.activity-panel { margin-top: 16px; }
 
 /* Evidence and terminal retain the darkest, highest-contrast working surface. */
 .terminal-window { border-radius: var(--radius); border-color: rgba(99, 255, 145, .38); overflow: hidden; box-shadow: var(--shadow); }
