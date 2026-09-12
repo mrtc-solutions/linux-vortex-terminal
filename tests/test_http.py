@@ -19,13 +19,13 @@ class HttpApiTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["VORTEX_DATA_DIR"] = self.tmp.name
-        # Settings live under XDG_CONFIG_HOME, not the data dir; isolate them
-        # too so an operator's real toggles (e.g. host_tool_access) can never
-        # change test outcomes.
-        self._previous_config_home = os.environ.get("XDG_CONFIG_HOME")
-        config_home = Path(self.tmp.name) / "config"
-        config_home.mkdir(parents=True, exist_ok=True)
-        os.environ["XDG_CONFIG_HOME"] = str(config_home)
+        # Root runs deliberately use the root config home, so isolate the
+        # sidecar's explicit configuration override rather than relying on
+        # XDG_CONFIG_HOME. This keeps operator toggles out of HTTP tests.
+        self._previous_config_dir = os.environ.get("VORTEX_CONFIG_DIR")
+        config_dir = Path(self.tmp.name) / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["VORTEX_CONFIG_DIR"] = str(config_dir)
         self.store = Store(Path(self.tmp.name) / "vortex.db")
         handler = VortexHandler
         handler.store = self.store
@@ -55,10 +55,10 @@ class HttpApiTests(unittest.TestCase):
             self.handler.browser_sessions.clear()
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)
-        if self._previous_config_home is None:
-            os.environ.pop("XDG_CONFIG_HOME", None)
+        if self._previous_config_dir is None:
+            os.environ.pop("VORTEX_CONFIG_DIR", None)
         else:
-            os.environ["XDG_CONFIG_HOME"] = self._previous_config_home
+            os.environ["VORTEX_CONFIG_DIR"] = self._previous_config_dir
 
     def _json(self, method, path, body=None, expected=200, timeout=8):
         data = None if body is None else json.dumps(body).encode()

@@ -125,6 +125,8 @@ assert.strictEqual(isAllowedApiRequest('/api/ollama/models/activate', 'POST'), t
 assert.strictEqual(isAllowedApiRequest('/api/dependencies/execute', 'POST'), true);
 assert.strictEqual(isAllowedApiRequest('/api/models/gguf', 'GET'), true);
 assert.strictEqual(isAllowedApiRequest('/api/models/gguf/activate', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/models/gguf/import', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/models/gguf/import', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/models/gguf/activate', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream', 'GET'), true);
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream/refresh', 'POST'), true);
@@ -165,13 +167,19 @@ const ipcRenderer = {
 vm.runInNewContext(preload, {
   require: name => {
     assert.strictEqual(name, 'electron');
-    return { contextBridge: { exposeInMainWorld: (name, value) => { exposed[name] = value; } }, ipcRenderer };
+    return {
+      contextBridge: { exposeInMainWorld: (name, value) => { exposed[name] = value; } },
+      ipcRenderer,
+      webUtils: { getPathForFile: file => file && file.path === '/tmp/model.gguf' ? file.path : '' }
+    };
   },
   Object,
   Promise
 });
 assert.ok(exposed.vortexApi);
 assert.ok(exposed.vortexWindow);
+assert.strictEqual(exposed.vortexApi.localFilePath({ path: '/tmp/model.gguf' }), '/tmp/model.gguf');
+assert.strictEqual(exposed.vortexApi.localFilePath({ path: '/tmp/not-a-model.txt' }), '');
 exposed.vortexWindow.minimize();
 exposed.vortexWindow.toggleMaximize();
 exposed.vortexWindow.close();

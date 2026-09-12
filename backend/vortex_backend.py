@@ -4830,6 +4830,16 @@ class VortexHandler(BaseHTTPRequestHandler):
                 except PolicyError as exc:
                     return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
                 return self._json(200, {"preference": preference})
+            if path == "/api/models/gguf/import":
+                manager = _load("models.manager")
+                paths = body.get("paths")
+                if not isinstance(paths, list):
+                    raise ValueError("paths must be a list")
+                try:
+                    imported = manager.import_local_models(paths)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                return self._json(200, {"import": imported})
             if path == "/api/agents/upstream/refresh":
                 upstream = _load("agents.upstream")
                 settings = _load("config").load_settings()

@@ -97,6 +97,25 @@ def _invalidate_router_status() -> None:
     invalidate_status_cache()
 
 
+def import_local_models(paths: list[str]) -> dict[str, Any]:
+    """Persist an operator-selected GGUF source after validation only."""
+    try:
+        from . import gguf
+    except ImportError:  # pragma: no cover
+        from models import gguf  # type: ignore
+    selected = gguf.configure_local_source(paths)
+    settings = save_settings({"models_dir": selected["directory"]})
+    gguf.invalidate_scan_cache()
+    _invalidate_router_status()
+    snapshot = gguf.status(settings)
+    return {
+        "directory": selected["directory"],
+        "models": selected["models"],
+        "gguf": snapshot,
+        "message": "Local model source added. Files remain in their original location.",
+    }
+
+
 def _public_install() -> dict[str, Any]:
     with _LOCK:
         snapshot = _INSTALL.copy()

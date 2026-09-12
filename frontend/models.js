@@ -471,6 +471,31 @@
     }
   }
 
+  async function importLocalModels(files) {
+    var getLocalFilePath = window.vortexApi && window.vortexApi.localFilePath;
+    if (typeof getLocalFilePath !== 'function') {
+      toast('Local model selection is available in the VORTEX desktop application.', true);
+      return;
+    }
+    var paths = Array.prototype.map.call(files || [], function (file) { return getLocalFilePath(file); }).filter(Boolean);
+    if (!paths.length) {
+      toast('Select at least one local GGUF file.', true);
+      return;
+    }
+    if (modelsState.busy.import) return;
+    setBusy('import', true);
+    try {
+      var data = await api('/api/models/gguf/import', { method: 'POST', body: { paths: paths } });
+      var imported = data.import || {};
+      toast(imported.message || 'Local model source added.');
+      await loadModels();
+    } catch (e) {
+      toast(e.message || 'Unable to inspect the selected model.', true);
+    } finally {
+      setBusy('import', false);
+    }
+  }
+
   function renderModels() {
     renderStatus();
     renderGguf();
@@ -641,6 +666,18 @@
         if (e.key === 'Enter') pullModel(input.value, (($('model-role-input') || {}).value || 'primary'));
       });
     }
+    [['add-local-model', 'local-model-file'], ['add-model-folder', 'local-model-folder']].forEach(function (pair) {
+      var button = $(pair[0]);
+      var chooser = $(pair[1]);
+      if (button && chooser && !button._bound) {
+        button._bound = true;
+        button.addEventListener('click', function () { chooser.click(); });
+        chooser.addEventListener('change', function () {
+          importLocalModels(chooser.files);
+          chooser.value = '';
+        });
+      }
+    });
   }
 
   window.loadModels = loadModels;
