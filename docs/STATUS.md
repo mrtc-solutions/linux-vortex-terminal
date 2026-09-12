@@ -147,10 +147,13 @@ already provided by the pipeline.
 
 ## Latest validation summary
 
-- `python3 -m unittest discover -s tests` → PASS (`Ran 395 tests ... OK`)
-- `npm test` → PASS (395 Python tests + terminal emulator/window control/frontend
-  smoke/frontend auth/frontend runtime/HUD/responsive suites all PASS)
+- `python3 -m unittest discover -s tests` → PASS (`Ran 431 tests ... OK`)
+- `npm test` → PASS (431 Python tests + terminal emulator/window control/frontend
+  smoke/frontend runtime/frontend auth/agents local-AI/HUD/responsive suites all PASS)
+- `python3 scripts/final_gates.py` → PASS (`FINAL: 10/10 (100%)`)
 - `npm run lint` → PASS
+- `npm install` / `npm ci` → PASS (postinstall fetches the Electron binary up
+  front; unreachable sources degrade to clear remediation, exit 0)
 - `VORTEX_REAL_ACCEPTANCE=1 ... ./tests/linux_acceptance.sh` → PASS
 - Live sidecar HTTP probe (36 endpoints, all 200) + `POST /api/workspace/turn`,
   `/api/plan`, `/api/palette` (plan + query), `/api/engagements`, `/api/mobile/apk`,
