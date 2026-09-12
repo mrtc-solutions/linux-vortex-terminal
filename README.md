@@ -94,7 +94,7 @@ UNAVAILABLE), or **Not implemented**.
 | Bounded replanning (max 2 follow-ups, duplicate-plan detection) | Implemented + tested |
 | Crash recovery: stale operations/tasks reconciled at startup | Implemented + tested |
 | Kali/Linux tool registry with live probes | Implemented + tested |
-| Agent Council (9 third-party + builtin `vortex-local`) | Implemented + tested; third-party missing stay UNAVAILABLE |
+| Agent Council (built-in `vortex-local` advisor; no third-party agent code ships) | Implemented + tested; roster shows only working advisors |
 | Observe → act → host-state reward | Implemented + tested |
 | nuclei / ffuf / nikto / amass / gobuster adapters | Implemented + tested; UNAVAILABLE without the binary, engagement, and (for ffuf/gobuster) a host wordlist |
 | User-local install / `vortex serve` / `vortex turn` | Implemented + tested |
@@ -115,6 +115,10 @@ UNAVAILABLE), or **Not implemented**.
 | Fuzzy provider routing (GGUF → Ollama → council → deterministic) | Implemented + tested; latency/RAM/availability blending with per-call feedback and inspectable ranking |
 | Per-function AI assistance (`ai_hint` on 16 functions) | Implemented + tested; advisory only, never blocks, every function works without a model |
 | Agent upstream tracking (original repositories + HEAD checks) | Implemented + tested; offline-safe table, operator-triggered refresh, unverified agents never invented |
+| Windowed workspace: persistent chat + plan/evidence; system, task, AI Ops, and models surfaces open as pop-ups with minimize/maximize/close and a restore tray | Implemented + tested |
+| Global REFRESH ALL (`POST /api/refresh`) re-probes agents, tools, host tools, GGUF models, Ollama, and dependencies and reports what changed | Implemented + tested |
+| AI Ops trace: step-by-step per-turn local-AI resolution (provider selected, per-provider latency, fuzzy match, synthesis, guardian) plus live provider ranking | Implemented + tested |
+| Install-command suggestions in-app when an AI assistant, Ollama, or the GGUF engine is missing — exact commands for the main Linux terminal, never a silent install | Implemented + tested |
 | Docker/Podman isolation probe | Implemented; UNAVAILABLE when no runtime is installed |
 | Plugin JSON manifests (no plugin code execution) | Implemented |
 | Security tests: injection, prompt-injection text, Guardian | Implemented + tested |
@@ -129,7 +133,7 @@ UNAVAILABLE), or **Not implemented**.
 
 These are either unimplemented, or implemented only as honest unavailable states:
 
-- Calling CAI / Strix / Nebula / PentestGPT / HexStrike / PentAGI / HackerAI / HALO / DarkMoon consult APIs (no reviewed non-interactive consult; binaries not installed here)
+- Consulting any third-party AI agent (no third-party agent code ships with VORTEX; only the built-in deterministic advisor is rostered)
 - sqlmap / Metasploit **execution** adapters (catalog probes only)
 - Scanner tools when the binary or wordlist is not on the host (honest UNAVAILABLE)
 - FastAPI + PostgreSQL + pgvector (local SQLite modular monolith by design)
@@ -148,7 +152,7 @@ These are either unimplemented, or implemented only as honest unavailable states
 
 Verified absent on this host at the time of the last audit: `nmap`, `nuclei`,
 `ffuf`, `nikto`, `amass`, `gobuster`, `sqlmap`, `msfconsole`, `docker`,
-`podman`, `ollama`, and all nine third-party agent CLIs. Every one of those
+`podman`, and `ollama`. Every one of those
 reports UNAVAILABLE rather than a fabricated result. Present and exercised:
 `git`, `ss`, `ip`, `curl`, `ssh`, `ps`, `df`, `systemctl`, `journalctl`. On this
 host, `node`, `npm`, and `yarn` were additionally discovered under
@@ -206,7 +210,7 @@ records that it does not know the host outcome rather than inferring success.
 
 ## Documentation
 
-- [`LINUX_VORTEX_TERMINAL_BUILD_PLAN.md`](LINUX_VORTEX_TERMINAL_BUILD_PLAN.md) — original binding plan
+- [`CHANGELOG.md`](CHANGELOG.md) — what changed in every release
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — install, test, and operate as a real app
 - [`docs/STATUS.md`](docs/STATUS.md) — tested vs remaining gates
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow
@@ -214,7 +218,7 @@ records that it does not know the host outcome rather than inferring success.
 - [`docs/AUDIT_REPORT_2026-08-28.md`](docs/AUDIT_REPORT_2026-08-28.md) — full audit: defects found/fixed, test results, limitations
 - [`LICENSE`](LICENSE) — MIT License
 - [`LICENSES.md`](LICENSES.md) — SPDX MIT and third-party notes
-- [`NOTICE`](NOTICE) — third-party agent attribution
+- [`NOTICE`](NOTICE) — license and attribution notes
 - [`SECURITY.md`](SECURITY.md)
 - [`mobile/android/README.md`](mobile/android/README.md) — Android APK client
 
@@ -222,7 +226,7 @@ records that it does not know the host outcome rather than inferring success.
 
 ```bash
 npm run lint
-npm test                             # 431 python tests + 8 js suites
+npm test                             # 442 python tests + 8 js suites
 python3 scripts/final_gates.py       # the 10-gate release audit (10/10 required)
 ```
 

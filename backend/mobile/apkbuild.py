@@ -45,8 +45,8 @@ except ImportError:  # pragma: no cover - top-level mobile package import
 
 PACKAGE = "io.vortex.mobile"
 APP_LABEL = "VORTEX"
-VERSION_NAME = "0.2.22"
-VERSION_CODE = 222
+VERSION_NAME = "0.2.23"
+VERSION_CODE = 223
 _BUILD_LOCK = threading.Lock()
 _MAX_APK_BYTES = 128 * 1024 * 1024
 

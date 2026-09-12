@@ -26,9 +26,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from backend.artifacts import ArtifactError, analyze_path
+from backend.artifacts import analyze_path
 from backend.fileio import read_owner_text
-from backend.vortex_backend import (ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, build_undo_plan, detect_context, digest, now_iso, probe_executable, command_spec, report_markdown, runtime_root, trusted_privilege_broker, validate_cwd, plan_digest)
+from backend.vortex_backend import (ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, build_undo_plan, detect_context, now_iso, probe_executable, command_spec, report_markdown, runtime_root, trusted_privilege_broker, validate_cwd, plan_digest)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps({"schema_version": 1, **value}, sort_keys=True, indent=2))
@@ -357,7 +357,7 @@ def main(argv=None):
     parser.add_argument('--yes', action='store_true', help='skip the interactive prompt only for a policy-valid plan')
     parser.add_argument('--format', choices=('text', 'json', 'md'), default='text', help='output format')
     parser.add_argument('--profile', choices=('safe', 'standard', 'expert'), default='safe', help='policy friction profile')
-    parser.add_argument('--version', action='version', version='vortex 0.2.22')
+    parser.add_argument('--version', action='version', version='vortex 0.2.23')
     sub = parser.add_subparsers(dest='subcommand')
     for name in ('ask', 'plan'):
         p = sub.add_parser(name); p.add_argument('request')

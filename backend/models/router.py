@@ -65,6 +65,69 @@ def invalidate_status_cache() -> None:
     _STATUS_CACHE.update({"at": 0.0, "key": None, "value": None})
 
 
+def live_routing(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Current provider ranking for the UI's step-by-step connection trace.
+
+    Reuses the same fuzzy decision the advisory path uses, so what the
+    operator sees is exactly what the next turn will consider — with the
+    per-provider score, fired-rule trace, and plain-English reason.
+    """
+    status = model_status(settings)
+    fuzzy = status.get("fuzzy") or {}
+    providers = dict(status.get("providers") or {})
+    gguf_detail = providers.get("gguf") or {}
+    ollama_detail = providers.get("ollama") or {}
+    council_count = None
+    try:
+        from agents.council import discover  # type: ignore
+    except ImportError:
+        try:
+            from backend.agents.council import discover  # type: ignore
+        except Exception:
+            discover = None
+    if discover is not None:
+        try:
+            agents = discover()
+            council_count = {
+                "total": len(agents),
+                "available": sum(1 for agent in agents if (agent.get("health") or {}).get("healthy")),
+            }
+        except Exception:
+            council_count = None
+    providers["council"] = {
+        "state": "ready" if (council_count and council_count.get("available")) else "degraded",
+        "reason": (
+            f"{council_count.get('available')}/{council_count.get('total')} agent adapter(s) available"
+            if council_count else "agent council availability not probed"
+        ),
+        "agents": council_count,
+    }
+    providers["deterministic"] = {
+        "state": "ready",
+        "reason": "Always available. Planning, Guardian, and execution never depend on a model.",
+    }
+    return {
+        "winner": fuzzy.get("winner") or "deterministic",
+        "confidence": fuzzy.get("confidence") or "unavailable",
+        "reason": fuzzy.get("reason") or "",
+        "ranking": fuzzy.get("ranking") or [],
+        "providers": providers,
+        "gguf": {
+            "state": gguf_detail.get("state"),
+            "engine": gguf_detail.get("engine"),
+            "files": gguf_detail.get("files"),
+            "curated_present": gguf_detail.get("curated_present") or [],
+            "reason": gguf_detail.get("reason"),
+        },
+        "ollama": {
+            "state": ollama_detail.get("state"),
+            "models": ollama_detail.get("models"),
+            "endpoint": ollama_detail.get("endpoint"),
+            "reason": ollama_detail.get("reason"),
+        },
+    }
+
+
 def loopback_http_endpoint(raw: str | None, default: str = DEFAULT_OLLAMA) -> str:
     """Accept only http://{127.0.0.1|localhost|::1}[:port] with no extra path."""
     value = (raw or "").strip()

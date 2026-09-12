@@ -497,7 +497,6 @@ def status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
             "engine": engine, "roles": _resolve_roles(settings, valid),
             "curated_present": found["curated_present"], "curated_missing": found["curated_missing"],
         }
-    by_name = {item["name"]: item for item in valid}
     roles = _resolve_roles(settings, valid)
     return {
         "provider": "gguf", "state": "healthy",

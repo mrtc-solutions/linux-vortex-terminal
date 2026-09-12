@@ -223,12 +223,16 @@
   window.updateAiOpsHud = function (snapshot) {
     if (snapshot) {
       if (snapshot.task) hud.task = snapshot.task;
-      if (snapshot.plan) hud.plan = snapshot.plan;
-      if (snapshot.operation) hud.operation = snapshot.operation;
+      if (snapshot.plan) snapshot.localAi = snapshot.localAi || (snapshot.operation && snapshot.operation.analysis && snapshot.operation.analysis.local_ai);
+      if (snapshot.operation) {
+        hud.operation = snapshot.operation;
+        if (!snapshot.localAi && snapshot.operation.analysis && snapshot.operation.analysis.local_ai) snapshot.localAi = snapshot.operation.analysis.local_ai;
+      }
       if (snapshot.guardian) hud.guardian = snapshot.guardian;
       if (snapshot.council) hud.council = snapshot.council;
     }
     renderAiOps();
+    if (typeof window.updateAiOpsTurn === 'function' && snapshot) window.updateAiOpsTurn(snapshot);
   };
 
   async function loadTelemetry() {

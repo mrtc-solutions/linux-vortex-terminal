@@ -15,7 +15,7 @@
 - INSTALL remains proposal-driven:
   - reviewed apt dependencies become typed plans
   - root-required reviewed plans are rerun with `sudo vortex --allow-root run <plan-id>`
-  - Ollama, model pulls, and third-party agents remain operator-manual
+  - Ollama and model pulls remain operator-manual
 - `blocked` binaries are treated as present-but-flagged rather than falsely missing.
 - Health and first-run setup checks surface runtime/model readiness honestly.
 - `vortex install --user`, `vortex serve`, `vortex turn`, and the desktop/web/mobile surfaces are live.
@@ -35,7 +35,6 @@ This sandbox still cannot prove:
 
 - reviewed apt/systemd mutation on a disposable/admin-controlled host
 - a real default Ollama runtime at `http://127.0.0.1:11434`
-- third-party agent non-interactive consult execution
 - reviewed Docker/Podman sandbox execution
 
 Do not describe VORTEX 0.2.21 as an unrestricted autonomous pentest platform

@@ -30,7 +30,6 @@ assert.ok(fake.innerHTML.includes('term-cursor'), 'PTY renderer must mark the li
 assert.ok(fs.readFileSync(require('path').join(__dirname, '..', 'frontend', 'app.js'), 'utf8').includes('bindPtySurface'), 'app.js must bind keys to the PTY surface');
 const app = fs.readFileSync(require('path').join(__dirname, '..', 'frontend', 'app.js'), 'utf8');
 const workspace = fs.readFileSync(require('path').join(__dirname, '..', 'frontend', 'workspace.js'), 'utf8');
-assert.ok(app.includes("/api/workspace/turn"), 'app.js fallback SEND must use /api/workspace/turn');
-assert.ok(!app.includes("api('/api/plan'"), 'app.js must not POST /api/plan for SEND');
-assert.ok(workspace.includes("/api/workspace/turn"), 'workspace.js SEND must use /api/workspace/turn');
+assert.ok(workspace.includes("/api/workspace/turn"), 'SEND must use /api/workspace/turn (single implementation in workspace.js)');
+assert.ok(!app.includes("api('/api/plan'") && !workspace.includes("api('/api/plan'"), 'renderer must not POST /api/plan for SEND');
 console.log('terminal emulator tests: PASS');

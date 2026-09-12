@@ -1153,7 +1153,7 @@ The following packages will be upgraded:
 
     def test_app_version_is_consistent_across_surfaces(self):
         root = Path(__file__).resolve().parent.parent
-        self.assertEqual(vtx_backend.APP_VERSION, "0.2.22")
+        self.assertEqual(vtx_backend.APP_VERSION, "0.2.23")
         self.assertIn(f"version='vortex {vtx_backend.APP_VERSION}'", (root / "cli" / "vortex.py").read_text(encoding="utf-8"))
         self.assertIn(f'"version": "{vtx_backend.APP_VERSION}"', (root / "package.json").read_text(encoding="utf-8"))
         html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
@@ -1161,7 +1161,7 @@ The following packages will be upgraded:
         self.assertNotIn("0.2.21", html)
         from backend.mobile.apkbuild import VERSION_CODE, VERSION_NAME
         self.assertEqual(VERSION_NAME, vtx_backend.APP_VERSION)
-        self.assertEqual(VERSION_CODE, 222)
+        self.assertEqual(VERSION_CODE, 223)
 
     def test_privilege_handoff_documents_sudo_timestamp_window(self):
         source = Path(__file__).resolve().parent.parent.joinpath("cli", "vortex.py").read_text(encoding="utf-8")

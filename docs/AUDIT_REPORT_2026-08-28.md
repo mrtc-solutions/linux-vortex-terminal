@@ -36,7 +36,7 @@ authority → real tool (typed argv, shell=False) → evidence → verifier → 
 | `backend/vortex_backend.py` | 3,826 lines: stdlib `ThreadingHTTPServer`, 51 `/api/*` routes, `Store` (SQLite + audit hash chain), `SessionManager` (PTY), `build_plan` (923-line deterministic planner), `ExecutionManager` (the sole execution authority) |
 | `backend/security/` | `guardian.py` (policy/risk/scope), `scope.py` (target normalization + exclusions), `scanners.py` (nuclei/ffuf/nikto/amass/gobuster argv adapters) |
 | `backend/` | orchestration (`orchestrate`, `replan`, `observe`, `episode`), `workspace.py` (VTX task engine, 11 states), `adapter_registry.py`, `artifacts`, `dependencies`, `health`, `facts`, `knowledge`, `reports/`, `models/router.py`, `plugins/loader.py` |
-| `backend/agents/` | `council.py` + builtin `vortex-local` + 9 third-party discovery stubs |
+| `backend/agents/` | `council.py` + builtin `vortex-local` (roster later trimmed to the builtin only) |
 | `cli/`, `frontend/`, `desktop/` | 541-line CLI, 4-file vanilla-JS renderer, Electron shell |
 | `tests/` | 141 Python tests at baseline + 4 Node suites + a real-host acceptance script |
 
@@ -72,7 +72,7 @@ Each row was confirmed by reading the code **and** exercising it on this host.
 | Audit hash chain detects tampering | **CONFIRMED** | Payload edit, row deletion, and field forgery all detected in three separate tamper databases |
 | Engagement required for active network work | **CONFIRMED** (after fix — see defect #2) | Excluded target now yields `status=rejected`, 0 commands |
 | Missing tools stay UNAVAILABLE, never fabricated | **CONFIRMED** | `scanners.build_scan` → `ADAPTER NOT IMPLEMENTED: {tool}`; sqlmap/msfconsole are catalogue-probe only |
-| Unavailable agents stay UNAVAILABLE | **CONFIRMED** | Only builtin `vortex-local` reports healthy; the 9 third-party agents report absent |
+| Unavailable agents stay UNAVAILABLE | **CONFIRMED** | Only the builtin `vortex-local` advisor reports healthy |
 | No silent installation | **CONFIRMED** | `auto_install: False`, `sudo: False`; apt items emit a *proposal*; agents are always `operator-manual` |
 | Renderer cannot spawn processes / never holds the token | **CONFIRMED** | `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`; token injected by `onBeforeSendHeaders` |
 | Cloud inference disabled; local model loopback-only | **CONFIRMED** | Providers hardcoded `disabled`; `loopback_http_endpoint()` rejects userinfo/path/prefix tricks; `ProxyHandler({})` blocks proxy egress |
@@ -243,7 +243,7 @@ Operator (CLI / renderer / Electron)
         ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ AGENT COUNCIL  agents/council.py         ADVISORY ONLY          │
-│   Builtin vortex-local + 9 probed third-party agents.           │
+│   Builtin vortex-local advisor only.                           │
 │   Absent agent ⇒ UNAVAILABLE. Never fabricated. Council output  │
 │   is commentary; it cannot add, alter, or authorize a command.  │
 └─────────────────────────────────────────────────────────────────┘
@@ -303,9 +303,8 @@ advisory; only Guardian authorizes and only the execution authority runs.**
 **Not implemented.** VORTEX exposes no MCP client, no MCP server, and no MCP
 transport. `backend/tools/router.py` is an internal adapter router that returns
 `{"protocol": "vortex-adapter", "mcp": false}` — deliberately labelled so the
-absence is explicit rather than implied. The only other match for "mcp" in the
-tree is the string `"mcp-tools"` inside the hexstrike *discovery* stub, which is
-a probe token, not an integration.
+absence is explicit rather than implied. Any other match for "mcp" in the tree
+is a probe token, not an integration.
 
 Consequently there is no MCP path around Guardian, scope, or audit — the risk
 the plan warns about does not exist here. This is now stated in the README

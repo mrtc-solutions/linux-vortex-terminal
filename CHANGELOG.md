@@ -1,10 +1,54 @@
 # Changelog
 
-## Unreleased — 2026-09-09
+## 0.2.23 — 2026-09-12
 
-On-device GGUF primary, fuzzy provider routing, per-function AI assistance,
-and agent upstream tracking. No simulation: every new surface degrades to an
+Windowed workspace, global REFRESH ALL, visible local-AI trace, the
+model-discovery fix, and a roster that shows only working advisors.
+On-device GGUF primary, fuzzy provider routing, and per-function AI
+assistance all ship here. No simulation: every new surface degrades to an
 honest unavailable state when its files, engine, or network are absent.
+
+- **Windowed workspace redesign.** The main screen now keeps only the chat
+  and plan/evidence columns; System health, Tasks, AI Ops, and Models open as
+  pop-up surface windows with maximize/minimize/close controls, a raised
+  z-order manager, and a restore tray for minimized windows
+  (`frontend/windows.js`, `frontend/styles.css`).
+- **Global REFRESH ALL.** New `POST /api/refresh` forces one fresh re-probe
+  of every subsystem — agents, tool registry, host tools, GGUF model
+  directory, Ollama runtime, and dependencies — and returns a single
+  summary with per-section counts and `elapsed_ms`. The header button toasts
+  what was re-checked and the HUD counters update from the same payload.
+- **Model discovery fix.** `GET /api/ollama?fresh=1` now invalidates the
+  GGUF scan cache and the router status cache, so a file dropped into
+  `~/linux-vortex-terminal/models` appears on the next refresh instead of
+  waiting out the scan TTL; REFRESH ALL performs the same invalidation.
+- **AI Ops trace window.** Step-by-step local-AI pipeline per turn: provider
+  selected, per-provider latency, fuzzy match, synthesis, and guardian
+  outcome — plus the live provider ranking (`routing` on `/api/ollama`).
+  When an AI assistant, Ollama, or the GGUF engine is unavailable, the
+  window shows the exact commands to run in the main Linux terminal
+  (upstream install guides, Ollama install flow, or drop-the-GGUF-file
+  steps) — never a silent install.
+- **One-paste install block.** New `GET /api/install/commands` aggregates the
+  verified commands for every layer actually missing on the host (Ollama
+  runtime, GGUF engine, GGUF model files) into a single copy-paste block with
+  COPY ALL / OPEN IN TERMINAL in the AI Ops window. Paste-safe by
+  construction: prose and any line with backticks/substitutions/redirects is
+  demoted to a comment, so pasting never runs an unexpected command.
+- **Advisor roster trimmed to what works.** The nine third-party agent
+  adapters that could not connect (advisory health-check stubs, none ever
+  executed) were removed from the app — no trace left in backend, frontend,
+  tests, docs, or NOTICE. The council now ships only the built-in
+  `vortex-local` advisor; the roster, dependencies view, and install block
+  all reflect that, and nothing unavailable is listed.
+- **Preview support.** `--allow-frame-host` lets an operator name a preview
+  proxy host that may embed the app (CSP `frame-ancestors` names the exact
+  origin); default remains frame-locked.
+- **Cleanup.** Removed the nine root-level plan/history markdown files and
+  dead code/unused CSS (stale `makePlan` in `app.js`, superseded
+  context-column styles); the test suite is now 442 Python + 8 JS.
+
+### Also in this release
 
 - **Fixed fresh-clone desktop bootstrap** (`npm install` / `npm start`).
   Electron 44+ no longer downloads its ~110 MB platform binary at install
@@ -44,14 +88,11 @@ honest unavailable state when its files, engine, or network are absent.
   `POST /api/models/gguf/activate` (role persistence after file
   verification; traversal-safe), plus a Models-view GGUF panel and updated
   desktop preload allowlist.
-- New **agent upstream tracking** (`backend/agents/upstream.py`): every
-  secondary assistant links its original repository with license, install
-  guide, and consult status; operator-triggered `POST
-  /api/agents/upstream/refresh` checks GitHub HEAD (offline-safe, bounded).
-  HALO/DarkMoon stay honestly `unverified` — no URL invented.
-- Council `discover()` and install proposals now carry upstream metadata;
-  Agents view renders repository links and sync state.
-- New suite `tests/test_gguf_fuzzy.py` (32 tests) and operator guide
+- **Advisor upstream metadata** (`backend/agents/upstream.py`): the
+  built-in advisor carries its upstream record; `POST
+  /api/agents/upstream/refresh` stays offline-safe and bounded (no
+  GitHub-backed advisor is tracked, so it never dials the network).
+- New suite `tests/test_gguf_fuzzy.py` and operator guide
   `docs/LOCAL_GGUF.md`.
 
 ## 0.2.22 — 2026-09-07

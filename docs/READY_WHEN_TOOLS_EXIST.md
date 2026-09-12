@@ -9,8 +9,7 @@ no silent install, and no password capture remain binding.
 
 ## What is true now
 
-1. Installing VORTEX does **not** install host packages, Ollama, models, Docker,
-   or third-party agents.
+1. Installing VORTEX does **not** install host packages, Ollama, models, or Docker.
 2. **Dependencies → INSTALL** builds either:
    - a **reviewed apt plan** for mapped distro packages, or
    - an **operator-manual proposal** for things VORTEX will not auto-install.
@@ -116,10 +115,9 @@ curl http://127.0.0.1:11434/api/tags
 
 These are still honest product limits, not fake-passed features:
 
-1. Reviewed non-interactive consult execution for third-party agent CLIs
-2. Reviewed Docker/Podman sandbox **execution** beyond probe/inspect/log surfaces
-3. Any future product decision on sqlmap / msf execution adapters
-4. Real root-approved apt/systemd mutation acceptance on a disposable/admin host
+1. Reviewed Docker/Podman sandbox **execution** beyond probe/inspect/log surfaces
+2. Any future product decision on sqlmap / msf execution adapters
+3. Real root-approved apt/systemd mutation acceptance on a disposable/admin host
 5. A real default Ollama runtime at `http://127.0.0.1:11434` on this sandbox host
 
 ## How to use the install path today

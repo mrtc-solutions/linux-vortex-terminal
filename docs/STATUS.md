@@ -63,7 +63,7 @@ any remaining inaccuracies.
 | Wordlist dependency proposal | Done + tested |
 | Node/npm/pnpm/yarn/Go health/setup visibility | Done + tested |
 | Docker/Podman runtime probe | Done + tested; execution remains limited |
-| Third-party agent non-interactive consult execution | Not implemented |
+| Third-party agent code execution | Out of scope by design — VORTEX never downloads or executes it |
 | Docker/Podman sandbox execution | Not implemented |
 | sqlmap / msf execution adapters | Not implemented |
 | MCP | Not implemented |
@@ -77,7 +77,7 @@ There is no general silent installer in this product.
 - `vortex install --user` writes only a launcher.
 - Reviewed distro packages become reviewed apt plans.
 - Those plans still require an operator/admin to execute them separately.
-- Ollama and third-party agents remain operator-installed.
+- Ollama remains operator-installed (verified managed flow in the Models view).
 - Binaries found in unsafe paths may show as `blocked`, which means “present but
   not silently trusted,” not “missing because install failed.”
 
@@ -85,9 +85,8 @@ There is no general silent installer in this product.
 
 1. Real reviewed apt/systemd mutation on a host you administer
 2. Real default Ollama runtime at `http://127.0.0.1:11434` on this sandbox host
-3. Reviewed third-party agent consult execution for actual installed CLIs
-4. Reviewed Docker/Podman sandbox execution beyond probe/inspect/log surfaces
-5. Signed `.deb` release evidence on a release-controlled VM
+3. Reviewed Docker/Podman sandbox execution beyond probe/inspect/log surfaces
+4. Signed `.deb` release evidence on a release-controlled VM
 
 ## Intelligent terminal workbench (palette, search, dashboard)
 

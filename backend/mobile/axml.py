@@ -7,7 +7,6 @@ left as plaintext XML inside the APK.
 from __future__ import annotations
 
 import struct
-from typing import Iterable
 
 RES_XML_TYPE = 0x0003
 RES_STRING_POOL_TYPE = 0x0001
@@ -140,7 +139,7 @@ def encode_manifest(
     *,
     package: str = "io.vortex.mobile",
     version_code: int = 219,
-    version_name: str = "0.2.22",
+    version_name: str = "0.2.23",
     label: str = "VORTEX",
     activity: str = "io.vortex.mobile.MainActivity",
     min_sdk: int = 21,

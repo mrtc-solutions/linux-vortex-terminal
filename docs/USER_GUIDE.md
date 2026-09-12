@@ -324,7 +324,7 @@ Installing VORTEX on Kali does **not** install the rest of Kali. Kali
 already has many tools; VORTEX only probes `PATH` and uses what is present.
 
 In this Arena sandbox: Debian 12, no Docker/Podman, no default Ollama runtime,
-no third-party agent CLIs, typically no nmap. Local Linux adapters (whoami, df,
+typically no nmap. Local Linux adapters (whoami, df,
 ss, git, systemd inspect, os-release, lscpu, …) work because those binaries
 exist. On the audited host, `node`, `npm`, and `yarn` were discoverable under
 `/usr/local/bin` but reported as blocked-by-review rather than trusted installs.
@@ -375,7 +375,7 @@ The path to “installed tools ⇒ real execution, nothing fabricated” is
 
 ## 14. What is not claimed
 
-- Third-party agent consult APIs (CAI, Strix, Nebula, …) — discovery only
+- Third-party AI agent code — none ships; only the built-in deterministic advisor is rostered
 - Docker sandbox **execution** when no runtime is installed
 - Cloud model inference
 - Silent package or agent installation

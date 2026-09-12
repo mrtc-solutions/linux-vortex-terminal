@@ -37,6 +37,18 @@ class GgufDiscoveryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.models = Path(self.tmp.name) / "models"
         self.models.mkdir()
+        # Hermetic discovery: the scanner also walks the operator's home
+        # models folder, the repo models folder, and the data root. Redirect
+        # those to temp locations so the suite is deterministic on any host —
+        # including one where the operator has real models checked out.
+        self._home = Path(self.tmp.name) / "home"
+        self._home.mkdir()
+        self._home_patch = patch.object(gguf_provider.Path, "home", return_value=self._home)
+        self._home_patch.start()
+        self._repo_patch = patch.object(gguf_provider, "_repo_root", return_value=None)
+        self._repo_patch.start()
+        self._data_patch = patch.object(gguf_provider, "_data_root", return_value=Path(self.tmp.name) / "data")
+        self._data_patch.start()
         self._old_env = os.environ.get("VORTEX_MODELS_DIR")
         self._old_config_dir = os.environ.get("VORTEX_CONFIG_DIR")
         config_dir = Path(self.tmp.name) / "config"
@@ -46,6 +58,9 @@ class GgufDiscoveryTests(unittest.TestCase):
         _reset_caches()
 
     def tearDown(self):
+        self._home_patch.stop()
+        self._repo_patch.stop()
+        self._data_patch.stop()
         if self._old_env is None:
             os.environ.pop("VORTEX_MODELS_DIR", None)
         else:
@@ -330,18 +345,12 @@ class AssistCoverageTests(unittest.TestCase):
 
 
 class UpstreamTrackingTests(unittest.TestCase):
-    def test_table_links_every_agent_without_invention(self):
+    def test_table_contains_only_the_builtin_advisor(self):
         from backend.agents.upstream import table
 
         data = table()
-        self.assertGreaterEqual(len(data), 10)
-        for agent_id in ("cai", "strix", "nebula", "pentestgpt", "hexstrike", "pentagi"):
-            self.assertTrue(data[agent_id]["repository"].startswith("https://github.com/"))
-        # HALO and DarkMoon have no verified repository — reported, not invented.
-        self.assertEqual(data["halo"]["repository"], "")
-        self.assertEqual(data["darkmoon"]["repository"], "")
-        self.assertEqual(data["halo"]["sync_state"], "unverified")
-        self.assertEqual(data["darkmoon"]["sync_state"], "unverified")
+        self.assertEqual(set(data), {"vortex-local"}, "no third-party agent code ships with VORTEX")
+        self.assertEqual(data["vortex-local"]["sync_state"], "builtin")
 
     def test_refresh_refuses_offline_without_network(self):
         from backend.agents.upstream import refresh
@@ -350,46 +359,37 @@ class UpstreamTrackingTests(unittest.TestCase):
             result = refresh(offline=True)
         self.assertEqual(result["state"], "offline")
 
-    def test_refresh_checks_github_head(self):
+    def test_refresh_never_touches_network_for_builtin(self):
         from backend.agents import upstream as upstream_module
 
-        class FakeResponse:
-            def __init__(self):
-                self.payload = json.dumps([{"sha": "abc123", "commit": {"message": "feat: x"}}]).encode()
+        with patch("urllib.request.urlopen", side_effect=AssertionError("builtin advisor has no upstream to dial")):
+            result = upstream_module.refresh("vortex-local")
+        self.assertEqual(result["state"], "nothing_tracked")
+        self.assertEqual(result["checked"], [])
 
-            def geturl(self):
-                return "https://api.github.com/repos/aliasrobotics/cai/commits?per_page=1"
+    def test_refresh_unknown_agent_is_honest(self):
+        from backend.agents import upstream as upstream_module
 
-            def read(self, _size=-1):
-                return self.payload
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-        with patch("urllib.request.urlopen", return_value=FakeResponse()):
-            result = upstream_module.refresh("cai")
-        self.assertEqual(result["state"], "checked")
-        self.assertEqual(result["checked"][0]["sha"], "abc123")
-        self.assertEqual(upstream_module.table()["cai"]["sync_state"], "checked")
+        result = upstream_module.refresh("not-a-real-agent")
+        self.assertEqual(result["state"], "unknown_agent")
 
     def test_council_discover_carries_upstream(self):
         from backend.agents.council import discover
 
         agents = {item["id"]: item for item in discover()}
-        self.assertIn("upstream", agents["cai"])
-        self.assertEqual(agents["cai"]["upstream"]["repository"], "https://github.com/aliasrobotics/cai")
-        self.assertIsNone(agents["halo"]["upstream"]["repository"])
+        self.assertEqual(set(agents), {"vortex-local"})
+        self.assertIn("upstream", agents["vortex-local"])
+        self.assertEqual(agents["vortex-local"]["upstream"]["repository"], "builtin")
 
-    def test_install_proposal_includes_reviewed_guide(self):
+    def test_install_proposal_scopes_to_shipped_advisors(self):
         from backend.agents.install import proposal
 
-        result = proposal("nebula")
-        self.assertFalse(result["auto_install"])
-        self.assertTrue(any("nebula" in str(line).lower() for line in result["commands"]))
-        self.assertIn("sync_state", result)
+        built_in = proposal("vortex-local")
+        self.assertFalse(built_in["auto_install"])
+        self.assertEqual(built_in["state"], "installed")
+        unknown = proposal("not-a-real-agent")
+        self.assertFalse(unknown["auto_install"])
+        self.assertEqual(unknown["state"], "unknown")
 
 
 class FunctionAssistanceWiringTests(unittest.TestCase):

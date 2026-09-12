@@ -20,7 +20,7 @@ The application remains a **single-page web frontend + stdlib Python sidecar** w
 VORTEX's advisory-only AI pipeline is unchanged and now surfaced truthfully in the HUD:
 
 - **REQUEST → ANALYSIS → COMMAND PLAN → VALIDATION → EXECUTION → RESULT → RESPONSE.** The AI Operations panel renders this pipeline as six stages, each driven by real task/plan/operation state (`state.task`, `state.plan`, and the live operation object), never by a timer or a fake sequence.
-- **AI Assistants** (`backend/agents/`, built-in `vortex-local` advisor plus optional `nebula`, `cai`, `hackerai`, `strix`, etc.) are **advisory only** — they analyze, plan, and commentate; **Guardian authorizes every action**. The HUD distinguishes this: the "ASSISTANT" readout lists consulted agents, and "GUARDIAN" shows the real decision/risk.
+- **AI Assistants** (`backend/agents/`, built-in `vortex-local` advisor only — no third-party agent code ships) are **advisory only** — they analyze, plan, and commentate; **Guardian authorizes every action**. The HUD distinguishes this: the "ASSISTANT" readout lists consulted agents, and "GUARDIAN" shows the real decision/risk.
 - **Local LLMs** (Ollama-served models) are also advisory: `local_ai` interpretation is a plan-side analysis, never an authority. The HUD's "LOCAL MODEL" readout reports the actual routed local-model state or `—` when none was consulted.
 - The event-driven wiring (no polling) hooks the existing `renderTaskContext`, `renderLiveOutput`, `renderAnalysis`, and `renderPlan` call sites — the same places that already carry the true task/guardian/council/operation objects.
 
