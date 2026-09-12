@@ -89,7 +89,8 @@ assert.ok(!backend.includes('"matrix": "medium"'), 'matrix settings default is r
 // The Local AI / Models view exists and is wired to the Ollama management API.
 assert.ok(index.includes('id="view-models"') && index.includes('data-view="models"'), 'Models view and nav entry exist');
 assert.ok(index.includes('assets/models.js'), 'Models view loads its dedicated module');
-assert.ok(models.includes("api('/api/ollama')"), 'models module loads runtime + catalog status');
+assert.ok(models.includes("api(fresh ? '/api/ollama?fresh=1' : '/api/ollama')"), 'models module loads runtime + catalog status, fresh-scanning on demand');
+assert.ok(models.includes('loadModels(true)'), 'models view forces a fresh GGUF scan');
 assert.ok(models.includes('/api/ollama/install'), 'models module can install Ollama');
 assert.ok(models.includes('/api/ollama/install/cancel'), 'models module can cancel an in-flight runtime install');
 assert.ok(models.includes('/api/ollama/models/pull'), 'models module can pull a model');

@@ -73,7 +73,7 @@ except ImportError:  # direct `python backend/vortex_backend.py`
     from probe_cache import TTLCache
 
 SCHEMA_VERSION = 1
-APP_VERSION = "0.2.22"
+APP_VERSION = "0.2.23"
 REDACTION_RE = re.compile(
     r"(?i)(bearer\s+|password\s*[=:]\s*|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*|secret\s*[=:]\s*)([^\s,;]+)"
 )
@@ -140,6 +140,100 @@ def clear_probe_caches() -> None:
         _load("tools.hostscan").invalidate_host_scan_cache()
     except Exception:
         pass
+    _invalidate_gguf_scan()
+
+
+def _invalidate_gguf_scan() -> None:
+    """Force the next GGUF discovery to re-walk the model directories.
+
+    Without this, a file dropped into the models folder stays invisible until
+    the short scan TTL lapses, which reads as the app ignoring the folder.
+    """
+    try:
+        _load("models.gguf").invalidate_scan_cache()
+    except Exception:
+        pass
+    try:
+        _load("models.router").invalidate_status_cache()
+    except Exception:
+        pass
+
+
+def _fresh_probe_summary(handler: "VortexHandler") -> dict[str, Any]:
+    """One forced re-probe of every subsystem, summarized for the UI.
+
+    Each section degrades to an honest ``state`` on failure; the endpoint
+    never raises, so a single broken probe cannot hide the rest.
+    """
+    settings = _load("config").load_settings()
+    summary: dict[str, Any] = {}
+
+    try:
+        agents = _load("agents.council").discover()
+        available = [agent for agent in agents if (agent.get("health") or {}).get("healthy")]
+        summary["agents"] = {
+            "total": len(agents),
+            "available": len(available),
+            "available_names": [agent.get("name") for agent in available],
+            "missing": [agent.get("name") for agent in agents if not (agent.get("health") or {}).get("healthy")],
+        }
+    except Exception as exc:
+        summary["agents"] = {"state": "error", "message": redact(str(exc))[:160]}
+
+    try:
+        registry = _load("tools.registry").inventory()
+        installed = [tool for tool in registry if tool.get("state") == "installed"]
+        summary["tools"] = {"catalog": len(registry), "installed": len(installed)}
+    except Exception as exc:
+        summary["tools"] = {"state": "error", "message": redact(str(exc))[:160]}
+
+    try:
+        host = _load("tools.hostscan").scan_host_tools(persist=False, use_cache=False)
+        summary["host_tools"] = {
+            "path_executables": (host.get("counts") or {}).get("path_executables", 0),
+            "discovered": (host.get("counts") or {}).get("discovered", 0),
+            "new_since_last_scan": len(host.get("new_since_last_scan") or []),
+        }
+    except Exception as exc:
+        summary["host_tools"] = {"state": "error", "message": redact(str(exc))[:160]}
+
+    try:
+        gguf = _load("models.gguf").status(settings)
+        files = gguf.get("files") or []
+        summary["gguf"] = {
+            "state": gguf.get("state"),
+            "files": len(files),
+            "valid": sum(1 for item in files if item.get("valid")),
+            "names": [item.get("name") for item in files],
+            "directories": gguf.get("directories") or [],
+            "engine": (gguf.get("engine") or {}).get("state"),
+        }
+    except Exception as exc:
+        summary["gguf"] = {"state": "error", "message": redact(str(exc))[:160]}
+
+    try:
+        runtime = _load("models.manager").runtime_status()
+        summary["ollama"] = {
+            "installed": bool(runtime.get("installed")),
+            "api_state": runtime.get("api_state"),
+            "models": len(runtime.get("models") or []),
+            "server": (runtime.get("server") or {}).get("state"),
+        }
+    except Exception as exc:
+        summary["ollama"] = {"state": "error", "message": redact(str(exc))[:160]}
+
+    try:
+        deps = _load("dependencies").inventory()
+        counts = deps.get("counts") or {}
+        summary["dependencies"] = {
+            "installed": counts.get("installed", 0),
+            "total": counts.get("total", 0),
+            "missing": len(deps.get("missing") or []),
+        }
+    except Exception as exc:
+        summary["dependencies"] = {"state": "error", "message": redact(str(exc))[:160]}
+
+    return summary
 
 
 def _query_flag(query: dict[str, list[str]], key: str) -> bool:
@@ -3917,6 +4011,7 @@ class VortexHandler(BaseHTTPRequestHandler):
     frontend: Path
     token: str | None = None
     allow_remote_host = False
+    frame_hosts: list[str] = []
     server_version = "VortexSidecar/0.2"
     # Browser sessions are process-local, bounded, fixed-lifetime capabilities.
     # The capability fingerprint prevents a session minted for an earlier token
@@ -4031,6 +4126,28 @@ class VortexHandler(BaseHTTPRequestHandler):
         except ValueError:
             return self.allow_remote_host
 
+    def _host_frame_allowed(self) -> bool:
+        """True when the request Host was explicitly allow-listed for framing.
+
+        The operator names the preview proxy host with ``--allow-frame-host``
+        (exact hostname, or ``.example.com`` suffix). A cross-origin embedder
+        of that origin cannot read or drive the data layer — every cross-origin
+        API request is rejected by ``_browser_context_allowed`` — so a framed
+        shell cannot be used to act on the operator's behalf. Default (no
+        flag): nothing may embed the app.
+        """
+        authority = self._authority((self.headers.get("Host") or "").strip())
+        if authority is None:
+            return False
+        hostname, _port = authority
+        for allowed in type(self).frame_hosts:
+            if allowed.startswith("."):
+                if hostname == allowed[1:] or hostname.endswith(allowed):
+                    return True
+            elif hostname == allowed:
+                return True
+        return False
+
     def _browser_context_allowed(self) -> bool:
         if (self.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site":
             return False
@@ -4072,12 +4189,19 @@ class VortexHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
+        if self._host_frame_allowed():
+            # The operator allow-listed this preview proxy host for framing.
+            # CSP frame-ancestors (not X-Frame-Options) names the exact origin.
+            authority = self._authority((self.headers.get("Host") or "").strip())
+            hostname = authority[0] if authority else ""
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://" + hostname + "; form-action 'self'")
+        else:
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), usb=(), serial=()")
-        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
         origin = self._cors_origin()
         if origin is not None:
             self.send_header("Access-Control-Allow-Origin", origin)
@@ -4311,11 +4435,24 @@ class VortexHandler(BaseHTTPRequestHandler):
                 from models.router import model_status
                 return self._json(200, {"model": model_status(load_settings())})
             if path == "/api/ollama":
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_gguf_scan()
+                    _invalidate_probe_lookups()
                 manager = _load("models.manager")
                 settings = _load("config").load_settings()
                 runtime = manager.runtime_status()
-                return self._json(200, {"ollama": runtime, "models": manager.catalog(runtime, settings)})
+                payload = {"ollama": runtime, "models": manager.catalog(runtime, settings)}
+                try:
+                    from models.router import live_routing
+                    payload["routing"] = live_routing(settings)
+                except Exception as exc:  # routing is advisory-only; never break status
+                    payload["routing"] = {"winner": "deterministic", "reason": f"routing snapshot failed: {redact(str(exc))[:160]}", "ranking": []}
+                return self._json(200, payload)
             if path == "/api/models/gguf":
+                query = urllib.parse.parse_qs(parsed.query)
+                if _query_flag(query, "fresh"):
+                    _invalidate_gguf_scan()
                 gguf = _load("models.gguf")
                 settings = _load("config").load_settings()
                 return self._json(200, {"gguf": gguf.status(settings)})
@@ -4958,6 +5095,13 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not slot:
                     raise ValueError("slot is required")
                 return self._json(200, {"secrets": put(slot, value or "")})
+            if path == "/api/refresh":
+                started = time.monotonic()
+                clear_probe_caches()
+                summary = _fresh_probe_summary(self)
+                self.store.append_audit("refresh_all", summary)
+                summary["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+                return self._json(200, {"refresh": summary, "backend": "online"})
             if path == "/api/control/stop-all":
                 stop_all = _load("orchestrate").stop_all
                 result = stop_all(self.executor, self.sessions, self.workspace)
@@ -5228,7 +5372,7 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
             self._request_slots.release()
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -> None:
+def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None, frame_hosts: list[str] | None = None) -> None:
     validate_bind_security(host, token)
     store = Store()
     try:
@@ -5244,6 +5388,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -
     handler.frontend = Path(__file__).resolve().parent.parent / "frontend"
     handler.token = token
     handler.allow_remote_host = not _loopback_bind(host)
+    handler.frame_hosts = list(frame_hosts or [])
     server: BoundedThreadingHTTPServer | None = None
     runtime_file: Path | None = None
     try:
@@ -5289,8 +5434,10 @@ if __name__ == "__main__":
     parser.add_argument("--host", default=os.environ.get("VORTEX_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("VORTEX_PORT", "8765")))
     parser.add_argument("--token", default=os.environ.get("VORTEX_SIDECAR_TOKEN"))
+    parser.add_argument("--allow-frame-host", action="append", default=[],
+                        help="Host that may embed the app in a browser frame (repeatable; '.example.com' suffix matching). Default: nothing may embed the app.")
     args = parser.parse_args()
     try:
-        serve(args.host, args.port, args.token)
+        serve(args.host, args.port, args.token, frame_hosts=args.allow_frame_host or None)
     except ValueError as exc:
         parser.error(str(exc))

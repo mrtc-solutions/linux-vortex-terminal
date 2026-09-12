@@ -416,8 +416,8 @@ body.electron-shell .app-titlebar { display: flex; }
 .report-dl { color: var(--cyan); margin-right: 10px; font: 10px var(--mono); text-decoration: none; border-bottom: 1px solid rgba(0, 229, 255, .35); }
 
 /* ---- overview workspace ---- */
-.workspace-grid { display: grid; grid-template-columns: minmax(280px, 1.05fr) minmax(340px, 1.25fr) minmax(252px, .8fr); gap: 14px; align-items: start; }
-.workspace-grid > *, .chat-column, .live-column, .context-column { min-width: 0; }
+.workspace-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(340px, 1.2fr); gap: 14px; align-items: start; }
+.workspace-grid > *, .chat-column, .live-column, .plan-column { min-width: 0; }
 .chat-thread { min-height: 260px; max-height: 400px; overflow: auto; border: 1px solid var(--border-soft); background: rgba(7, 17, 22, .66); padding: 14px; margin: 12px 0; }
 .chat-empty { color: var(--dim); font-size: 12px; line-height: 1.6; }
 .chat-msg { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border-soft); background: rgba(10, 20, 26, .5); }
@@ -430,7 +430,7 @@ body.electron-shell .app-titlebar { display: flex; }
   padding: 12px; background: #050a0d; border: 1px solid var(--border);
   color: #b7ecd2; font: 11px/1.55 var(--mono); white-space: pre-wrap;
 }
-.context-column .panel { margin-bottom: 12px; }
+.plan-column { display: grid; gap: 12px; }
 
 .command-bar {
   height: 54px;
@@ -523,11 +523,79 @@ body.electron-shell .surface-window { top: var(--native-titlebar-height); }
 .surface-titlebar .window-controls { align-self: stretch; }
 .surface-titlebar .window-control { height: 100%; min-height: 58px; }
 .surface-body { flex: 1; min-height: 0; overflow: auto; }
-.surface-window.is-minimized { padding: 14px; place-items: end; background: transparent; pointer-events: none; }
-.surface-window.is-minimized .surface-card { width: min(430px, 100%); height: auto; max-height: none; pointer-events: auto; }
-.surface-window.is-minimized .surface-body { display: none; }
+.surface-window.is-minimized { padding: 0; background: transparent; pointer-events: none; }
+.surface-window.is-minimized .surface-card { display: none; }
 .surface-window.is-maximized { padding: 0; }
 .surface-window.is-maximized .surface-card { width: 100%; height: 100%; max-width: none; max-height: none; border: 0; }
+
+/* Window tray: minimised pop-ups wait here until restored. */
+.window-tray {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
+  bottom: 44px; display: flex; gap: 8px; padding: 6px 8px;
+  background: rgba(4, 10, 6, .94); border: 1px solid rgba(57, 255, 106, .3);
+  border-radius: 6px; box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
+}
+body.electron-shell .window-tray { bottom: 40px; }
+.window-tray[hidden] { display: none; }
+.tray-chip {
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(9, 18, 10, .9); border: 1px solid var(--border-soft);
+  color: var(--text); font: 10px/1 var(--mono); letter-spacing: 1px;
+  padding: 7px 11px; border-radius: 3px;
+}
+.tray-chip:hover { border-color: var(--green); color: var(--green); }
+.tray-led { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px rgba(255, 176, 32, .7); }
+
+/* AI Operations pop-up: step-by-step provider connection trace. */
+.ai-ops-window .surface-card { width: min(760px, 100%); height: min(84vh, 900px); }
+.ai-ops-body { padding: 16px 20px 20px; display: grid; gap: 18px; }
+.ai-ops-summary-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 14px; border: 1px solid var(--border-soft); background: rgba(5, 12, 7, .6); padding: 12px 14px; border-radius: var(--radius); }
+.ai-ops-summary-strip .context-row { margin: 0; }
+.ai-ops-section h3, .ai-ops-heading { margin: 0 0 8px; font: 10px/1 var(--mono); letter-spacing: 1.4px; color: var(--cyan); }
+.pipeline-vertical { display: grid; gap: 6px; }
+.pipeline-vertical .pipeline-stage { display: flex; align-items: center; gap: 10px; padding: 7px 12px; }
+.ai-ops-steps { display: grid; gap: 8px; }
+.ai-ops-step {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px;
+  border: 1px solid var(--border-soft); border-left: 2px solid var(--dim);
+  background: rgba(5, 12, 7, .55); padding: 10px 12px; border-radius: var(--radius);
+}
+.ai-ops-step.ok { border-left-color: var(--green); }
+.ai-ops-step.bad { border-left-color: var(--red); }
+.ai-ops-step.warn { border-left-color: var(--amber); }
+.ai-ops-step.selected { border-color: rgba(57, 255, 106, .55); background: rgba(9, 22, 12, .8); box-shadow: 0 0 22px rgba(57, 255, 106, .08); }
+.ai-ops-step-node { display: grid; place-items: center; }
+.step-index { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 50%; font: 10px var(--mono); color: var(--cyan); }
+.ai-ops-step.selected .step-index { border-color: var(--green); color: var(--green); background: rgba(57, 255, 106, .08); }
+.ai-ops-step-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ai-ops-step-title { font-weight: 650; font-size: 12.5px; }
+.ai-ops-step-sub { color: var(--dim); font-size: 10px; }
+.ai-ops-step-head .badge { margin-left: auto; }
+.ai-ops-step-detail { color: var(--muted); font-size: 11px; margin-top: 4px; line-height: 1.5; word-break: break-word; }
+.ai-ops-resolved { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(57, 255, 106, .4); background: rgba(9, 22, 12, .7); border-radius: var(--radius); }
+.ai-ops-resolved strong { color: var(--green); font: 11px var(--mono); letter-spacing: 1px; }
+.resolved-mark { color: var(--green); font-size: 15px; }
+.ai-ops-turn { border: 1px solid var(--border-soft); background: rgba(5, 12, 7, .55); border-radius: var(--radius); overflow: hidden; }
+.ai-ops-turn-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); font-size: 11.5px; }
+.ai-ops-turn-row:last-child { border-bottom: 0; }
+.ai-ops-turn-row label { font: 9px/1.6 var(--mono); letter-spacing: 1.2px; color: var(--cyan); }
+.ai-ops-turn-row span { color: var(--text); line-height: 1.55; word-break: break-word; }
+.ai-ops-help { display: grid; gap: 10px; }
+
+/* Command hand-off boxes (install commands for the main Linux terminal). */
+.install-box { border: 1px solid var(--border-soft); background: rgba(4, 9, 6, .8); border-radius: var(--radius); padding: 12px 14px; }
+.install-box-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.install-box-head strong { font-size: 11.5px; letter-spacing: .4px; }
+.install-commands { margin: 8px 0 0; padding: 10px 12px; background: #030704; border: 1px solid var(--border); color: #b7ecd2; font: 11px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.command-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.dep-detail { margin-top: 14px; padding: 14px; border: 1px solid var(--border-soft); background: rgba(5, 12, 7, .6); border-radius: var(--radius); }
+.dep-detail pre { margin: 8px 0; padding: 10px 12px; background: #030704; border: 1px solid var(--border); color: #b7ecd2; font: 11px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; }
+
+/* System / task pop-ups. */
+.system-window .surface-card, .task-window .surface-card { width: min(720px, 100%); height: min(72vh, 640px); }
+.system-body, .task-body { padding: 16px 20px; }
+.system-body .grid-row { margin-bottom: 14px; }
+.system-body .context-panel { margin: 0; }
 .first-run { background: rgba(4, 9, 12, .9); }
 .first-run-card { width: min(720px, 100%); max-height: 86vh; padding: 0; }
 .first-run-body { padding: 28px; }
@@ -1070,9 +1138,9 @@ body::after {
 .primary-button, .command-bar button { border-radius: 3px; box-shadow: 0 4px 16px rgba(99, 255, 145, .16); }
 .danger-btn { background: rgba(255, 70, 85, .06); }
 
-/* Command deck: request intent, reviewed plan, and observed evidence are the
-   visual sequence.  This changes no data placement or execution state. */
-.workspace-grid { grid-template-columns: minmax(300px, .92fr) minmax(400px, 1.36fr) minmax(264px, .78fr); gap: 16px; }
+/* Command deck: conversation on the left, reviewed plan + observed evidence on
+   the right. Detail panels (AI ops, system, task state) live in pop-ups. */
+.workspace-grid { grid-template-columns: minmax(300px, .92fr) minmax(400px, 1.36fr); gap: 16px; }
 .chat-column { padding: 4px 2px; }
 .chat-column > h1 { font-size: clamp(32px, 3vw, 44px); letter-spacing: -1.6px; margin: 9px 0 10px; }
 .chat-column > h1 em { color: var(--green); font-style: normal; text-shadow: 0 0 24px rgba(99, 255, 145, .22); }
@@ -1087,11 +1155,9 @@ body::after {
 .command-bar:focus-within { box-shadow: 0 0 0 3px rgba(99, 255, 145, .12), 0 12px 30px rgba(0, 0, 0, .18); }
 .quick-actions { grid-template-columns: repeat(2, 1fr); margin-bottom: 0; }
 .quick-actions button { border-radius: var(--radius); min-height: 70px; }
-.live-column { display: grid; gap: 12px; }
+.plan-column { display: grid; gap: 12px; }
 .plan-panel { min-height: 332px; }
 .live-output { min-height: 176px; max-height: 264px; border-radius: var(--radius); margin: 0; padding: 16px; box-shadow: inset 0 1px 0 rgba(99, 255, 145, .08); }
-.context-column { border-left: 1px solid rgba(125, 231, 209, .12); padding-left: 16px; }
-.context-column .panel { margin-bottom: 14px; }
 .activity-panel { margin-top: 16px; }
 
 /* Evidence and terminal retain the darkest, highest-contrast working surface. */
@@ -1113,8 +1179,6 @@ body::after {
 @media (max-width: 1180px) {
   .sidebar { width: 215px; flex-basis: 215px; }
   .workspace-grid { grid-template-columns: minmax(0, 1fr) minmax(300px, .9fr); }
-  .context-column { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; border-left: 0; border-top: 1px solid rgba(125, 231, 209, .12); padding: 16px 0 0; }
-  .context-column .panel { margin-bottom: 0; }
 }
 
 @media (max-width: 800px) {
@@ -1123,9 +1187,7 @@ body::after {
   .nav-zone-label { border-top: 0; margin-top: 13px; padding-top: 0; }
   .content { padding: 24px 18px 56px; }
   .topbar { padding: 9px 18px; }
-  .workspace-grid, .context-column { grid-template-columns: minmax(0, 1fr); }
-  .context-column { display: block; }
-  .context-column .panel { margin-bottom: 14px; }
+  .workspace-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 600px) {

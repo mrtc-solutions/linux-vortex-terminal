@@ -89,7 +89,7 @@ global.fetch = async (url) => {
       if (path.includes('/api/setup')) return { setup: { first_run_complete: false, ready: true, steps: [] } };
       if (path.includes('/api/health')) return { health: { interrupted_tasks: [] } };
       if (path.includes('/api/mobile/apk')) return { apk: { ok: true, size_bytes: 4096 } };
-      if (path.includes('/api/desktop/deb')) return { deb: { ok: true, size_bytes: 8192, filename: 'linux-vortex-terminal_0.2.22_all.deb' } };
+      if (path.includes('/api/desktop/deb')) return { deb: { ok: true, size_bytes: 8192, filename: 'linux-vortex-terminal_0.2.23_all.deb' } };
       if (path.includes('/api/dependencies/proposal')) {
         if (path.includes('tool:podman')) {
           return { install: { id: 'tool:podman', title: 'podman', method: 'apt', installed: false, plan_request: 'install package podman', commands: ['sudo apt-get install podman'] } };
@@ -165,7 +165,7 @@ for (const [view, endpoint] of Object.entries(expectLoad)) {
   assert.strictEqual(opened[opened.length - 1]?.url, '/api/desktop/deb/download', 'desktop download opens a top-level tab');
   assert.strictEqual(opened[opened.length - 1]?.target, '_blank', 'desktop download tab opens in the background');
   assert.ok(String(toastEl.textContent).includes('Desktop .deb built'), 'desktop toast reports the built package');
-  assert.ok(toastEl.children.some((c) => c.href === '/api/desktop/deb/download' && c.download === 'linux-vortex-terminal_0.2.22_all.deb'), 'desktop toast carries the manual download link');
+  assert.ok(toastEl.children.some((c) => c.href === '/api/desktop/deb/download' && c.download === 'linux-vortex-terminal_0.2.23_all.deb'), 'desktop toast carries the manual download link');
 
   console.log('frontend runtime smoke: PASS');
 })().catch((error) => { console.error(error); process.exit(1); });

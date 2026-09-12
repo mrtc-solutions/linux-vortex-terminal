@@ -504,12 +504,14 @@
     renderAgentsLocalAi();
   }
 
-  async function loadModels() {
+  async function loadModels(fresh) {
     try {
-      var data = await api('/api/ollama');
+      var data = await api(fresh ? '/api/ollama?fresh=1' : '/api/ollama');
       modelsState.runtime = data.ollama || {};
       modelsState.catalog = data.models || {};
+      modelsState.routing = data.routing || null;
       renderModels();
+      if (typeof window.renderAiOpsRouting === 'function') window.renderAiOpsRouting(data.routing || null);
       schedulePoll();
     } catch (e) {
       modelsState.runtime = null;
@@ -650,7 +652,7 @@
     var refresh = $('refresh-models');
     if (refresh && !refresh._bound) {
       refresh._bound = true;
-      refresh.addEventListener('click', function () { loadModels(); });
+      refresh.addEventListener('click', function () { loadModels(true); });
     }
     var pull = $('pull-custom-model');
     if (pull && !pull._bound) {
@@ -682,14 +684,15 @@
 
   window.loadModels = loadModels;
   window.renderModels = renderModels;
+  window.renderAgentsLocalAi = renderAgentsLocalAi;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       bindControls();
-      loadModels();
+      loadModels(true);
     });
   } else {
     bindControls();
-    loadModels();
+    loadModels(true);
   }
 })();

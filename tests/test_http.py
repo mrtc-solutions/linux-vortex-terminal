@@ -297,6 +297,27 @@ class HttpApiTests(unittest.TestCase):
         self.assertNotIn("query-secret-value", captured.getvalue())
         self.assertIn("/api/dependencies/proposal", captured.getvalue())
 
+    def test_frame_allowlist_frames_only_listed_preview_hosts(self):
+        original_hosts = self.handler.frame_hosts
+        original_remote = self.handler.allow_remote_host
+        try:
+            self.handler.frame_hosts = ["preview.example", ".e2b.app"]
+            self.handler.allow_remote_host = True  # non-loopback bind, like a preview proxy
+            status, headers, _ = self._raw("GET", "/api/health", headers={"Host": "preview.example"})
+            self.assertEqual(status, 200)
+            self.assertIn("frame-ancestors 'self' https://preview.example", headers.get("Content-Security-Policy", ""))
+            self.assertIsNone(headers.get("X-Frame-Options"), "framed origin relies on CSP frame-ancestors, not X-Frame-Options")
+            status2, headers2, _ = self._raw("GET", "/api/health", headers={"Host": "4173-abc.e2b.app"})
+            self.assertEqual(status2, 200)
+            self.assertIn("frame-ancestors 'self' https://4173-abc.e2b.app", headers2.get("Content-Security-Policy", ""))
+            status3, headers3, _ = self._raw("GET", "/api/health", headers={"Host": "evil.example"})
+            self.assertEqual(status3, 200)
+            self.assertIn("frame-ancestors 'none'", headers3.get("Content-Security-Policy", ""))
+            self.assertEqual(headers3.get("X-Frame-Options"), "DENY")
+        finally:
+            self.handler.frame_hosts = original_hosts
+            self.handler.allow_remote_host = original_remote
+
     def test_workspace_turn_creates_task_and_conversation(self):
         payload = self._json("POST", "/api/workspace/turn", {"request": "whoami", "cwd": self.tmp.name})
         self.assertTrue(payload["conversation"]["id"])
@@ -391,6 +412,45 @@ class HttpApiTests(unittest.TestCase):
         with patch.object(vtx_backend, "_invalidate_probe_lookups", wraps=vtx_backend._invalidate_probe_lookups) as agents_inv:
             self._json("GET", "/api/agents?fresh=1")
         self.assertGreaterEqual(agents_inv.call_count, 1, "agents refresh must clear low-level probe caches")
+        vtx_backend.clear_probe_caches()
+
+    def test_post_refresh_reports_all_subsystems_and_invalidates_scan_caches(self):
+        gguf_mod = vtx_backend._load("models.gguf")
+        router_mod = vtx_backend._load("models.router")
+        with patch.object(vtx_backend, "clear_probe_caches", wraps=vtx_backend.clear_probe_caches) as clear_inv, \
+             patch.object(gguf_mod, "invalidate_scan_cache", wraps=gguf_mod.invalidate_scan_cache) as gguf_inv, \
+             patch.object(router_mod, "invalidate_status_cache", wraps=router_mod.invalidate_status_cache) as router_inv:
+            payload = self._json("POST", "/api/refresh", {})
+        self.assertEqual(payload["backend"], "online")
+        summary = payload["refresh"]
+        for section in ("agents", "tools", "host_tools", "gguf", "ollama", "dependencies"):
+            self.assertIn(section, summary)
+            self.assertNotEqual((summary[section] or {}).get("state"), "error", f"{section} probe errored: {summary[section]}")
+        self.assertGreaterEqual(summary["elapsed_ms"], 0)
+        for key in ("state", "files", "valid", "names", "engine"):
+            self.assertIn(key, summary["gguf"])
+        self.assertGreaterEqual(clear_inv.call_count, 1, "refresh must clear all aggregate probe caches")
+        self.assertGreaterEqual(gguf_inv.call_count, 1, "refresh must force a fresh GGUF directory scan")
+        self.assertGreaterEqual(router_inv.call_count, 1, "refresh must force a fresh routing status")
+        vtx_backend.clear_probe_caches()
+
+    def test_ollama_fresh_flag_invalidates_model_scan_caches_only_when_requested(self):
+        gguf_mod = vtx_backend._load("models.gguf")
+        router_mod = vtx_backend._load("models.router")
+        with patch.object(gguf_mod, "invalidate_scan_cache", wraps=gguf_mod.invalidate_scan_cache) as gguf_inv, \
+             patch.object(router_mod, "invalidate_status_cache", wraps=router_mod.invalidate_status_cache) as router_inv:
+            cached = self._json("GET", "/api/ollama")
+        self.assertIn("ollama", cached)
+        self.assertIn("models", cached)
+        self.assertIn("routing", cached)
+        self.assertEqual(gguf_inv.call_count, 0, "cached model listing must not invalidate the scan")
+        self.assertEqual(router_inv.call_count, 0, "cached model listing must not invalidate routing")
+        with patch.object(gguf_mod, "invalidate_scan_cache", wraps=gguf_mod.invalidate_scan_cache) as gguf_inv2, \
+             patch.object(router_mod, "invalidate_status_cache", wraps=router_mod.invalidate_status_cache) as router_inv2:
+            fresh = self._json("GET", "/api/ollama?fresh=1")
+        self.assertIn("routing", fresh)
+        self.assertGreaterEqual(gguf_inv2.call_count, 1, "?fresh=1 must force a fresh GGUF directory scan")
+        self.assertGreaterEqual(router_inv2.call_count, 1, "?fresh=1 must force a fresh routing status")
         vtx_backend.clear_probe_caches()
 
     def test_head_static_asset_returns_headers_without_body(self):

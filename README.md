@@ -115,6 +115,10 @@ UNAVAILABLE), or **Not implemented**.
 | Fuzzy provider routing (GGUF → Ollama → council → deterministic) | Implemented + tested; latency/RAM/availability blending with per-call feedback and inspectable ranking |
 | Per-function AI assistance (`ai_hint` on 16 functions) | Implemented + tested; advisory only, never blocks, every function works without a model |
 | Agent upstream tracking (original repositories + HEAD checks) | Implemented + tested; offline-safe table, operator-triggered refresh, unverified agents never invented |
+| Windowed workspace: persistent chat + plan/evidence; system, task, AI Ops, and models surfaces open as pop-ups with minimize/maximize/close and a restore tray | Implemented + tested |
+| Global REFRESH ALL (`POST /api/refresh`) re-probes agents, tools, host tools, GGUF models, Ollama, and dependencies and reports what changed | Implemented + tested |
+| AI Ops trace: step-by-step per-turn local-AI resolution (provider selected, per-provider latency, fuzzy match, synthesis, guardian) plus live provider ranking | Implemented + tested |
+| Install-command suggestions in-app when an AI assistant, Ollama, or the GGUF engine is missing — exact commands for the main Linux terminal, never a silent install | Implemented + tested |
 | Docker/Podman isolation probe | Implemented; UNAVAILABLE when no runtime is installed |
 | Plugin JSON manifests (no plugin code execution) | Implemented |
 | Security tests: injection, prompt-injection text, Guardian | Implemented + tested |
@@ -206,7 +210,7 @@ records that it does not know the host outcome rather than inferring success.
 
 ## Documentation
 
-- [`LINUX_VORTEX_TERMINAL_BUILD_PLAN.md`](LINUX_VORTEX_TERMINAL_BUILD_PLAN.md) — original binding plan
+- [`CHANGELOG.md`](CHANGELOG.md) — what changed in every release
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — install, test, and operate as a real app
 - [`docs/STATUS.md`](docs/STATUS.md) — tested vs remaining gates
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow
@@ -222,7 +226,7 @@ records that it does not know the host outcome rather than inferring success.
 
 ```bash
 npm run lint
-npm test                             # 431 python tests + 8 js suites
+npm test                             # 433 python tests + 8 js suites
 python3 scripts/final_gates.py       # the 10-gate release audit (10/10 required)
 ```
 

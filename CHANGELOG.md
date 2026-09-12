@@ -1,10 +1,39 @@
 # Changelog
 
-## Unreleased — 2026-09-09
+## 0.2.23 — 2026-09-12
 
-On-device GGUF primary, fuzzy provider routing, per-function AI assistance,
-and agent upstream tracking. No simulation: every new surface degrades to an
-honest unavailable state when its files, engine, or network are absent.
+Windowed workspace, global REFRESH ALL, visible local-AI trace, and the
+model-discovery fix. On-device GGUF primary, fuzzy provider routing,
+per-function AI assistance, and agent upstream tracking all ship here. No
+simulation: every new surface degrades to an honest unavailable state when
+its files, engine, or network are absent.
+
+- **Windowed workspace redesign.** The main screen now keeps only the chat
+  and plan/evidence columns; System health, Tasks, AI Ops, and Models open as
+  pop-up surface windows with maximize/minimize/close controls, a raised
+  z-order manager, and a restore tray for minimized windows
+  (`frontend/windows.js`, `frontend/styles.css`).
+- **Global REFRESH ALL.** New `POST /api/refresh` forces one fresh re-probe
+  of every subsystem — agents, tool registry, host tools, GGUF model
+  directory, Ollama runtime, and dependencies — and returns a single
+  summary with per-section counts and `elapsed_ms`. The header button toasts
+  what was re-checked and the HUD counters update from the same payload.
+- **Model discovery fix.** `GET /api/ollama?fresh=1` now invalidates the
+  GGUF scan cache and the router status cache, so a file dropped into
+  `~/linux-vortex-terminal/models` appears on the next refresh instead of
+  waiting out the scan TTL; REFRESH ALL performs the same invalidation.
+- **AI Ops trace window.** Step-by-step local-AI pipeline per turn: provider
+  selected, per-provider latency, fuzzy match, synthesis, and guardian
+  outcome — plus the live provider ranking (`routing` on `/api/ollama`).
+  When an AI assistant, Ollama, or the GGUF engine is unavailable, the
+  window shows the exact commands to run in the main Linux terminal
+  (upstream install guides, Ollama install flow, or drop-the-GGUF-file
+  steps) — never a silent install.
+- **Cleanup.** Removed the nine root-level plan/history markdown files and
+  dead code/unused CSS (stale `makePlan` in `app.js`, superseded
+  context-column styles); the test suite is now 433 Python + 8 JS.
+
+### Also in this release
 
 - **Fixed fresh-clone desktop bootstrap** (`npm install` / `npm start`).
   Electron 44+ no longer downloads its ~110 MB platform binary at install

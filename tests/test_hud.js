@@ -33,7 +33,7 @@ const HEALTH = {
   backend: 'online',
   health: {
     components: {
-      core: { state: 'healthy', version: '0.2.22' },
+      core: { state: 'healthy', version: '0.2.23' },
       database: { state: 'healthy' },
       terminal_engine: { state: 'healthy' },
       agent_council: { state: 'healthy', available: '0/0', agents: [] },
@@ -81,6 +81,8 @@ async function run(apiImpl) {
   const ids = ['tl-cpu', 'tl-cpu-dot', 'tl-ram', 'tl-ram-dot', 'tl-disk', 'tl-disk-dot', 'tl-net', 'tl-net-dot',
     'tl-ollama', 'tl-ollama-dot', 'telemetry-panel', 'diagnostics-panel', 'ai-ops-state', 'ai-ops-pipeline',
     'ai-ops-assistant', 'ai-ops-model', 'ai-ops-task', 'ai-ops-guardian',
+    'ai-ops-window', 'ai-ops-steps', 'ai-ops-resolved', 'ai-ops-turn-section', 'ai-ops-turn',
+    'ai-ops-help', 'ai-ops-help-section',
     'ft-backend', 'ft-backend-dot', 'ft-host', 'ft-privacy', 'ft-offline', 'ft-engagements', 'ft-refreshed'];
   const elements = {};
   for (const id of ids) {
@@ -160,6 +162,36 @@ async function run(apiImpl) {
   assert.strictEqual(snap.elements['ai-ops-guardian'].textContent, 'APPROVE', 'AI ops lists the guardian decision');
   assert.ok(String(snap.stageNodes[4].className).includes('done'), 'execution stage completes');
   assert.ok(String(snap.stageNodes[5].className).includes('done'), 'result stage completes');
+
+  // 5. LAST TURN wiring — a read-only turn carries its real local_ai record in
+  //    task.result.local_ai (operation is null); the AI Operations trace must
+  //    render that record, never invent a model run.
+  const intervals = [];
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (fn, ms) => { const id = realSetInterval(fn, ms); intervals.push(id); return id; };
+  vm.runInThisContext(fs.readFileSync(path.join(root, 'frontend', 'aiops.js'), 'utf8'), { filename: 'aiops.js' });
+  const turnLocalAi = {
+    state: 'fallback',
+    phase: 'plan',
+    message: 'No local model response was available.',
+    route: { selected: [], fuzzy_winner: 'council', reason: 'Complex evidence review', strategy: 'single-model', selection_fallback: true },
+    fuzzy: { agreement: 'none', confidence: 'unavailable', evidence_basis: 'plan-only', models_responded: 0, note: 'No local model response was available.' },
+    synthesis: {},
+    responses: [],
+  };
+  globalThis.updateAiOpsHud({
+    task: { id: 'task-0002', state: 'COMPLETED', result: { local_ai: turnLocalAi } },
+    plan: null,
+    operation: null,
+    guardian: { decision: 'APPROVE', risk: 'low' },
+    council: { selected: [] },
+  });
+  assert.strictEqual(snap.elements['ai-ops-turn-section'].hidden, false, 'LAST TURN section shows for a read-only turn');
+  const turnHtml = String(snap.elements['ai-ops-turn'].innerHTML);
+  assert.ok(turnHtml.includes('No local model response was available.'), 'LAST TURN RAN row shows the honest fallback record, not a fabricated model run');
+  assert.ok(turnHtml.includes('plan-only'), 'LAST TURN shows the evidence basis from the record');
+  assert.strictEqual(snap.elements['ai-ops-model'].textContent, 'fallback', 'AI ops model chip reads the turn record state');
+  intervals.forEach(clearInterval);
 
   console.log('hud wiring smoke: PASS');
 })().catch((error) => { console.error(error); process.exit(1); });

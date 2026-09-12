@@ -1,4 +1,4 @@
-/* Vortex renderer. In Electron all requests go through the typed preload bridge;
+/* VORTEX renderer. In Electron all requests go through the typed preload bridge;
    the relative fetch fallback keeps the local preview useful without Electron. */
 const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, sessions: [], activeSessionId: null, paneIds: [], sessionSeqs: {}, sessionStreams: {}, sessionStreamRetryAt: {}, sessionTimer: null, plain: false };
 const $ = (id) => document.getElementById(id);
@@ -13,7 +13,6 @@ try {
   if (capabilityFragmentPresent) {
     const supplied = String(fragment.get('vortex-token') || '').trim();
     if (supplied && supplied.length <= 256 && !/[\x00-\x1f\x7f]/.test(supplied)) {
-      // Keep the in-memory copy even when privacy settings disable Web Storage.
       browserCapability = supplied;
       try { sessionStorage.setItem('vortex-capability', supplied); } catch (_) { /* in-memory exchange still works */ }
     } else {
@@ -24,8 +23,6 @@ try {
   }
 } catch (_) { browserCapability = ''; }
 if (capabilityFragmentPresent) {
-  // Scrub valid, invalid, and empty credentials before any API or subresource can
-  // preserve them in browser history. URL fragments are never sent to HTTP.
   try { history.replaceState(null, '', location.pathname + location.search); } catch (_) { /* constrained WebViews may deny history mutation */ }
 }
 function showCapabilityDialog(message = '') {
@@ -75,9 +72,45 @@ const api = async (path, options = {}) => {
   return payload;
 };
 function toast(message, bad = false) { const el = $('toast'); el.setAttribute('role', bad ? 'alert' : 'status'); el.setAttribute('aria-live', bad ? 'assertive' : 'polite'); el.textContent = message; el.style.borderColor = bad ? 'var(--red)' : 'var(--cyan)'; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 4200); }
-function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => { const active = el.id === `view-${view}`; el.classList.toggle('active', active); el.setAttribute('aria-hidden', String(!active)); }); document.querySelectorAll('.nav-item').forEach(el => { const active = el.dataset.view === view; el.classList.toggle('active', active); if (active) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); }); $('view-title').textContent = view.toUpperCase(); document.title = `${view.replace(/(^|-)([a-z])/g, (_, prefix, letter) => `${prefix ? ' ' : ''}${letter.toUpperCase()}`)} — VORTEX`; if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); if (view === 'models' && typeof window.loadModels === 'function') window.loadModels(); }
+function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => { const active = el.id === `view-${view}`; el.classList.toggle('active', active); el.setAttribute('aria-hidden', String(!active)); }); document.querySelectorAll('.nav-item').forEach(el => { const active = el.dataset.view === view; el.classList.toggle('active', active); if (active) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); }); $('view-title').textContent = view.toUpperCase(); document.title = `${view.replace(/(^|-)([a-z])/g, (_, prefix, letter) => `${prefix ? ' ' : ''}${letter.toUpperCase()}`)} — VORTEX`; if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); if (view === 'models' && typeof window.loadModels === 'function') window.loadModels(true); }
 function statusClass(status) { return ['succeeded','success'].includes(status) ? 'badge-green' : ['failed','timed_out','interrupted'].includes(status) ? 'badge-red' : status === 'planned' || status === 'awaiting_confirmation' ? 'badge-amber' : 'badge-muted'; }
 function statusLabel(status) { return ({succeeded:'VERIFIED OK',failed:'FAILED',timed_out:'TIMED OUT',interrupted:'INTERRUPTED',unavailable:'TOOL MISSING',running:'RUNNING',started:'STARTED',planned:'CONFIRM REQUIRED',awaiting_confirmation:'PREFLIGHT COMPLETE',clarified:'PLAN ONLY',rejected:'BLOCKED',unknown_after_crash:'UNKNOWN AFTER CRASH'}[status] || String(status || 'STANDBY').toUpperCase()); }
+
+/* ---- clipboard + terminal handoff for install commands ---- */
+async function copyText(text, label = 'Copied to clipboard.') {
+  const value = String(text || '');
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); toast(label); return true; }
+  } catch (_) { /* fall through to the legacy path */ }
+  try {
+    const area = document.createElement('textarea');
+    area.value = value;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    toast(ok ? label : 'Copy failed — select the commands manually.', !ok);
+    return ok;
+  } catch (_) { toast('Copy failed — select the commands manually.', true); return false; }
+}
+window.copyText = copyText;
+
+async function openInTerminal(lines, label = 'commands') {
+  const text = String(lines || '').trim();
+  if (!text) return;
+  setView('terminal');
+  const session = activeSession();
+  if (!session || session.status !== 'running') {
+    $('open-session')?.click();
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+  await copyText(text, `${label} copied — click the terminal pane and paste (Ctrl+Shift+V).`);
+  focusPtySurface();
+}
+window.openInTerminal = openInTerminal;
+
 async function loadDoctor(refresh = false) { try { const data = await api(`/api/doctor${refresh ? '?fresh=1' : ''}`); state.doctor = data.doctor; renderDoctor(); } catch (e) { $('side-context').textContent = 'backend offline'; toast(e.message, true); } }
 function renderDoctor() { const d = state.doctor; if (!d) return; $('side-context').textContent = `${d.distribution.pretty_name || d.distribution.id} · ${d.architecture}`; $('terminal-cwd').textContent = d.cwd; $('context-content').innerHTML = [
   ['DISTRIBUTION', d.distribution.pretty_name || d.distribution.id], ['SUPPORT TIER', d.support_tier], ['KERNEL', d.kernel], ['PID 1 / SYSTEMD', `${d.pid1 || 'unknown'} / ${d.systemd ? 'available' : 'unavailable'}`], ['CONTEXT', [d.container ? 'container' : 'host', d.ssh ? 'SSH' : 'local', d.tmux ? 'tmux' : 'direct'].join(' · ')], ['PRIVILEGE', d.root ? 'UID 0 — guarded' : `UID ${d.uid}`], ['MODEL', 'disabled by default']
@@ -109,6 +142,32 @@ async function loadHostTools(refresh = false) {
     grid.innerHTML = extra.length ? extra.map(t => `<article class="tool-card ${esc(t.state)}${t.new_since_last_scan ? ' new-tool' : ''}"><span class="badge ${t.new_since_last_scan ? 'badge-amber' : 'badge-green'}">${t.new_since_last_scan ? 'NEW' : 'PATH'}</span><h3>${esc(t.name)}</h3><div class="tool-family">${esc(t.family || '')} · ${esc(t.source || '')}</div><p>${esc(t.role || '')}<br><span class="tool-path">${esc(t.path || '')}</span><br>risk ${esc(t.risk_level || '')} · ${t.requires_network ? 'network' : 'local'}</p></article>`).join('') : '<div class="empty-inline">No extra PATH tools beyond the builtin catalog.</div>';
   } catch (e) { toast(e.message, true); }
 }
+
+/* ---- global refresh: one forced re-probe of every subsystem ---- */
+async function refreshAll() {
+  const button = $('refresh-all');
+  if (button?.disabled) return;
+  if (button) { button.disabled = true; button.textContent = 'REFRESHING…'; }
+  try {
+    const data = await api('/api/refresh', { method: 'POST', body: {} });
+    const r = data.refresh || {};
+    const bits = [];
+    if (r.agents?.total != null) bits.push(`agents ${r.agents.available}/${r.agents.total}`);
+    if (r.tools?.catalog != null) bits.push(`tools ${r.tools.installed}/${r.tools.catalog}`);
+    if (r.gguf?.files != null) bits.push(`models ${r.gguf.valid} valid GGUF`);
+    if (r.ollama?.api_state != null) bits.push(`ollama ${r.ollama.installed ? 'installed' : 'absent'}`);
+    if (r.dependencies?.missing != null) bits.push(`deps ${r.dependencies.missing} missing`);
+    toast(`Re-probed host in ${r.elapsed_ms ?? '…'} ms · ${bits.join(' · ')}`);
+    await Promise.allSettled([loadDoctor(true), loadTools(true), loadEngagements(), loadHistory(), window.loadModels?.(true), window.loadAiOps?.(true)]);
+    if (typeof window.refreshHud === 'function') await window.refreshHud();
+    if (state.currentView === 'agents' && typeof window.loadAgents === 'function') window.loadAgents(true);
+    if (state.currentView === 'system' && typeof window.loadHealth === 'function') window.loadHealth(true);
+    if (typeof window.renderAgentsLocalAi === 'function') window.renderAgentsLocalAi();
+  } catch (e) { toast(e.message, true); }
+  finally { if (button) { button.disabled = false; button.textContent = 'REFRESH ALL ↻'; } }
+}
+window.refreshAll = refreshAll;
+
 async function downloadApk() {
   toast('Syncing the live workbench into the Android APK…');
   try {
@@ -131,9 +190,6 @@ async function downloadDeb() {
   } catch (e) { toast(e.message, true); }
 }
 function triggerDownload(url, filename) {
-  // Sandboxed iframe previews (embedded workbench) silently block synthetic
-  // anchor downloads; a user-initiated new tab is served the file top-level.
-  // Electron keeps the classic anchor download via the preload bridge.
   if (!window.vortexApi?.request) {
     try { if (window.open(url, '_blank')) return; } catch (_) { /* popup blocked — fall through */ }
   }
@@ -178,7 +234,7 @@ function renderEngagements() { const el = $('engagement-list'); if (!state.engag
 async function loadHistory() { try { const data = await api('/api/history'); state.history = data.history; renderActivity(); return state.history; } catch(e) { toast(e.message, true); return []; } }
 function operationTitle(op) { const command = op.commands?.[0]?.display || 'No command executed'; return command.length > 67 ? command.slice(0,67) + '…' : command; }
 function activityMarkup(op) { const s = op.status || 'unknown'; return `<article class="activity-item"><span class="activity-icon ${s === 'succeeded' ? '' : s === 'running' ? 'running':'failed'}"></span><div><div class="activity-title">${esc(statusLabel(s))} <span style="color:var(--dim)">· ${esc(fmtDate(op.ended_at || op.started_at))}</span></div><div class="activity-command">${esc(operationTitle(op))}</div></div><div class="activity-meta"><div class="activity-status ${s !== 'succeeded' ? s === 'running' ? 'running':'failed':''}">${esc(statusLabel(s))}</div><div>${op.commands?.length || 0} command${(op.commands?.length || 0) === 1 ? '':'s'}</div></div></article>`; }
-function renderActivity() { const html = state.history.length ? state.history.map(activityMarkup).join('') : '<div class="empty-inline">No operations recorded. Plans remain private until you approve them.</div>'; $('recent-activity').innerHTML = html; $('activity-full').innerHTML = html; }
+function renderActivity() { const html = state.history.length ? state.history.map(activityMarkup).join('') : '<div class="empty-inline">No operations recorded. Plans remain private until you approve them.</div>'; $('activity-full').innerHTML = html; }
 function renderReports() { const el = $('report-grid'); if (!state.history.length) { el.innerHTML = `<div class="empty-state panel"><div class="empty-icon">▤</div><h3>Reports appear after execution</h3><p>Run an approved plan to create a local analysis record.</p></div>`; return; } el.innerHTML = state.history.map(op => `<article class="report-card"><div class="panel-kicker">LOCAL REPORT</div><h3>${esc(statusLabel(op.status))}</h3><p>${esc(fmtDate(op.started_at))}<br>${esc(operationTitle(op))}</p><p>${op.artifacts?.length || 0} parsed artifact${(op.artifacts?.length || 0) === 1 ? '' : 's'} · raw evidence is not retained by default</p><code>evidence ${esc((op.output_digest || 'not-available').slice(0,24))}…</code></article>`).join(''); }
 function renderPlan(plan) { state.plan = plan; const badge = $('plan-badge'); badge.textContent = statusLabel(plan.status); badge.className = `badge ${statusClass(plan.status)}`; let commands = plan.commands?.length ? plan.commands.map((c, i) => `<div class="command-spec"><code>${esc(c.display)}</code><div class="spec-meta"><span>${esc(c.required_tool)}: ${esc(c.tool_state_at_plan)}</span><span>RISK: ${esc(c.risk.toUpperCase())}</span><span>NETWORK: ${esc(c.network_class)}</span><span>TIMEOUT: ${esc(c.timeout_seconds)}s</span><span>PRIVILEGE: ${esc(c.privilege || 'user')}</span></div><p style="color:var(--muted);font-size:10px;line-height:1.5;margin:9px 0 0">${esc(c.explanation)}</p></div>`).join('') : '<div class="command-spec"><code>NO EXECUTION</code><p style="color:var(--dim);font-size:10px;margin:7px 0 0">This request produces explanation or clarification only.</p></div>';
  const notes = (plan.notes || []).map(n => `<li>${esc(n)}</li>`).join(''); const worker = (plan.workers || []).map(w => `<span>${esc(w.id)}: <strong>${esc(w.state)}</strong></span>`).join(' · ');
@@ -193,27 +249,6 @@ function renderPlan(plan) { state.plan = plan; const badge = $('plan-badge'); ba
  $('launch-dependency-install')?.addEventListener('click', () => launchDependencyInstall(plan));
  document.querySelectorAll('[data-suggestion]').forEach(btn => btn.addEventListener('click', () => { if (typeof window.makePlan === 'function') window.makePlan(btn.dataset.suggestion); }));
  if (typeof window.updateAiOpsHud === 'function') window.updateAiOpsHud({ plan });
-}
-let planSubmitBusy = false;
-async function makePlan(request) {
-  const text = String(request || '').trim();
-  if (!text) return;
-  if (planSubmitBusy) { toast('A request is already in progress.'); return; }
-  planSubmitBusy = true;
-  setView('overview');
-  $('plan-button').disabled = true;
-  $('plan-button').textContent = 'INSPECTING…';
-  try {
-    const payload = {request, cwd: state.doctor?.cwd || undefined, conversation_id: state.conversationId, offline: !!state.settings?.offline};
-    if (state.activeEngagementId) payload.engagement_id = state.activeEngagementId;
-    const data = await api('/api/workspace/turn', {method:'POST', body:payload});
-    state.conversationId = data.conversation?.id || state.conversationId;
-    state.task = data.task;
-    if (data.plan) renderPlan(data.plan);
-    toast(data.explanation || (data.plan?.status === 'planned' ? 'Typed plan ready — review before execution.' : statusLabel(data.plan?.status)), data.plan?.status === 'rejected');
-    if (data.auto_executed && data.operation?.id) await watchOperation(data.operation.id);
-  } catch(e) { toast(e.message, true); }
-  finally { planSubmitBusy = false; $('plan-button').disabled = false; $('plan-button').innerHTML = '<span class="spark">✦</span> SEND'; }
 }
 async function approvePlan() { if (!state.plan) return; const button = $('approve-plan'); button.disabled = true; button.textContent = 'STARTING…'; try { const data = await api('/api/execute', {method:'POST', body:{plan_id:state.plan.id, approval_token:state.plan.approval_token, confirm:true}}); const op = data.operation; renderPlan({...state.plan, status:'started'}); toast('Operation started. Streaming real output from the local sidecar.'); await watchOperation(op.id); } catch(e) { button.disabled = false; button.textContent = 'APPROVE & EXECUTE'; toast(e.message, true); } }
 async function launchDependencyInstall(plan) {
@@ -239,8 +274,6 @@ async function watchOperation(id) {
     try {
       const streamed = await new Promise((resolve) => {
         const es = new EventSource(`/api/operations/${encodeURIComponent(id)}/stream`);
-        // The sidecar deliberately rotates SSE handlers after about one minute.
-        // Close first so EventSource cannot auto-reconnect behind the poll fallback.
         const timer = setTimeout(() => { es.close(); resolve(null); }, 65000);
         es.onmessage = (ev) => {
           try {
@@ -320,6 +353,7 @@ function renderAnalysis(op) {
       }
     } catch (e) { toast(e.message, true); }
   }));
+  if (typeof window.updateAiOpsHud === 'function') window.updateAiOpsHud({ operation: op });
 }
 
 async function createEngagement() {
@@ -377,10 +411,6 @@ function sessionOutput(sessionId) { return Array.from(document.querySelectorAll(
 function appendAnsi(element, data) {
   if (!element._vortexTerminal) element._vortexTerminal = new window.VortexTerminal(100, 30, 5000);
   element._vortexTerminal.feed(data);
-  // Coalesce multiple PTY chunks that arrive within one animation frame into a
-  // single full-buffer render. High-frequency output no longer triggers one
-  // innerHTML rebuild per chunk, which removed the largest source of terminal
-  // jank without perceptibly delaying display.
   if (element._renderScheduled) return;
   element._renderScheduled = true;
   const flush = () => {
@@ -559,9 +589,6 @@ async function killSession() {
 }
 let resizeTimer = null;
 function resizeSession() {
-  // Window resizes (including terminal maximize/minimize) can fire dozens of
-  // times while dragging. Debounce the resize POST so the sidecar does not
-  // receive a PTY ioctl storm.
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(resizeSessionNow, 160);
 }
@@ -592,5 +619,41 @@ function bindCapabilityForm() {
     } catch (_) { if (input) input.value = ''; }
   });
 }
-function init() { bindCapabilityForm(); document.querySelectorAll('.nav-item').forEach(item => { if (!item.title) item.title = item.textContent.trim(); }); if (typeof window.makePlan !== 'function') window.makePlan = makePlan; setView(state.currentView); document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view))); document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget))); document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); })); $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value)); $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)}); $('terminal-input').addEventListener('keydown', ptyKey); bindPtySurface($('terminal-output')); $('open-session').addEventListener('click',openSession); $('kill-session').addEventListener('click',killSession); addEventListener('resize',resizeSession); renderSessionState(); $('refresh-doctor').addEventListener('click',()=>loadDoctor(true)); $('refresh-tools').addEventListener('click',()=>loadTools(true)); $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true)); $('download-apk')?.addEventListener('click', downloadApk); $('download-apk-settings')?.addEventListener('click', downloadApk); $('download-deb')?.addEventListener('click', downloadDeb); $('download-deb-settings')?.addEventListener('click', downloadDeb); $('plain-theme')?.addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');}); $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')}); $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true}); $('save-engagement').addEventListener('click',createEngagement); $('verify-audit').addEventListener('click',verifyAudit); loadDoctor(); loadTools(); loadEngagements(); loadHistory(); }
+function openSurfaceWindow(id) {
+  if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(id);
+  else { const el = $(id); if (el) el.hidden = false; }
+}
+function init() {
+  bindCapabilityForm();
+  document.querySelectorAll('.nav-item').forEach(item => { if (!item.title) item.title = item.textContent.trim(); });
+  setView(state.currentView);
+  document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
+  document.querySelectorAll('[data-view-target]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.viewTarget)));
+  document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('request-input').value=b.dataset.prompt; window.makePlan(b.dataset.prompt); }));
+  $('plan-button').addEventListener('click',()=>window.makePlan($('request-input').value));
+  $('request-input').addEventListener('keydown',e=>{if(e.key==='Enter')window.makePlan(e.target.value)});
+  $('terminal-input').addEventListener('keydown', ptyKey);
+  bindPtySurface($('terminal-output'));
+  $('open-session').addEventListener('click',openSession);
+  $('kill-session').addEventListener('click',killSession);
+  addEventListener('resize',resizeSession);
+  renderSessionState();
+  $('refresh-doctor').addEventListener('click',()=>loadDoctor(true));
+  $('refresh-tools').addEventListener('click',()=>loadTools(true));
+  $('rescan-host-tools')?.addEventListener('click',()=>loadHostTools(true));
+  $('download-apk')?.addEventListener('click', downloadApk);
+  $('download-apk-settings')?.addEventListener('click', downloadApk);
+  $('download-deb')?.addEventListener('click', downloadDeb);
+  $('download-deb-settings')?.addEventListener('click', downloadDeb);
+  $('plain-theme')?.addEventListener('click',()=>{state.plain=!state.plain;document.body.classList.toggle('plain-mode',state.plain);toast(state.plain?'Plain high-contrast palette enabled.':'Vortex palette enabled.');});
+  $('new-engagement').addEventListener('click',()=>{$('engagement-form').hidden=false;setView('engagements')});
+  $('close-engagement').addEventListener('click',()=>{$('engagement-form').hidden=true});
+  $('save-engagement').addEventListener('click',createEngagement);
+  $('verify-audit').addEventListener('click',verifyAudit);
+  $('open-ai-ops')?.addEventListener('click', () => { openSurfaceWindow('ai-ops-window'); if (typeof window.loadAiOps === 'function') window.loadAiOps(); });
+  $('open-system')?.addEventListener('click', () => { openSurfaceWindow('system-window'); if (typeof window.refreshHud === 'function') window.refreshHud(); loadDoctor(true); });
+  $('open-task-state')?.addEventListener('click', () => openSurfaceWindow('task-window'));
+  $('refresh-all')?.addEventListener('click', refreshAll);
+  loadDoctor(); loadTools(); loadEngagements(); loadHistory();
+}
 addEventListener('DOMContentLoaded', init);

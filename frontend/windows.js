@@ -1,10 +1,13 @@
-/* Window controls shared by Electron's native frame and VORTEX in-app windows. */
+/* Window controls shared by Electron's native frame and VORTEX in-app windows.
+   Pop-up surfaces can be open at the same time: the front one tracks focus,
+   minimized ones wait in the tray, and every surface keeps its own state. */
 (function (root) {
   'use strict';
 
   const NORMAL = 'normal';
   const MINIMIZED = 'minimized';
   const MAXIMIZED = 'maximized';
+  let zCounter = 40;
 
   function nextWindowState(current, action) {
     current = [NORMAL, MINIMIZED, MAXIMIZED].includes(current) ? current : NORMAL;
@@ -16,6 +19,10 @@
 
   function stateOf(element) {
     return element?.dataset?.windowState || NORMAL;
+  }
+
+  function labelOf(surface) {
+    return surface.dataset.surfaceLabel || surface.querySelector('.surface-titlebar strong, .surface-titlebar h2, .surface-titlebar .panel-kicker')?.textContent?.trim() || 'Window';
   }
 
   function updateControlLabels(host, state, selector) {
@@ -37,6 +44,40 @@
     });
   }
 
+  function tray() {
+    return root.document?.getElementById('window-tray') || null;
+  }
+
+  function renderTray(doc = root.document) {
+    const host = tray();
+    if (!host) return;
+    const minimized = Array.from(doc.querySelectorAll('[data-surface-window]'))
+      .filter(surface => !surface.hidden && stateOf(surface) === MINIMIZED);
+    host.innerHTML = minimized.map(surface =>
+      `<button type="button" class="tray-chip" data-tray-restore="${escAttr(surface.id)}"><span class="tray-led"></span>${escText(labelOf(surface))}</button>`
+    ).join('');
+    host.hidden = !minimized.length;
+    host.querySelectorAll('[data-tray-restore]').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const surface = doc.getElementById(chip.dataset.trayRestore);
+        if (surface) applySurfaceState(surface, NORMAL);
+      });
+    });
+  }
+
+  const escText = (value) => String(value || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const escAttr = escText;
+
+  function bringToFront(surface) {
+    zCounter += 1;
+    surface.style.zIndex = String(zCounter);
+  }
+
+  function frontSurface(doc = root.document) {
+    const open = Array.from(doc.querySelectorAll('[data-surface-window]')).filter(surface => !surface.hidden);
+    return open.sort((a, b) => Number(b.style.zIndex || 0) - Number(a.style.zIndex || 0))[0] || null;
+  }
+
   function applySurfaceState(surface, state) {
     const effective = [NORMAL, MINIMIZED, MAXIMIZED].includes(state) ? state : NORMAL;
     surface.dataset.windowState = effective;
@@ -45,32 +86,30 @@
     const dialog = surface.querySelector('[role="dialog"]');
     if (dialog) dialog.setAttribute('aria-modal', String(effective !== MINIMIZED));
     updateControlLabels(surface, effective, '[data-surface-action]');
+    if (effective !== MINIMIZED) bringToFront(surface);
+    renderTray(surface.ownerDocument || root.document);
   }
 
-  function showSurface(surfaceOrId) {
-    const doc = root.document;
+  function showSurface(surfaceOrId, doc = root.document) {
     const surface = typeof surfaceOrId === 'string' ? doc?.getElementById(surfaceOrId) : surfaceOrId;
     if (!surface) return false;
-    // Close every other surface window before opening this one so they
-    // never stack on top of each other and block interaction.
-    doc?.querySelectorAll('[data-surface-window]').forEach(other => {
-      if (other !== surface && !other.hidden) closeSurface(other);
-    });
     if (surface.hidden) surface._vortexReturnFocus = doc.activeElement;
-    applySurfaceState(surface, NORMAL);
-    surface.hidden = false;
+    if (stateOf(surface) === MINIMIZED) applySurfaceState(surface, NORMAL);
+    else if (!surface.hidden) bringToFront(surface);
+    if (surface.hidden) surface.hidden = false;
     const titlebar = surface.querySelector('.surface-titlebar');
     if (titlebar) titlebar.setAttribute('tabindex', '-1');
     root.requestAnimationFrame?.(() => titlebar?.focus({ preventScroll: true }));
     return true;
   }
 
-  function closeSurface(surface) {
+  function closeSurface(surface, doc = root.document) {
     if (!surface) return;
     applySurfaceState(surface, NORMAL);
     surface.hidden = true;
+    renderTray(doc || surface.ownerDocument || root.document);
     const returnFocus = surface._vortexReturnFocus;
-    if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus({ preventScroll: true });
+    if (returnFocus && typeof returnFocus.focus === 'function' && doc.contains?.(returnFocus)) returnFocus.focus({ preventScroll: true });
     surface._vortexReturnFocus = null;
   }
 
@@ -91,6 +130,15 @@
         if (!event.target.closest('button, input, select, a')) performSurfaceAction(surface, 'maximize');
       });
     });
+    const host = tray();
+    if (host) {
+      host.addEventListener('click', event => {
+        const chip = event.target.closest('[data-tray-restore]');
+        if (!chip) return;
+        const surface = doc.getElementById(chip.dataset.trayRestore);
+        if (surface) applySurfaceState(surface, NORMAL);
+      });
+    }
   }
 
   function applyTerminalState(terminal, state) {
@@ -172,8 +220,7 @@
 
   function bindDialogKeys(doc) {
     doc.addEventListener('keydown', event => {
-      const surfaces = Array.from(doc.querySelectorAll('[data-surface-window]')).filter(surface => !surface.hidden);
-      const activeSurface = surfaces[surfaces.length - 1];
+      const activeSurface = frontSurface(doc);
       if (event.key === 'Tab' && activeSurface && stateOf(activeSurface) !== MINIMIZED) {
         const selector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
         const focusables = Array.from(activeSurface.querySelectorAll(selector)).filter(element => !element.hidden && element.getAttribute('aria-hidden') !== 'true' && (!element.getClientRects || element.getClientRects().length > 0));
@@ -190,8 +237,8 @@
         return;
       }
       if (event.key !== 'Escape') return;
-      if (surfaces.length) {
-        closeSurface(activeSurface);
+      if (activeSurface) {
+        closeSurface(activeSurface, doc);
         event.preventDefault();
         return;
       }
@@ -215,8 +262,11 @@
     applySurfaceState,
     closeSurface,
     focusTrapTarget,
+    frontSurface,
     init,
+    labelOf,
     nextWindowState,
+    renderTray,
     showSurface
   });
 

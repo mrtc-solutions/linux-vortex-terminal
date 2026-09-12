@@ -728,11 +728,16 @@
           : esc(source);
         const isAgent = item.kind === 'agent' || Boolean(item.agent);
         const note = isAgent
-          ? '<p class="form-note">VORTEX cannot download or run third-party agent code — review the repository above and install it yourself, then return to the Agents view. Local AI (Ollama + models) is installed from the Agents or Models view instead.</p>'
+          ? '<p class="form-note">VORTEX cannot download or run third-party agent code — run the commands in your main Linux terminal, then return and refresh. Local AI (Ollama + models) is installed from the Agents or Models view instead.</p>'
           : (canPlan
             ? ''
             : '<p class="form-note">This item is operator-installed. VORTEX will not download it.</p>');
-        detail.innerHTML = `<strong>${esc(item.title || itemId)}</strong><p>${esc(item.message || '')}</p><p>Source: ${sourceHtml} · License: ${esc(item.license || 'n/a')}</p><pre>${commands || 'No command is executed by VORTEX.'}</pre>${canPlan ? `<div class="form-foot"><button class="primary-button" id="dep-plan">CREATE APT PLAN</button></div>` : note}`;
+        const commandActions = commands
+          ? `<div class="command-actions"><button class="secondary-button" data-copy-commands>COPY COMMANDS</button><button class="secondary-button" data-terminal-commands>OPEN IN TERMINAL</button></div>`
+          : '';
+        detail.innerHTML = `<strong>${esc(item.title || itemId)}</strong><p>${esc(item.message || '')}</p><p>Source: ${sourceHtml} · License: ${esc(item.license || 'n/a')}</p>${commands ? `<p class="form-note">Run these in your main Linux terminal, then click REFRESH ↻ so the rescan finds the result.</p>` : ''}<pre>${commands || 'No command is executed by VORTEX.'}</pre>${commandActions}${canPlan ? `<div class="form-foot"><button class="primary-button" id="dep-plan">CREATE APT PLAN</button></div>` : note}`;
+        detail.querySelector('[data-copy-commands]')?.addEventListener('click', () => copyText(commands, 'Install commands copied.'));
+        detail.querySelector('[data-terminal-commands]')?.addEventListener('click', () => openInTerminal(commands, 'Install commands'));
         $('dep-plan')?.addEventListener('click', async () => {
           try {
             const planned = await api('/api/dependencies/plan', { method: 'POST', body: { id: itemId, cwd: state.doctor?.cwd, conversation_id: state.conversationId } });

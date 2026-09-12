@@ -37,6 +37,18 @@ class GgufDiscoveryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.models = Path(self.tmp.name) / "models"
         self.models.mkdir()
+        # Hermetic discovery: the scanner also walks the operator's home
+        # models folder, the repo models folder, and the data root. Redirect
+        # those to temp locations so the suite is deterministic on any host —
+        # including one where the operator has real models checked out.
+        self._home = Path(self.tmp.name) / "home"
+        self._home.mkdir()
+        self._home_patch = patch.object(gguf_provider.Path, "home", return_value=self._home)
+        self._home_patch.start()
+        self._repo_patch = patch.object(gguf_provider, "_repo_root", return_value=None)
+        self._repo_patch.start()
+        self._data_patch = patch.object(gguf_provider, "_data_root", return_value=Path(self.tmp.name) / "data")
+        self._data_patch.start()
         self._old_env = os.environ.get("VORTEX_MODELS_DIR")
         self._old_config_dir = os.environ.get("VORTEX_CONFIG_DIR")
         config_dir = Path(self.tmp.name) / "config"
@@ -46,6 +58,9 @@ class GgufDiscoveryTests(unittest.TestCase):
         _reset_caches()
 
     def tearDown(self):
+        self._home_patch.stop()
+        self._repo_patch.stop()
+        self._data_patch.stop()
         if self._old_env is None:
             os.environ.pop("VORTEX_MODELS_DIR", None)
         else:
