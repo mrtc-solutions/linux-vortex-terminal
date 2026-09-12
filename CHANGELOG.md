@@ -6,6 +6,22 @@ On-device GGUF primary, fuzzy provider routing, per-function AI assistance,
 and agent upstream tracking. No simulation: every new surface degrades to an
 honest unavailable state when its files, engine, or network are absent.
 
+- **Fixed fresh-clone desktop bootstrap** (`npm install` / `npm start`).
+  Electron 44+ no longer downloads its ~110 MB platform binary at install
+  time; the deferred first-start download crashed with `fetch failed` /
+  "Electron failed to install correctly" on any host unable to reach GitHub
+  release assets. New `scripts/ensure-electron.js` postinstall fetches the
+  binary up front, retries through known mirrors (npmmirror, huaweicloud)
+  with stale `.npmrc` mirror config stripped for fallback attempts, verifies
+  `dist/version` + executable afterwards, honors
+  `ELECTRON_OVERRIDE_DIST_PATH`, and prints exact remediation instead of
+  failing silently. Best-effort at install so lint/test/preview keep
+  working; `npm start` (`scripts/start.js`) guarantees the binary before
+  launch, warns on headless hosts (`xvfb-run -a npm start`), forwards args,
+  and propagates exit codes. Raw entry kept as `npm run start:electron`;
+  `npm run preview` remains the zero-Electron browser fallback. `engines`
+  corrected to Node >=22.12.0 (electron@44's real requirement).
+
 - New **GGUF provider** (`backend/models/gguf.py`): discovers and validates
   `*.gguf` files (`~/linux-vortex-terminal/models` by default), with the two
   curated models Llama-3.2-3B-Instruct-Q4_K_M (fast/primary) and

@@ -247,10 +247,30 @@ In the UI:
 
 ## 8. Optional desktop window (Electron)
 
+Requires Node.js 22.12+ (Electron 44 requirement).
+
 ```bash
 npm install
 npm start
 ```
+
+`npm install` also downloads the ~110 MB Electron platform binary from
+GitHub release assets (Electron 44+ no longer bundles it; the project's
+`postinstall` fetches it up front with mirror fallback). If every download
+source is unreachable, install still succeeds but prints remediation — the
+binary is fetched lazily on the next `npm start` once network policy allows
+it. On networks that block GitHub release assets, use a mirror:
+
+```bash
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ \
+ELECTRON_CUSTOM_DIR="{{ version }}" \
+node scripts/ensure-electron.js --required
+```
+
+Headless host with no `$DISPLAY`: `xvfb-run -a npm start`, or skip Electron
+entirely and test the identical workbench in a browser with
+`npm run preview` (serves on `http://127.0.0.1:4173`). `npm run
+start:electron` bypasses the wrapper and invokes Electron directly.
 
 Electron starts the Python sidecar on `127.0.0.1` with a random capability
 token. The renderer cannot spawn processes.
