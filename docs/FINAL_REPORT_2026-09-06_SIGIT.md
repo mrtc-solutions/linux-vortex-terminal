@@ -11,7 +11,7 @@ This report covers a fresh, end-to-end `REVIEW → FIND ISSUE → ROOT CAUSE →
 
 ## 1. Executive Summary
 
-VORTEX is a local-first Linux/AI workbench: a dependency-light Python sidecar owns all command execution and data, a genuine interactive PTY terminal fronts the primary work area, and a reviewed, data-only adapter registry produces typed argv that Guardian (an independent security gate) authorizes before anything runs. No model or project directory can add executable capability at runtime; third-party agents and Ollama inference are advisory-only.
+VORTEX is a local-first Linux/AI workbench: a dependency-light Python sidecar owns all command execution and data, a genuine interactive PTY terminal fronts the primary work area, and a reviewed, data-only adapter registry produces typed argv that Guardian (an independent security gate) authorizes before anything runs. No model or project directory can add executable capability at runtime; Ollama inference is advisory-only.
 
 This cycle:
 

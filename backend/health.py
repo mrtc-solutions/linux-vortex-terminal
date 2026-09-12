@@ -210,7 +210,7 @@ def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str
         {"id": "go", "title": "Go", "ok": go_ok, "required": False, "detail": health["components"]["go"].get("available")},
         {"id": "docker", "title": "Docker or Podman", "ok": docker, "required": False, "detail": health["components"]["docker"].get("probe")},
         {"id": "tools", "title": "Linux tools", "ok": tools_n > 0, "required": True, "detail": f"{tools_n} detected"},
-        {"id": "agents", "title": "AI agents", "ok": str(agents_n).split("/")[0] not in {"0", "None", ""}, "required": False, "detail": f"{agents_n} available; missing third-party agents stay UNAVAILABLE"},
+        {"id": "agents", "title": "AI advisor", "ok": str(agents_n).split("/")[0] not in {"0", "None", ""}, "required": False, "detail": f"{agents_n} available (built-in advisor)"},
         {"id": "ollama", "title": "Local model runtime (Ollama)", "ok": ollama, "required": False, "detail": health["components"]["ollama"].get("state")},
         {"id": "model_pool", "title": "Recommended local model pool", "ok": model_pool, "required": False, "detail": health["components"]["model_pool"].get("detail")},
         {"id": "database", "title": "Local database", "ok": db_ok, "required": True, "detail": "SQLite WAL + audit chain"},

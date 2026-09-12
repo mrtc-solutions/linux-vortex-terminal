@@ -46,7 +46,7 @@ honest unavailable state when its files, engine, or network are absent.
   origin); default remains frame-locked.
 - **Cleanup.** Removed the nine root-level plan/history markdown files and
   dead code/unused CSS (stale `makePlan` in `app.js`, superseded
-  context-column styles); the test suite is now 441 Python + 8 JS.
+  context-column styles); the test suite is now 442 Python + 8 JS.
 
 ### Also in this release
 

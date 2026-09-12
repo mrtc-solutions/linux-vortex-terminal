@@ -226,7 +226,7 @@ records that it does not know the host outcome rather than inferring success.
 
 ```bash
 npm run lint
-npm test                             # 433 python tests + 8 js suites
+npm test                             # 442 python tests + 8 js suites
 python3 scripts/final_gates.py       # the 10-gate release audit (10/10 required)
 ```
 
