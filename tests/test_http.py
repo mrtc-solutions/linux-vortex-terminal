@@ -495,18 +495,14 @@ class HttpApiTests(unittest.TestCase):
         self.assertTrue(events["events"])
         self.assertEqual(events["task"]["id"], turn["task"]["id"])
 
-    def test_dependencies_inventory_and_agent_proposal(self):
+    def test_dependencies_inventory_and_tool_proposal(self):
         data = self._json("GET", "/api/dependencies")
         deps = data["dependencies"]
         self.assertFalse(deps["auto_install"])
         self.assertGreater(deps["counts"]["missing"], 0)
-        self.assertTrue(any(item["id"] == "agent:cai" for item in deps["missing"]))
-        proposal = self._json("GET", "/api/dependencies/proposal?id=agent:cai")
-        self.assertFalse(proposal["install"]["auto_install"])
-        self.assertTrue(proposal["install"].get("message"))
-        planned = self._json("POST", "/api/dependencies/plan", {"id": "agent:cai", "cwd": self.tmp.name})
-        self.assertFalse(planned["planned"])
-        self.assertFalse(planned["auto_install"])
+        # Only the built-in advisor ships, so no agent dependency item may appear.
+        self.assertFalse(any(str(item["id"]).startswith("agent:") for item in deps["missing"]),
+                         "no third-party agent may surface as a missing dependency")
         nmap = self._json("GET", "/api/dependencies/proposal?id=tool:nmap")
         if not nmap["install"].get("installed"):
             apt = self._json("POST", "/api/dependencies/plan", {"id": "tool:nmap", "cwd": self.tmp.name})

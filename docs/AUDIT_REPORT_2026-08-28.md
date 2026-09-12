@@ -303,9 +303,8 @@ advisory; only Guardian authorizes and only the execution authority runs.**
 **Not implemented.** VORTEX exposes no MCP client, no MCP server, and no MCP
 transport. `backend/tools/router.py` is an internal adapter router that returns
 `{"protocol": "vortex-adapter", "mcp": false}` — deliberately labelled so the
-absence is explicit rather than implied. The only other match for "mcp" in the
-tree is the string `"mcp-tools"` inside the hexstrike *discovery* stub, which is
-a probe token, not an integration.
+absence is explicit rather than implied. Any other match for "mcp" in the tree
+is a probe token, not an integration.
 
 Consequently there is no MCP path around Guardian, scope, or audit — the risk
 the plan warns about does not exist here. This is now stated in the README

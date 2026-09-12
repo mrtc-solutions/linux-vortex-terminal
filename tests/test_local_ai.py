@@ -556,9 +556,9 @@ class SecondaryAdvisorFallbackTests(unittest.TestCase):
         self.assertEqual(result["provider"], "agent-council")
         self.assertTrue(result["fallback"]["used"])
         self.assertEqual(result["fallback"]["primary_state"], "unavailable")
-        self.assertGreaterEqual(result["fallback"]["agents_checked"], 10)
+        self.assertEqual(result["fallback"]["agents_checked"], 1, "only the built-in advisor ships")
         agents = result["agents"]
-        self.assertGreaterEqual(len(agents), 10)
+        self.assertEqual(len(agents), 1)
         local = next(a for a in agents if a["id"] == "vortex-local")
         self.assertTrue(local["healthy"])
         self.assertEqual(local["state"], "installed")
@@ -570,16 +570,17 @@ class SecondaryAdvisorFallbackTests(unittest.TestCase):
         self.assertIsNone(result["synthesis"]["model"])
         self.assertIn("secondary", result["message"].lower())
 
-    def test_fallback_reports_missing_agents_honestly(self):
+    def test_fallback_lists_only_the_working_builtin_advisor(self):
         from backend.orchestrate import compose_secondary_advisory
 
         result = compose_secondary_advisory(self._unavailable_primary(), {"consultations": []})
-        cai = next((a for a in result["agents"] if a["id"] == "cai"), None)
-        self.assertIsNotNone(cai)
-        self.assertEqual(cai["state"], "missing")
-        self.assertFalse(cai["healthy"])
-        self.assertIn("not installed", cai["contribution"].lower())
-        self.assertIn("UNAVAILABLE", cai["contribution"].upper())
+        ids = [agent["id"] for agent in result["agents"]]
+        self.assertEqual(ids, ["vortex-local"], "only working advisors are available")
+        advisor = result["agents"][0]
+        self.assertTrue(advisor["healthy"])
+        self.assertEqual(advisor["state"], "installed")
+        self.assertFalse(advisor["fabricated"])
+        self.assertEqual(result["fallback"]["agents_missing"], 0)
         # The fallback must never claim a model produced text.
         self.assertIsNone(result["synthesis"]["model"])
         self.assertEqual(result["synthesis"]["state"], "deterministic-fallback")

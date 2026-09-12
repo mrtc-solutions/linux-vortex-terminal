@@ -94,7 +94,7 @@ UNAVAILABLE), or **Not implemented**.
 | Bounded replanning (max 2 follow-ups, duplicate-plan detection) | Implemented + tested |
 | Crash recovery: stale operations/tasks reconciled at startup | Implemented + tested |
 | Kali/Linux tool registry with live probes | Implemented + tested |
-| Agent Council (9 third-party + builtin `vortex-local`) | Implemented + tested; third-party missing stay UNAVAILABLE |
+| Agent Council (built-in `vortex-local` advisor; no third-party agent code ships) | Implemented + tested; roster shows only working advisors |
 | Observe → act → host-state reward | Implemented + tested |
 | nuclei / ffuf / nikto / amass / gobuster adapters | Implemented + tested; UNAVAILABLE without the binary, engagement, and (for ffuf/gobuster) a host wordlist |
 | User-local install / `vortex serve` / `vortex turn` | Implemented + tested |
@@ -133,7 +133,7 @@ UNAVAILABLE), or **Not implemented**.
 
 These are either unimplemented, or implemented only as honest unavailable states:
 
-- Calling CAI / Strix / Nebula / PentestGPT / HexStrike / PentAGI / HackerAI / HALO / DarkMoon consult APIs (no reviewed non-interactive consult; binaries not installed here)
+- Consulting any third-party AI agent (no third-party agent code ships with VORTEX; only the built-in deterministic advisor is rostered)
 - sqlmap / Metasploit **execution** adapters (catalog probes only)
 - Scanner tools when the binary or wordlist is not on the host (honest UNAVAILABLE)
 - FastAPI + PostgreSQL + pgvector (local SQLite modular monolith by design)
@@ -152,7 +152,7 @@ These are either unimplemented, or implemented only as honest unavailable states
 
 Verified absent on this host at the time of the last audit: `nmap`, `nuclei`,
 `ffuf`, `nikto`, `amass`, `gobuster`, `sqlmap`, `msfconsole`, `docker`,
-`podman`, `ollama`, and all nine third-party agent CLIs. Every one of those
+`podman`, and `ollama`. Every one of those
 reports UNAVAILABLE rather than a fabricated result. Present and exercised:
 `git`, `ss`, `ip`, `curl`, `ssh`, `ps`, `df`, `systemctl`, `journalctl`. On this
 host, `node`, `npm`, and `yarn` were additionally discovered under
@@ -218,7 +218,7 @@ records that it does not know the host outcome rather than inferring success.
 - [`docs/AUDIT_REPORT_2026-08-28.md`](docs/AUDIT_REPORT_2026-08-28.md) — full audit: defects found/fixed, test results, limitations
 - [`LICENSE`](LICENSE) — MIT License
 - [`LICENSES.md`](LICENSES.md) — SPDX MIT and third-party notes
-- [`NOTICE`](NOTICE) — third-party agent attribution
+- [`NOTICE`](NOTICE) — license and attribution notes
 - [`SECURITY.md`](SECURITY.md)
 - [`mobile/android/README.md`](mobile/android/README.md) — Android APK client
 

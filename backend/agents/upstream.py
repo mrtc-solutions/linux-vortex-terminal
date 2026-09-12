@@ -1,14 +1,11 @@
-"""Upstream tracking for secondary AI assistants.
+"""Upstream metadata for the rostered advisor(s).
 
-Each third-party agent stays linked to its original repository so operator
-updates flow into VORTEX honestly: :func:`table` reports the link, license,
-install guide, and consult-interface status, while :func:`refresh` (only ever
-operator-triggered, never automatic) checks the upstream HEAD commit through
-the public GitHub API.
+Only the built-in advisor ships, so :func:`table` reports a single builtin
+record. :func:`refresh` (only ever operator-triggered, never automatic) would
+check a GitHub HEAD commit for any GitHub-backed advisor; with none tracked
+it is a no-op that never dials the network.
 
-VORTEX never downloads, executes, or auto-installs third-party code. Agents
-without a uniquely verified repository (HALO, DarkMoon) are reported as
-``unverified`` — no URL is invented for them.
+VORTEX never downloads, executes, or auto-installs third-party agent code.
 """
 from __future__ import annotations
 
@@ -30,116 +27,6 @@ UPSTREAM: dict[str, dict[str, Any]] = {
         "consult": "responded",
         "install": ["Built in. No install required."],
         "notes": "Deterministic local advisor. Always present; never executes.",
-    },
-    "cai": {
-        "repository": "https://github.com/aliasrobotics/cai",
-        "docs": "https://github.com/aliasrobotics/cai#readme",
-        "license": "MIT",
-        "branch": "main",
-        "consult": "requires_configuration",
-        "install": ["Review https://github.com/aliasrobotics/cai and its MIT license.",
-                    "# typical install (Python 3.10+; verify the upstream README first)",
-                    "pipx install git+https://github.com/aliasrobotics/cai.git",
-                    "cai --help   # confirm the binary is on PATH",
-                    "then click REFRESH in the Agents view (or run `vortex agents`)"],
-        "notes": "Advisory only. No reviewed non-interactive consult interface is configured.",
-    },
-    "strix": {
-        "repository": "https://github.com/usestrix/strix",
-        "docs": "https://github.com/usestrix/strix#readme",
-        "license": "Apache-2.0",
-        "branch": "main",
-        "consult": "requires_configuration",
-        "install": ["Review https://github.com/usestrix/strix and its Apache-2.0 license.",
-                    "# typical install (Go 1.21+; verify the upstream README first)",
-                    "go install github.com/usestrix/strix@latest",
-                    "strix --help   # confirm the binary is on PATH",
-                    "then click REFRESH in the Agents view (or run `vortex agents`)"],
-        "notes": "Advisory only. No reviewed non-interactive consult interface is configured.",
-    },
-    "nebula": {
-        "repository": "https://github.com/BerylliumSec/nebula",
-        "docs": "https://github.com/BerylliumSec/nebula#readme",
-        "license": "BSD-2-Clause",
-        "branch": "main",
-        "consult": "requires_configuration",
-        "install": ["Review https://github.com/BerylliumSec/nebula and its BSD-2-Clause license.",
-                    "# typical install (Go toolchain; verify the upstream README first)",
-                    "go install github.com/BerylliumSec/nebula@latest",
-                    "nebula --help   # confirm the binary is on PATH",
-                    "then click REFRESH in the Agents view (or run `vortex agents`)"],
-        "notes": "Advisory only. No reviewed non-interactive consult interface is configured.",
-    },
-    "pentestgpt": {
-        "repository": "https://github.com/GreyDGL/PentestGPT",
-        "docs": "https://github.com/GreyDGL/PentestGPT#readme",
-        "license": "MIT",
-        "branch": "main",
-        "consult": "requires_configuration",
-        "install": ["Review https://github.com/GreyDGL/PentestGPT and its MIT license.",
-                    "# typical install (Python 3.10+; verify the upstream README first)",
-                    "git clone https://github.com/GreyDGL/PentestGPT.git",
-                    "cd PentestGPT && python3 -m venv .venv && . .venv/bin/activate",
-                    "pip install -r requirements.txt && pentestgpt --help",
-                    "then click REFRESH in the Agents view (or run `vortex agents`)"],
-        "notes": "Advisory only. No reviewed non-interactive consult interface is configured.",
-    },
-    "hexstrike": {
-        "repository": "https://github.com/0x4m4/hexstrike-ai",
-        "docs": "https://github.com/0x4m4/hexstrike-ai#readme",
-        "license": "MIT",
-        "branch": "main",
-        "consult": "requires_configuration",
-        "install": ["Review https://github.com/0x4m4/hexstrike-ai and its MIT license.",
-                    "# typical install (Python 3.10+; verify the upstream README first)",
-                    "git clone https://github.com/0x4m4/hexstrike-ai.git",
-                    "cd hexstrike-ai && python3 -m venv .venv && . .venv/bin/activate",
-                    "pip install -r requirements.txt && python hexstrike.py --help",
-                    "then click REFRESH in the Agents view (or run `vortex agents`)"],
-        "notes": "Advisory only. No reviewed non-interactive consult interface is configured.",
-    },
-    "pentagi": {
-        "repository": "https://github.com/vxcontrol/pentagi",
-        "docs": "https://github.com/vxcontrol/pentagi#readme",
-        "license": "MIT",
-        "branch": "main",
-        "consult": "requires_configuration",
-        "install": ["Review https://github.com/vxcontrol/pentagi and its MIT license.",
-                    "# typical install (Docker; verify the upstream README first)",
-                    "git clone https://github.com/vxcontrol/pentagi.git && cd pentagi",
-                    "docker compose up --build   # follow the repo README for LLM config",
-                    "then click REFRESH in the Agents view (or run `vortex agents`)"],
-        "notes": "Advisory only. No reviewed non-interactive consult interface is configured.",
-    },
-    "hackerai": {
-        "repository": "https://hackerai.co",
-        "docs": "https://hackerai.co",
-        "license": "proprietary/unknown",
-        "branch": "unknown",
-        "consult": "requires_configuration",
-        "install": ["No public local CLI was verified for HackerAI.",
-                    "If upstream publishes one, review its terms before installing."],
-        "notes": "No public local CLI was verified. Health check looks only for a local binary.",
-    },
-    "halo": {
-        "repository": "",
-        "docs": "",
-        "license": "unknown",
-        "branch": "unknown",
-        "consult": "requires_configuration",
-        "install": ["No uniquely verified repository is configured for HALO.",
-                    "Do not install similarly-named packages without verifying the publisher."],
-        "notes": "No uniquely verified repository is configured.",
-    },
-    "darkmoon": {
-        "repository": "",
-        "docs": "",
-        "license": "unknown",
-        "branch": "unknown",
-        "consult": "requires_configuration",
-        "install": ["No uniquely verified repository is configured for DarkMoon.",
-                    "Do not install similarly-named packages without verifying the publisher."],
-        "notes": "No uniquely verified repository is configured.",
     },
 }
 

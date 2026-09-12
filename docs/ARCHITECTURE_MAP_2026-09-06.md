@@ -73,15 +73,10 @@ model. Their `submit_task()` contract is advisory.
 | Assistant | Location | This assistant exists to… | State |
 |---|---|---|---|
 | **VORTEX Local Advisor** (`vortex-local`) | `backend/agents/local.py` | …provide deterministic commentary over the plan observation (missing tools / legal adapters). Only assistant that returns `responded`. Builtin, always present, never executes. | working |
-| **HackerAI** (`hackerai`) | `backend/agents/hackerai.py` | …advertise a pentest advisory CLI; health check only (`hackerai` binary). Returns `requires_configuration` if present; `unavailable` otherwise. | stub |
-| **Nebula** (`nebula`) | `backend/agents/nebula.py` | …advertise BerylliumSec/nebula CLI-assisted pentest advice; health check only (`nebula`). | stub |
-| **CAI** (`cai`) | `backend/agents/cai.py` | …advertise aliasrobotics/CAI; health check only (`cai`). | stub |
-| **PentestGPT** (`pentestgpt`) | `backend/agents/pentestgpt.py` | …advertise PentestGPT; health check only (`pentestgpt`/`pentestgpt-cli`). | stub |
-| **HexStrike** (`hexstrike`) | `backend/agents/hexstrike.py` | …advertise HexStrike MCP tools; health check only (`hexstrike`/`hexstrike-ai`). | stub |
-| **HALO** (`halo`) | `backend/agents/halo.py` | …advertise HALO; health check only (`halo`/`halo-ai`), no verified repo configured. | stub |
-| **PentAGI** (`pentagi`) | `backend/agents/pentagi.py` | …advertise PentAGI autonomous pentest; health check only (`pentagi`). | stub |
-| **Strix** (`strix`) | `backend/agents/strix.py` | …advertise Strix pentest advice + fix suggestions; health check only (`strix`). | stub |
-| **DarkMoon** (`darkmoon`) | `backend/agents/darkmoon.py` | …advertise DarkMoon advisory; health check only (`darkmoon`), no verified repo. | stub |
+
+No third-party AI agent adapters ship with the app; the built-in advisor is
+the only rostered assistant. (Earlier revisions carried optional third-party
+health-check stubs; they were removed so the roster shows only what works.)
 
 **Per-assistant facts (from `base.py` / `council.py`):**
 

@@ -365,8 +365,8 @@ class WorkspaceTests(unittest.TestCase):
         local_ai = result["local_ai"]
         if local_ai.get("state") == "fallback":
             self.assertTrue(local_ai["fallback"]["used"])
-            self.assertGreaterEqual(local_ai["fallback"]["agents_checked"], 10)
-            self.assertGreaterEqual(len(local_ai["agents"]), 10)
+            self.assertEqual(local_ai["fallback"]["agents_checked"], 1, "only the built-in advisor ships")
+            self.assertEqual(len(local_ai["agents"]), 1)
             self.assertEqual(local_ai["synthesis"]["state"], "deterministic-fallback")
         else:
             # A healthy runtime is equally honest: no fallback was needed.
@@ -377,7 +377,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_agent_install_is_proposal_only(self):
         from backend.agents.install import proposal
-        item = proposal("cai")
+        item = proposal("vortex-local")
         self.assertFalse(item["auto_install"])
         self.assertIn(item["state"], ("missing", "installed"))
 
@@ -816,16 +816,9 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_agents_never_fabricate_success(self):
         items = discover()
-        self.assertGreaterEqual(len(items), 10)
+        self.assertEqual(len(items), 1, "only the built-in advisor ships; nothing unavailable is rostered")
         local = next(item for item in items if item["id"] == "vortex-local")
         self.assertTrue(local["health"]["healthy"])
-        externals = [item for item in items if item["id"] != "vortex-local"]
-        self.assertEqual(len(externals), 9)
-        for item in externals:
-            self.assertIn(item["status"], {"missing", "installed"})
-            if not item["health"]["healthy"]:
-                self.assertEqual(item["status"], "missing")
-                self.assertIn("UNAVAILABLE", item["health"]["message"])
         plan = {"kind": "authorized_engagement", "commands": [{"display": "nmap"}]}
         result = consult(plan, {"id": "VTX-test"})
         self.assertTrue(result["critic"]["verdict"] in {"uncertain", "advisory_only"})

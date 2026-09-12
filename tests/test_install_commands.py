@@ -13,8 +13,8 @@ class PasteSafeLineTests(unittest.TestCase):
     def test_real_commands_survive_verbatim(self):
         for line in [
             "curl -fsSL https://ollama.com/install.sh | sh",
-            "pipx install git+https://github.com/aliasrobotics/cai.git",
-            "go install github.com/usestrix/strix@latest",
+            "pipx install git+https://github.com/acme/sample-tool.git",
+            "go install github.com/acme/sample-tool@latest",
             "cd X && python3 -m venv .venv && . .venv/bin/activate",
             "python3 -m pip install --user llama-cpp-python",
             "mkdir -p ~/linux-vortex-terminal/models",

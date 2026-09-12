@@ -375,7 +375,7 @@ The path to “installed tools ⇒ real execution, nothing fabricated” is
 
 ## 14. What is not claimed
 
-- Third-party agent consult APIs (CAI, Strix, Nebula, …) — discovery only
+- Third-party AI agent code — none ships; only the built-in deterministic advisor is rostered
 - Docker sandbox **execution** when no runtime is installed
 - Cloud model inference
 - Silent package or agent installation

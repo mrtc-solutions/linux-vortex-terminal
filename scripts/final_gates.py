@@ -177,17 +177,18 @@ def gate_upstream() -> None:
     sys.path.insert(0, str(ROOT))
     from unittest.mock import patch
 
+    from backend.agents import council
     from backend.agents.upstream import refresh, table
 
     data = table()
-    linked = all(data[a]["repository"].startswith("https://github.com/")
-                 for a in ("cai", "strix", "nebula", "pentestgpt", "hexstrike", "pentagi"))
-    honest = data["halo"]["repository"] == "" and data["darkmoon"]["sync_state"] == "unverified"
+    built_in = set(data) == {"vortex-local"}
+    built_in_sync = data.get("vortex-local", {}).get("sync_state") == "builtin"
+    no_third_party = set(council.ADAPTERS) == {"vortex-local"}
     with patch("urllib.request.urlopen", side_effect=AssertionError("offline must not dial")):
         offline = refresh(offline=True)["state"] == "offline"
-    ok = len(data) >= 10 and linked and honest and offline
-    gate("7/10 upstream tracking (10 agents, honest unverified)", ok,
-         f"agents={len(data)} linked={linked} honest={honest} offline_safe={offline}")
+    ok = built_in and built_in_sync and no_third_party and offline
+    gate("7/10 advisor roster (built-in only, no third-party code, offline-safe)", ok,
+         f"advisors={sorted(council.ADAPTERS)} table={sorted(data)} offline_safe={offline}")
 
 
 def _http_json(url: str, method: str = "GET", body: dict | None = None, timeout: int = 30) -> tuple[int, dict]:
@@ -232,7 +233,7 @@ def gate_live_http() -> None:
                 code, payload = _http_json(base + "/api/assist/coverage")
                 checks["coverage"] = code == 200 and payload.get("coverage", {}).get("count", 0) >= 16
                 code, payload = _http_json(base + "/api/agents/upstream")
-                checks["upstream"] = code == 200 and len(payload.get("upstream", {})) >= 10
+                checks["upstream"] = code == 200 and set(payload.get("upstream", {})) == {"vortex-local"}
                 code, payload = _http_json(base + "/api/assist", "POST", {"function": "health", "request": "x"})
                 checks["assist"] = code == 200 and payload.get("assist", {}).get("function") == "health"
                 code, _ = _http_json(base + "/api/models/gguf/activate", "POST", {"file": "../x.gguf", "role": "fast"})
