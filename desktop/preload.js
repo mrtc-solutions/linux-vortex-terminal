@@ -1,12 +1,22 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+
+function localFilePath(file) {
+  try {
+    const value = webUtils.getPathForFile(file);
+    return typeof value === 'string' && value.length > 0 && value.length <= 1024 ? value : '';
+  } catch (_) {
+    return '';
+  }
+}
 
 contextBridge.exposeInMainWorld('vortexApi', Object.freeze({
   request: (route, options = {}) => ipcRenderer.invoke('vortex-request', route, {
     method: options.method || 'GET',
     body: options.body === undefined ? undefined : options.body
-  })
+  }),
+  localFilePath
 }));
 
 const safeWindowState = state => Object.freeze({

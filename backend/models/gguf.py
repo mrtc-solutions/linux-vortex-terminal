@@ -41,6 +41,7 @@ GGUF_MAGIC = b"GGUF"
 MAX_GGUF_FILE_BYTES = 16 * 1024 ** 3  # sanity cap for a single prioritized file
 MAX_GGUF_FILES = 64
 MAX_FILENAME_LEN = 160
+MAX_SCAN_DEPTH = 6
 
 # The operator's two curated models. Discovery accepts any ``*.gguf`` file,
 # but these two receive role defaults and first-class catalog entries.
@@ -313,8 +314,29 @@ def scan(models_dir: str | None = None, *, use_cache: bool = True) -> dict[str, 
                 continue
         except OSError:
             continue
+        # A selected model folder often contains release subdirectories. Walk
+        # it without following links, and keep traversal bounded so a deep
+        # cache/checkpoint tree cannot make the Models view unresponsive.
         try:
-            entries = sorted(root.iterdir(), key=lambda p: p.name.lower())
+            walked = os.walk(root, followlinks=False)
+            entries = []
+            for current, directories, filenames in walked:
+                current_path = Path(current)
+                try:
+                    depth = len(current_path.relative_to(root).parts)
+                except ValueError:
+                    directories[:] = []
+                    continue
+                if depth >= MAX_SCAN_DEPTH:
+                    directories[:] = []
+                for filename in filenames:
+                    entries.append(current_path / filename)
+                    if len(entries) >= MAX_GGUF_FILES:
+                        directories[:] = []
+                        break
+                if len(entries) >= MAX_GGUF_FILES:
+                    break
+            entries.sort(key=lambda p: (str(p.parent).lower(), p.name.lower()))
         except OSError:
             continue
         for entry in entries:
@@ -360,6 +382,42 @@ def scan(models_dir: str | None = None, *, use_cache: bool = True) -> dict[str, 
 
 def invalidate_scan_cache() -> None:
     _SCAN_CACHE.update({"at": 0.0, "key": None, "value": None})
+
+
+def configure_local_source(paths: list[str]) -> dict[str, Any]:
+    """Validate an explicit local file/folder choice and return its root.
+
+    This is inspection-only: it does not copy, move, load, or execute a model.
+    Chromium folder inputs provide a list of files rather than the selected
+    directory, so their resolved common parent becomes the persisted root.
+    """
+    if not isinstance(paths, list) or not paths or len(paths) > MAX_GGUF_FILES:
+        raise ValueError("select between one and 64 local model files")
+    resolved: list[Path] = []
+    for raw in paths:
+        if not isinstance(raw, str) or not raw or len(raw) > 1024:
+            raise ValueError("selected model path is invalid")
+        try:
+            path = Path(raw).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ValueError("selected model path is unavailable") from exc
+        try:
+            details = path.stat()
+        except OSError as exc:
+            raise ValueError("selected model path cannot be inspected") from exc
+        if not stat.S_ISREG(details.st_mode):
+            raise ValueError("select a regular GGUF model file")
+        if not path.name.lower().endswith(".gguf"):
+            raise ValueError("selected file is not a supported GGUF model")
+        resolved.append(path)
+    root = Path(os.path.commonpath([str(path.parent) for path in resolved]))
+    inspected = scan(str(root), use_cache=False)
+    selected = {str(path) for path in resolved}
+    valid_selected = [item for item in inspected["files"] if item.get("path") in selected and item.get("valid")]
+    if not valid_selected:
+        detail = next((item.get("reason") for item in inspected["files"] if item.get("path") in selected), None)
+        raise ValueError("selected GGUF is corrupt or incomplete" + (f": {detail}" if detail else ""))
+    return {"directory": str(root), "models": valid_selected, "inspection": inspected}
 
 
 def _trusted_cli() -> str | None:

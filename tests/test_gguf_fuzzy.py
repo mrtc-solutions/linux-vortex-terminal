@@ -38,6 +38,10 @@ class GgufDiscoveryTests(unittest.TestCase):
         self.models = Path(self.tmp.name) / "models"
         self.models.mkdir()
         self._old_env = os.environ.get("VORTEX_MODELS_DIR")
+        self._old_config_dir = os.environ.get("VORTEX_CONFIG_DIR")
+        config_dir = Path(self.tmp.name) / "config"
+        config_dir.mkdir()
+        os.environ["VORTEX_CONFIG_DIR"] = str(config_dir)
         os.environ["VORTEX_MODELS_DIR"] = str(self.models)
         _reset_caches()
 
@@ -46,6 +50,10 @@ class GgufDiscoveryTests(unittest.TestCase):
             os.environ.pop("VORTEX_MODELS_DIR", None)
         else:
             os.environ["VORTEX_MODELS_DIR"] = self._old_env
+        if self._old_config_dir is None:
+            os.environ.pop("VORTEX_CONFIG_DIR", None)
+        else:
+            os.environ["VORTEX_CONFIG_DIR"] = self._old_config_dir
         gguf_provider.set_test_engine(None)
         gguf_provider.unload()
         _reset_caches()
@@ -69,6 +77,23 @@ class GgufDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(found["files"]), 1)
         self.assertFalse(found["files"][0]["valid"])
         self.assertIn("GGUF", found["files"][0]["reason"])
+
+    def test_selected_folder_is_scanned_recursively_and_validated(self):
+        nested = self.models / "download" / "release"
+        nested.mkdir(parents=True)
+        model = nested / "Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+        _write_gguf(model)
+        found = gguf_provider.scan(str(self.models), use_cache=False)
+        self.assertEqual([item["path"] for item in found["valid_files"]], [str(model)])
+        selected = gguf_provider.configure_local_source([str(model)])
+        self.assertEqual(selected["directory"], str(nested))
+        self.assertEqual(selected["models"][0]["path"], str(model))
+
+    def test_selected_corrupt_model_is_rejected(self):
+        corrupt = self.models / "corrupt.gguf"
+        corrupt.write_bytes(b"NOPE")
+        with self.assertRaisesRegex(ValueError, "corrupt or incomplete"):
+            gguf_provider.configure_local_source([str(corrupt)])
 
     def test_empty_directory_reports_missing_curated_models(self):
         found = gguf_provider.scan()
@@ -371,6 +396,10 @@ class FunctionAssistanceWiringTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         old_data = os.environ.get("VORTEX_DATA_DIR")
+        self._old_config_dir = os.environ.get("VORTEX_CONFIG_DIR")
+        config_dir = Path(self.tmp.name) / "config"
+        config_dir.mkdir()
+        os.environ["VORTEX_CONFIG_DIR"] = str(config_dir)
         os.environ["VORTEX_DATA_DIR"] = self.tmp.name
         self._old_data = old_data
         from backend.vortex_backend import Store
@@ -385,6 +414,10 @@ class FunctionAssistanceWiringTests(unittest.TestCase):
             os.environ.pop("VORTEX_DATA_DIR", None)
         else:
             os.environ["VORTEX_DATA_DIR"] = self._old_data
+        if self._old_config_dir is None:
+            os.environ.pop("VORTEX_CONFIG_DIR", None)
+        else:
+            os.environ["VORTEX_CONFIG_DIR"] = self._old_config_dir
         _reset_caches()
         self.tmp.cleanup()
 

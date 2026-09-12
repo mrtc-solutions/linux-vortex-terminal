@@ -96,6 +96,9 @@ assert.ok(models.includes('/api/ollama/models/pull'), 'models module can pull a 
 assert.ok(models.includes('/api/ollama/models/activate'), 'models module can activate an installed model role');
 assert.ok(models.includes('/api/ollama/models/cancel'), 'models module can cancel a download');
 assert.ok(models.includes('/api/ollama/models/remove'), 'models module can remove a model');
+assert.ok(index.includes('id="add-local-model"') && index.includes('id="add-model-folder"'), 'Models view exposes local file and folder selection');
+assert.ok(models.includes('window.vortexApi && window.vortexApi.localFilePath'), 'local model selection resolves Electron File paths through preload');
+assert.ok(models.includes("api('/api/models/gguf/import'"), 'local model selection posts only through the GGUF import route');
 // The Agents view must surface the local AI runtime + model pool (Ollama and
 // the local LLMs) with real actions, not just the external agent council, so
 // the operator can install Ollama and download models without hunting for the

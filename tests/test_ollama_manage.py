@@ -49,10 +49,10 @@ class OllamaManagerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["VORTEX_DATA_DIR"] = self.tmp.name
-        self._previous_config_home = os.environ.get("XDG_CONFIG_HOME")
-        config_home = Path(self.tmp.name) / "config"
-        config_home.mkdir(parents=True, exist_ok=True)
-        os.environ["XDG_CONFIG_HOME"] = str(config_home)
+        self._previous_config_dir = os.environ.get("VORTEX_CONFIG_DIR")
+        config_dir = Path(self.tmp.name) / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["VORTEX_CONFIG_DIR"] = str(config_dir)
 
     def tearDown(self):
         manager.shutdown(timeout=2)
@@ -71,10 +71,10 @@ class OllamaManagerTests(unittest.TestCase):
                 pass
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)
-        if self._previous_config_home is None:
-            os.environ.pop("XDG_CONFIG_HOME", None)
+        if self._previous_config_dir is None:
+            os.environ.pop("VORTEX_CONFIG_DIR", None)
         else:
-            os.environ["XDG_CONFIG_HOME"] = self._previous_config_home
+            os.environ["VORTEX_CONFIG_DIR"] = self._previous_config_dir
 
     def test_runtime_status_is_well_formed_without_ollama(self):
         with patch("backend.models.manager.ollama_status", return_value={"state": "unavailable", "reason": "stub", "models": [], "version": None}):
@@ -96,6 +96,17 @@ class OllamaManagerTests(unittest.TestCase):
         self.assertEqual(status["api_state"], "healthy")
         self.assertTrue(status["platform"]["offline"])
         self.assertEqual(manager._server_env()["OLLAMA_HOST"], "127.0.0.1:11459")
+
+    def test_import_local_model_persists_selected_directory(self):
+        source = Path(self.tmp.name) / "external"
+        source.mkdir()
+        model = source / "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+        model.write_bytes(b"GGUF" + (3).to_bytes(4, "little") + b"\x00" * 64)
+        imported = manager.import_local_models([str(model)])
+        self.assertEqual(imported["directory"], str(source))
+        self.assertEqual(imported["models"][0]["path"], str(model))
+        from backend.config import load_settings
+        self.assertEqual(load_settings()["models_dir"], str(source))
 
     def test_start_reuses_existing_external_loopback_service(self):
         with patch("backend.models.manager._locate_binary", return_value="/bin/true"), \
@@ -754,10 +765,10 @@ class OllamaHttpRoutesTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["VORTEX_DATA_DIR"] = self.tmp.name
-        self._previous_config_home = os.environ.get("XDG_CONFIG_HOME")
-        config_home = Path(self.tmp.name) / "config"
-        config_home.mkdir(parents=True, exist_ok=True)
-        os.environ["XDG_CONFIG_HOME"] = str(config_home)
+        self._previous_config_dir = os.environ.get("VORTEX_CONFIG_DIR")
+        config_dir = Path(self.tmp.name) / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["VORTEX_CONFIG_DIR"] = str(config_dir)
         self.store = Store(Path(self.tmp.name) / "vortex.db")
         handler = VortexHandler
         handler.store = self.store
@@ -797,10 +808,10 @@ class OllamaHttpRoutesTests(unittest.TestCase):
                 pass
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)
-        if self._previous_config_home is None:
-            os.environ.pop("XDG_CONFIG_HOME", None)
+        if self._previous_config_dir is None:
+            os.environ.pop("VORTEX_CONFIG_DIR", None)
         else:
-            os.environ["XDG_CONFIG_HOME"] = self._previous_config_home
+            os.environ["VORTEX_CONFIG_DIR"] = self._previous_config_dir
 
     def _json(self, method, path, body=None, expected=200, timeout=8):
         data = None if body is None else json.dumps(body).encode()
