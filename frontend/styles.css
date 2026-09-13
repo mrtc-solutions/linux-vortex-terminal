@@ -96,4 +96,38 @@ body::before {
 .ai-ops-stream { height: 220px; overflow: auto; background: rgba(0,0,0,.18); padding: 8px; border-radius: 4px; }
 .stream-line { color: var(--text); font-family: var(--mono); font-size: 13px; padding: 2px 0; border-bottom: 1px dashed rgba(255,255,255,.02); }
 
+/* Plain theme and reduced motion must never render decorative backgrounds. */
+body.plain-mode::before, body.plain-mode::after { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  body::before, body::after { display: none; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* Narrow viewports: collapse the rail to icons and let grids shrink. */
+@media (max-width: 800px) {
+  .nav-item { font-size: 0; overflow: hidden; white-space: nowrap; }
+  .nav-icon { width: 100%; font-size: 18px; text-align: center; }
+  .grid-row { grid-template-columns: minmax(0, 1fr); }
+  .model-actions { flex-direction: column; align-items: stretch; }
+}
+
+/* Phones: single-column cards, stacked terminals, usable modal padding. */
+@media (max-width: 600px) {
+  .quick-actions { grid-template-columns: minmax(0, 1fr); }
+  .setting-card { grid-template-columns: auto minmax(0, 1fr); }
+  .dep-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .terminal-panes { grid-template-columns: minmax(0, 1fr) !important; }
+  .surface-window { padding: 8px; }
+}
+
+/* Very narrow rails keep a bounded matching width and basis. */
+@media (max-width: 380px) {
+  .sidebar { width: 52px; flex-basis: 52px; }
+}
+
+/* Topbar controls wrap instead of clipping or overflowing. */
+.topbar { display: flex; flex-wrap:wrap; align-items: center; gap: 8px; }
+.top-actions { display: flex; flex-wrap:wrap; align-items: center; gap: 8px; }
+
 /* Keep the rest of styles intact by falling back to existing rules */

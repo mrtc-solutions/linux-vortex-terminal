@@ -10,6 +10,7 @@ const GET_ROUTES = [
   /^\/api\/audit\/verify$/,
   /^\/api\/assets\/graph$/,
   /^\/api\/models\/gguf$/,
+  /^\/api\/llamafile$/,
   /^\/api\/install\/commands$/,
   /^\/api\/agents\/upstream$/,
   /^\/api\/assist\/coverage$/,
@@ -21,10 +22,11 @@ const GET_ROUTES = [
 ];
 
 const POST_ROUTES = [
-  /^\/api\/(?:engagements|sessions|conversations|palette|settings|secrets|execute|assist)$/,
+  /^\/api\/(?:engagements|sessions|conversations|palette|settings|secrets|execute|assist|memory)$/,
   /^\/api\/(?:mobile\/apk|desktop\/deb|workspace\/turn|tools\/host\/rescan|control\/stop-all|setup\/complete|refresh|dependencies\/(?:plan|execute))$/,
   /^\/api\/ollama\/(?:install(?:\/cancel)?|server\/(?:start|stop)|models\/(?:pull|activate|cancel|remove))$/,
   /^\/api\/models\/gguf\/(?:activate|import)$/,
+  /^\/api\/llamafile\/(?:install(?:\/cancel)?|import|server\/(?:start|stop)|models\/(?:activate|remove))$/,
   /^\/api\/agents\/upstream\/refresh$/,
   new RegExp(`^/api/engagements/${SAFE_ID}/close$`),
   new RegExp(`^/api/operations/${SAFE_ID}/approve$`),

@@ -191,6 +191,16 @@ def gate_upstream() -> None:
          f"advisors={sorted(council.ADAPTERS)} table={sorted(data)} offline_safe={offline}")
 
 
+def _http_status(url: str, timeout: int = 30) -> int:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return int(getattr(response, "status", 0) or 0)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code or 0)
+    except OSError:
+        return 0
+
+
 def _http_json(url: str, method: str = "GET", body: dict | None = None, timeout: int = 30) -> tuple[int, dict]:
     data = json.dumps(body or {}).encode() if method == "POST" else None
     request = urllib.request.Request(url, data=data, method=method,
@@ -240,8 +250,15 @@ def gate_live_http() -> None:
                 checks["traversal_blocked"] = code == 400
                 code, payload = _http_json(base + "/api/dashboard")
                 checks["dashboard_hint"] = code == 200 and "ai_hint" in payload.get("dashboard", {})
+                code, payload = _http_json(base + "/api/llamafile")
+                checks["llamafile"] = code == 200 and payload.get("llamafile", {}).get("provider") == "llamafile"
+                code, _ = _http_json(base + "/api/llamafile/import", "POST", {"path": "../x.gguf"})
+                checks["llamafile_traversal_blocked"] = code in {400, 409}
+                code, payload = _http_json(base + "/api/memory", "POST", {"title": "gate", "body": "gate note", "kind": "knowledge"})
+                checks["memory_save"] = code == 201 and payload.get("memory", {}).get("title") == "gate"
+                checks["ui_shell"] = _http_status(base + "/") == 200
             ok = all(checks.values())
-            gate("8/10 live http smoke (7 endpoints)", ok, f"checks={checks}")
+            gate("8/10 live http smoke (11 endpoints)", ok, f"checks={checks}")
         finally:
             proc.terminate()
             try:

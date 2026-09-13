@@ -73,7 +73,7 @@ except ImportError:  # direct `python backend/vortex_backend.py`
     from probe_cache import TTLCache
 
 SCHEMA_VERSION = 1
-APP_VERSION = "0.2.23"
+APP_VERSION = "0.3.0"
 REDACTION_RE = re.compile(
     r"(?i)(bearer\s+|password\s*[=:]\s*|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*|secret\s*[=:]\s*)([^\s,;]+)"
 )
@@ -4342,6 +4342,23 @@ class VortexHandler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         self.send_response(HTTPStatus.NO_CONTENT); self._headers(); self.send_header("Content-Length", "0"); self.end_headers()
 
+    def _ui_index(self) -> Path:
+        """Resolve the UI shell: built React app when present, else legacy vanilla UI.
+
+        The React shell (`dist/index.html`, single-file Vite build) is served
+        automatically once `npm run build` has produced it; `VORTEX_UI=legacy`
+        forces the legacy `frontend/index.html`. Missing build output falls
+        back honestly instead of 404ing the whole app.
+        """
+        try:
+            if os.environ.get("VORTEX_UI", "").strip().lower() != "legacy":
+                candidate = self.frontend.parent / "dist" / "index.html"
+                if candidate.is_file():
+                    return candidate
+        except (OSError, ValueError):
+            pass
+        return self.frontend / "index.html"
+
     def _asset_candidate(self) -> tuple[Path | None, str]:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -4371,7 +4388,7 @@ class VortexHandler(BaseHTTPRequestHandler):
         if not public_asset and not self._authorized():
             return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         if path == "/" or path == "/index.html":
-            asset = self.frontend / "index.html"
+            asset = self._ui_index()
         else:
             asset, mime = self._asset_candidate()
             if asset is None:
@@ -4454,6 +4471,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 gguf = _load("models.gguf")
                 settings = _load("config").load_settings()
                 return self._json(200, {"gguf": gguf.status(settings)})
+            if path == "/api/llamafile":
+                llamafile = _load("models.llamafile")
+                settings = _load("config").load_settings()
+                return self._json(200, {"llamafile": llamafile.status(settings)})
             if path == "/api/agents/upstream":
                 upstream = _load("agents.upstream")
                 return self._json(200, {"upstream": upstream.table()})
@@ -4777,7 +4798,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/operations/"):
                 op = self.store.get_operation(path.rsplit("/", 1)[-1]); return self._json(200 if op else 404, {"operation": op} if op else {"error": {"code": "not_found", "message": "operation not found"}})
             if path == "/" or path == "/index.html":
-                return self._static(self.frontend / "index.html", "text/html; charset=utf-8")
+                return self._static(self._ui_index(), "text/html; charset=utf-8")
             if path.startswith("/assets/"):
                 relative = Path(path.removeprefix("/assets/")).as_posix()
                 # Renderer code lives beside index.html; licensed artwork lives
@@ -4941,6 +4962,56 @@ class VortexHandler(BaseHTTPRequestHandler):
                 except ValueError as exc:
                     return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
                 return self._json(200, {"import": imported})
+            if path == "/api/llamafile/install":
+                llamafile = _load("models.llamafile")
+                settings = _load("config").load_settings()
+                return self._json(200, {"install": llamafile.install(self._flag(body, "confirm"), settings)})
+            if path == "/api/llamafile/install/cancel":
+                llamafile = _load("models.llamafile")
+                return self._json(200, {"install": llamafile.cancel_install()})
+            if path == "/api/llamafile/import":
+                llamafile = _load("models.llamafile")
+                source = self._text(body, "path") or self._text(body, "source") or ""
+                try:
+                    imported = llamafile.import_model(source)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"import": imported})
+            if path == "/api/llamafile/server/start":
+                llamafile = _load("models.llamafile")
+                settings = _load("config").load_settings()
+                try:
+                    started = llamafile.server_start(self._optional_str(body, "model"), settings)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"server": started})
+            if path == "/api/llamafile/server/stop":
+                llamafile = _load("models.llamafile")
+                return self._json(200, {"server": llamafile.server_stop()})
+            if path == "/api/llamafile/models/activate":
+                llamafile = _load("models.llamafile")
+                name = self._text(body, "model") or self._text(body, "name") or ""
+                try:
+                    preference = llamafile.activate_model(name)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"preference": preference})
+            if path == "/api/llamafile/models/remove":
+                llamafile = _load("models.llamafile")
+                name = self._text(body, "model") or self._text(body, "name") or ""
+                try:
+                    removed = llamafile.remove_model(name)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"removed": removed})
             if path == "/api/agents/upstream/refresh":
                 upstream = _load("agents.upstream")
                 settings = _load("config").load_settings()
@@ -5059,6 +5130,17 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not slot:
                     raise ValueError("slot is required")
                 return self._json(200, {"secrets": put(slot, value or "")})
+            if path == "/api/memory":
+                title = (self._text(body, "title") or "").strip()
+                content = (self._text(body, "body") or self._text(body, "content") or "").strip()
+                kind = (self._text(body, "kind") or "knowledge").strip().lower()[:32] or "knowledge"
+                if not title or not content:
+                    raise ValueError("memory title and body are required")
+                if len(title) > 200 or len(content) > 8000:
+                    raise ValueError("memory title or body is too long")
+                if kind not in {"conversation", "task", "knowledge", "tool", "agent", "experience", "procedure"}:
+                    raise ValueError("memory kind must be conversation, task, knowledge, tool, agent, experience, or procedure")
+                return self._json(201, {"memory": self.workspace.add_memory(kind, title[:200], content[:8000])})
             if path == "/api/refresh":
                 started = time.monotonic()
                 clear_probe_caches()
