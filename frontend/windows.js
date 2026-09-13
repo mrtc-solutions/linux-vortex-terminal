@@ -1,6 +1,10 @@
 /* Window controls shared by Electron's native frame and VORTEX in-app windows.
    Pop-up surfaces can be open at the same time: the front one tracks focus,
-   minimized ones wait in the tray, and every surface keeps its own state. */
+   minimized ones wait in the tray, and every surface keeps its own state.
+
+   Added: GPU-accelerated transform-based dragging on surface titlebars to
+   avoid layout thrash and improve responsiveness on low-end machines.
+*/
 (function (root) {
   'use strict';
 
@@ -65,7 +69,7 @@
     });
   }
 
-  const escText = (value) => String(value || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const escText = (value) => String(value || '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const escAttr = escText;
 
   function bringToFront(surface) {
@@ -119,6 +123,75 @@
     else applySurfaceState(surface, next);
   }
 
+  /* --- BEGIN: transform-based dragging for surface windows --- */
+  function makeSurfaceDraggable(surface) {
+    const titlebar = surface.querySelector('.surface-titlebar');
+    if (!titlebar) return;
+
+    let dragging = null;
+
+    function getNumericStyle(el, prop) {
+      const v = window.getComputedStyle(el)[prop];
+      return v ? parseFloat(v) : 0;
+    }
+
+    function onPointerDown(ev) {
+      // only start drag when primary button and not from interactive controls
+      if (ev.button !== 0) return;
+      if (ev.target.closest('button, input, select, a')) return;
+
+      const rect = surface.getBoundingClientRect();
+      // convert centered layout to explicit left/top if needed
+      if (!surface.style.left && !surface.style.top) {
+        surface.style.left = rect.left + 'px';
+        surface.style.top = rect.top + 'px';
+        surface.style.right = 'auto';
+        surface.style.bottom = 'auto';
+      }
+
+      dragging = {
+        startX: ev.clientX,
+        startY: ev.clientY,
+        startLeft: getNumericStyle(surface, 'left'),
+        startTop: getNumericStyle(surface, 'top'),
+        dx: 0,
+        dy: 0,
+        pointerId: ev.pointerId
+      };
+
+      try { surface.setPointerCapture?.(ev.pointerId); } catch (e) {}
+      surface.classList.add('surface-dragging');
+
+      function onPointerMove(e) {
+        if (!dragging) return;
+        dragging.dx = e.clientX - dragging.startX;
+        dragging.dy = e.clientY - dragging.startY;
+        surface.style.transform = `translate3d(${dragging.dx}px, ${dragging.dy}px, 0)`;
+      }
+
+      function onPointerUp(e) {
+        if (!dragging) return;
+        const finalLeft = dragging.startLeft + dragging.dx;
+        const finalTop = dragging.startTop + dragging.dy;
+        surface.style.transform = '';
+        surface.style.left = Math.round(finalLeft) + 'px';
+        surface.style.top = Math.round(finalTop) + 'px';
+        surface.classList.remove('surface-dragging');
+
+        try { surface.releasePointerCapture?.(dragging.pointerId); } catch (err) {}
+        document.removeEventListener('pointermove', onPointerMove);
+        document.removeEventListener('pointerup', onPointerUp);
+        dragging = null;
+      }
+
+      document.addEventListener('pointermove', onPointerMove, { passive: true });
+      document.addEventListener('pointerup', onPointerUp, { passive: true });
+    }
+
+    titlebar.addEventListener('pointerdown', onPointerDown, { passive: true });
+  }
+  /* --- END transform-based dragging --- */
+
   function bindSurfaceWindows(doc) {
     doc.querySelectorAll('[data-surface-window]').forEach(surface => {
       applySurfaceState(surface, stateOf(surface));
@@ -129,6 +202,8 @@
       titlebar?.addEventListener('dblclick', event => {
         if (!event.target.closest('button, input, select, a')) performSurfaceAction(surface, 'maximize');
       });
+      // make draggable (new)
+      makeSurfaceDraggable(surface);
     });
     const host = tray();
     if (host) {
@@ -223,7 +298,7 @@
       const activeSurface = frontSurface(doc);
       if (event.key === 'Tab' && activeSurface && stateOf(activeSurface) !== MINIMIZED) {
         const selector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-        const focusables = Array.from(activeSurface.querySelectorAll(selector)).filter(element => !element.hidden && element.getAttribute('aria-hidden') !== 'true' && (!element.getClientRects || element.getClientRects().length > 0));
+        const focusables = Array.from(activeSurface.querySelectorAll(selector)).filter(element => !element.hidden && element.getAttribute('aria-hidden') !== 'true' && (!element.getClientRects || element.getClientRects().length));
         if (!focusables.length) {
           activeSurface.querySelector('.surface-titlebar, [role="dialog"]')?.focus({ preventScroll: true });
           event.preventDefault();
