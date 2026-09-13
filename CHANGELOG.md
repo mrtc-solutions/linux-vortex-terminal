@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.3.0 — 2026-09-13
+
+New default UI shell (React terminal, served at `/`), free local LLM via
+llamafile, and the full popup workspace. No simulation: every surface reads
+the loopback sidecar and degrades to an honest empty/unavailable state.
+
+- **React terminal shell.** Six tabs (Terminal, Tactical Map, /out, Reports,
+  Fuzzy, Agent Reach) plus pop-up windows (plan approvals, tasks, scope,
+  tools, models, system, conversations, memory, settings, AI Ops, help,
+  raw host PTY, start-menu launcher). Terminal turns run plan → Guardian →
+  execute → observe with live SSE output; WAITING plans open a real
+  approve/reject review. Served automatically once `npm run build` produces
+  `dist/`; `VORTEX_UI=legacy` forces the vanilla workbench.
+- **llamafile provider.** Pinned single-binary local LLM (v0.10.5,
+  SHA-256 verified), operator-confirmed install, loopback-only server,
+  GGUF/fused-model import, start/stop/activate/remove. Router order is now
+  llamafile → GGUF-direct → Ollama → agent council → deterministic core,
+  with per-call latency feedback and honest unavailable states.
+- **Real tabs.** Tactical Map renders the observed asset graph; /out shows
+  stored artifacts with observations and re-analysis; Reports browses,
+  downloads (md/html/json/pdf), and deletes sidecar reports plus live system
+  and per-engagement assessments; Fuzzy shows the live router ranking with
+  membership traces; Agent Reach shows the real roster and capabilities.
+- **Policy settings UI.** Profile selector (safe/standard/expert) with the
+  derived `auto_low_risk` flag shown honestly; `auto_medium_risk` stays a
+  Guardian invariant (always off).
+- **Dropped from the UI** (backend/CLI unchanged): the React demo's staged
+  network map, fake model cluster, in-memory filesystem, and canned
+  deliberations. The vanilla `frontend/` workbench remains as the legacy
+  fallback and is still covered by the JS suites.
+
 ## 0.2.23 — 2026-09-12
 
 Windowed workspace, global REFRESH ALL, visible local-AI trace, the

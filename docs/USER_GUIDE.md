@@ -228,7 +228,25 @@ python3 backend/vortex_backend.py --host 127.0.0.1 --port 4173
 A non-loopback bind (`0.0.0.0` or a LAN address) is refused unless you pass a
 capability token of at least 32 characters (`--token` / `VORTEX_SIDECAR_TOKEN`).
 
-In the UI:
+The default shell is the VORTEX React terminal (served automatically once
+`npm run build` has produced `dist/`): six tabs — Terminal, Tactical Map,
+/out, Reports, Fuzzy, Agent Reach — plus pop-up windows for plan approvals,
+tasks, scope, tools, models, system, conversations, memory, settings, AI Ops,
+help, and a raw host shell. Set `VORTEX_UI=legacy` to force the previous
+vanilla workbench instead.
+
+In the React shell:
+
+1. Type a request such as `check disk usage` in the terminal and press **Run**.
+2. Low-risk plans auto-run under your policy profile (Settings popup);
+   everything else opens a **Guardian plan review** — APPROVE & EXECUTE or REJECT.
+3. Watch real output stream in; **Stop** (STOP ALL) signals running work.
+4. Type `launcher` (or press the grid button in the header) for every surface;
+   `shell` opens a raw host PTY; `aiops` shows the last advisory trace.
+5. For free local AI, open **Models**: install llamafile (confirmed download),
+   drop a `.gguf` file into `models/`, then start the loopback server.
+
+In the legacy vanilla UI:
 
 1. Complete first-run checks (optional components stay unavailable).
 2. Type a request such as `system health` and press **SEND**.
