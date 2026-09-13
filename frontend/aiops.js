@@ -2,14 +2,7 @@
    to models and AI assistants. Every state is derived from the live routing
    snapshot (fuzzy ranking) and the last turn's local_ai record — nothing is
    fabricated, and every missing layer carries the exact commands to run in
-   the main Linux terminal plus COPY / OPEN IN TERMINAL actions.
-
-   Added streaming support: the client now subscribes to a Server-Sent Events
-   stream (EventSource) at /api/aiops/stream when the AI Ops window is visible
-   and appends partial outputs incrementally so the user sees "thinking"
-   traces and model-by-model latencies as they arrive. Falls back to polling
-   the existing /api/ollama endpoint when EventSource isn't available.
-*/
+   the main Linux terminal plus COPY / OPEN IN TERMINAL actions. */
 (function () {
   'use strict';
 
@@ -18,9 +11,7 @@
     gguf: null,
     lastTurn: null,
     install: null,
-    timer: null,
-    stream: null,
-    streamOpen: false
+    timer: null
   };
 
   function box(id) { return document.getElementById(id); }
@@ -305,25 +296,28 @@
         try { var data = JSON.parse(ev.data); if (data.text) appendStreamLine(data.text, 'ai-ops-stream'); if (data.model_latency_ms) appendStreamLine('[latency] ' + data.model + ' ' + data.model_latency_ms + ' ms', 'ai-ops-stream'); } catch (e) { }
       });
       aiops.stream.addEventListener('final', function (ev) {
-        try { var data = JSON.parse(ev.data); appendStreamLine('\n[RESULT] ' + (data.result || '[no result]'), 'ai-ops-stream'); if (data.snapshot) window.updateAiOpsTurn && window.updateAiOpsTurn(data.snapshot); } catch (e) { }
+        try { var data = JSON.parse(ev.data); if (data.text) appendStreamLine('[FINAL] ' + data.text, 'ai-ops-stream'); } catch (e) { }
       });
-      aiops.stream.addEventListener('error', function (ev) {
-        appendStreamLine('\n[stream] connection error — falling back to polling', 'ai-ops-stream');
-        stopAiOpsStream();
-        // fallback: perform immediate load
-        loadAiOps(true);
-      });
+      aiops.stream.onerror = function () {
+        try { aiops.stream.close(); } catch (e) {}
+        aiops.stream = null;
+        aiops.streamOpen = false;
+      };
     } else {
-      // Fallback polling — first show an informative trace
-      appendStreamLine('Streaming unavailable; using periodic polling. You can enable SSE on the backend for live traces.', 'ai-ops-stream');
-      // poll once immediately
-      loadAiOps(true);
+      // fallback: poll partials once to give some motion if SSE unavailable
+      (async function pollOnce() {
+        try {
+          var res = await api('/api/aiops/partials');
+          (res.partials || []).forEach(function (p) { if (p.text) appendStreamLine(p.text, 'ai-ops-stream'); });
+        } catch (e) { /* ignore */ }
+      })();
     }
   }
 
+  // Stop stream when window is hidden/closed
   function stopAiOpsStream() {
     if (aiops.stream) {
-      try { aiops.stream.close(); } catch (e) { }
+      try { aiops.stream.close(); } catch (e) {}
       aiops.stream = null;
     }
     aiops.streamOpen = false;
@@ -342,7 +336,7 @@
       section.hidden = false;
       var combined = payload.combined || '';
       host.innerHTML =
-        '<p class="form-note">' + esc(sections.length) + ' item(s) missing on this host. Copy the whole block and paste it into your main Linux terminal, then return and click REFRESH ALL. VORTEX will verify the install when it next polls.</p>' +
+        '<p class="form-note">' + esc(sections.length) + ' item(s) missing on this host. Copy the whole block and paste it into your main Linux terminal, then return and click REFRESH ALL. VORTEX will validate the installers before running anything.</p>' +
         '<div class="command-actions"><button class="secondary-button" data-aiops-copy-all>COPY ALL COMMANDS</button>' +
         '<button class="secondary-button" data-aiops-terminal-all>OPEN IN TERMINAL</button></div>' +
         '<pre class="install-commands">' + esc(combined) + '</pre>';
@@ -362,8 +356,6 @@
     renderHelp(aiops.routing, aiops.gguf);
     renderLastTurn();
     loadInstallAll();
-    // Ensure stream is active when the ai ops window is visible
-    startAiOpsStream();
   }
 
   async function loadAiOps(fresh) {
@@ -413,27 +405,22 @@
       if (!win || !win.hidden && win.dataset.windowState !== 'minimized' && !document.hidden) loadAiOps();
     }, 15000);
 
-    // Start stream when the window becomes visible via mutation / show events
-    document.addEventListener('click', function (ev) {
-      var win = box('ai-ops-window');
-      if (!win) return;
-      // If user clicked the control to open ai-ops window, ensure stream starts
-      if (!win.hidden && !aiops.streamOpen) startAiOpsStream();
-    });
+    // Observe ai-ops window visibility and start/stop the stream accordingly
+    var observerTarget = box('ai-ops-window') || document.body;
+    try {
+      var obs = new MutationObserver(function () {
+        var win = box('ai-ops-window');
+        if (win && !win.hidden && win.dataset.windowState !== 'minimized') startAiOpsStream();
+        else stopAiOpsStream();
+      });
+      obs.observe(observerTarget, { attributes: true, childList: true, subtree: true });
+    } catch (e) {
+      // ignore if MutationObserver not available
+    }
 
-    // Stop stream when window hidden or document hidden to reduce resource use
-    var obs = new MutationObserver(function () {
-      var win = box('ai-ops-window');
-      if (!win) return;
-      if (win.hidden || document.hidden) stopAiOpsStream();
-      else startAiOpsStream();
-    });
-    var winNode = box('ai-ops-window');
-    if (winNode) obs.observe(winNode, { attributes: true, attributeFilter: ['hidden', 'data-window-state'] });
-
-    document.addEventListener('visibilitychange', function () {
-      if (document.hidden) stopAiOpsStream(); else startAiOpsStream();
-    });
+    // Attempt to start immediately if window visible
+    var winNow = box('ai-ops-window');
+    if (winNow && !winNow.hidden && winNow.dataset.windowState !== 'minimized') startAiOpsStream();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
