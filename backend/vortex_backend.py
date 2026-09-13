@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linux Vortex local sidecar.
+"""Linux Vortex Terminal local sidecar.
 
 The sidecar is deliberately dependency-light: the checked-in implementation uses
 Python's standard library so a fresh Linux installation can boot the product
@@ -1261,7 +1261,7 @@ class SessionManager:
                     os.chdir(str(cwd))
                     os.execve(argv[0], argv, env)
                 except BaseException as exc:
-                    try: os.write(2, (f"Vortex session exec failed: {exc}\n").encode("utf-8", "replace"))
+                    try: os.write(2, (f"Vortex Terminal session exec failed: {exc}\n").encode("utf-8", "replace"))
                     except OSError: pass
                     os._exit(127)
             try:
@@ -2052,21 +2052,21 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         risk = "high"
         authorization = "operator-controlled system mutation"
         status = "rejected"
-        notes.append("Vortex has no reviewed adapter for this host-mutation intent and will not fabricate an equivalent read-only command.")
-        notes.append("No command was created. Approve only the reviewed, typed plans shown by Vortex for supported operations.")
+        notes.append("Vortex Terminal has no reviewed adapter for this host-mutation intent and will not fabricate an equivalent read-only command.")
+        notes.append("No command was created. Approve only the reviewed, typed plans shown by Vortex Terminal for supported operations.")
     elif _shell_syntax:
         kind = "unsupported_shell_syntax"
         risk = "high"
         authorization = "operator-controlled command interpretation"
         status = "rejected"
-        notes.append("Vortex executes reviewed argv only and does not interpret shell pipelines, redirection, command substitution, or compound operators.")
+        notes.append("Vortex Terminal executes reviewed argv only and does not interpret shell pipelines, redirection, command substitution, or compound operators.")
         notes.append("Use a PTY session for a real interactive shell, or ask for a narrower single reviewed command.")
     elif re.search(r"\b(?:show|read|open|view|cat)\s+(?:config\s+)?file\s+(/[^\s;]+)", lower):
         kind = "filesystem_read"
         raw_match = re.search(r"(?:show|read|open|view|cat)\s+(?:config\s+)?file\s+(/[^\s;]+)", lower)
         candidate = safe_file_target(raw_match.group(1)) if raw_match else None
         if candidate is None:
-            status = "clarified"; notes.append("Vortex only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
+            status = "clarified"; notes.append("Vortex Terminal only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
         elif probe_executable("cat")["state"] != "installed":
             status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cat; the requested file was not read.")
         else:
@@ -2081,7 +2081,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         except ValueError:
             argv = []
         if not argv or any(x in command for x in (";", "&&", "||", "|", ">", "<")):
-            notes.append("This request contains shell syntax or is incomplete; Vortex will explain concepts without executing it.")
+            notes.append("This request contains shell syntax or is incomplete; Vortex Terminal will explain concepts without executing it.")
         else:
             notes.append(f"{argv[0]} would be invoked with {len(argv) - 1} argument(s). No command will be executed by ask or plan.")
         status = "clarified"
@@ -2101,7 +2101,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         target = target_match.group(1) if target_match else None
         if not target:
             status = "clarified"
-            notes.append("Provide one SSH host alias or hostname. Vortex will not read key contents or guess a target.")
+            notes.append("Provide one SSH host alias or hostname. Vortex Terminal will not read key contents or guess a target.")
         elif probe_executable("ssh")["state"] != "installed":
             status = "unavailable"; missing.append("ssh"); notes.append("TOOL MISSING: ssh; no SSH facts were observed.")
         elif active_connection:
@@ -2114,7 +2114,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 elif unknown_engagement:
                     status = "rejected"; notes.append("Engagement not found; no SSH connection was planned.")
                 else:
-                    status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex never bypasses host verification."]
+                    status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex Terminal never bypasses host verification."]
             elif not target_in_engagement(target, engagement):
                 status = "rejected"; notes.append("SSH target is outside the active engagement scope: " + target)
             elif _load("security.scope").excluded(target, engagement):
@@ -2137,7 +2137,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         authorization = "operator-controlled container mutation"
         status = "clarified"
         notes.append("Container lifecycle changes are not supported by the reviewed container adapter; no container was started, stopped, removed, pruned, or composed.")
-        notes.append("Create an explicit operator plan through the packaged tooling; Vortex will not guess a container mutation.")
+        notes.append("Create an explicit operator plan through the packaged tooling; Vortex Terminal will not guess a container mutation.")
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("log", "logs")):
         kind = "container_logs"
         runtime_info = local_container_runtime()
@@ -2201,7 +2201,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             notes.append(json.dumps(locks, sort_keys=True))
         elif package_operation in ("install", "remove") and not package_name:
             status = "clarified"
-            notes.append(f"Tell Vortex the exact package to {package_operation}; package names are parsed, not concatenated shell text.")
+            notes.append(f"Tell Vortex Terminal the exact package to {package_operation}; package names are parsed, not concatenated shell text.")
         else:
             specs.append(adapter_command("linux.packages.apt", "dpkg", ["dpkg", "--audit"], cwd, required="dpkg", explanation="Check for incomplete dpkg state before any package operation.", privilege="user"))
             if package_name:
@@ -2235,7 +2235,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 verification["expected_dpkg_state"] = "consistent"
                 specs.append(verification)
             status = "planned"
-            notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
+            notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex Terminal never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
     elif not parse_package_request(lower)[0] and any(phrase in lower for phrase in ("installed packages", "packages installed", "package inventory", "list all packages", "what packages are installed", "list installed packages", "dpkg-query")):
         kind = "plan"
         if probe_executable("dpkg-query")["state"] != "installed":
@@ -2333,7 +2333,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "show", unit, "--property=Id,Description,LoadState,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Freshly verify the {('user ' if user_mode else '')}description, active state, and persistence state of {unit} before mutation.", privilege="user"))
             specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {('user ' if user_mode else '')}{action} operation on {unit}; no sudo escalation is inferred.", privilege=privilege))
             status = "planned"
-            notes += [f"Fresh systemd {('user-bus ' if user_mode else '')}state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
+            notes += [f"Fresh systemd {('user-bus ' if user_mode else '')}state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex Terminal will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
     elif any(word in lower for word in ("sqlmap", "msfconsole", "metasploit")):
         kind = "authorized_engagement"
         risk = "high"
@@ -2372,7 +2372,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 notes += ["Active cybersecurity work requires an engagement before a target or network tool can run.", "Create an engagement with an owner/authorization reference, canonical targets, limits, and an expiry."]
         elif not targets:
             status = "clarified"
-            notes.append("Tell Vortex the exact authorized hostname, URL, IP, or CIDR target.")
+            notes.append("Tell Vortex Terminal the exact authorized hostname, URL, IP, or CIDR target.")
         else:
             try:
                 normalized = [normalize_target(t.rstrip(".,")) for t in targets]
@@ -2606,12 +2606,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         kind = "filesystem_read"
         raw_match = re.search(r"(?:show|read|open|view|cat)\s+(?:file\s+)?(/[^\s;]+)", lower)
         if not raw_match:
-            status = "clarified"; notes.append("Tell Vortex the absolute path of the text file to read.")
+            status = "clarified"; notes.append("Tell Vortex Terminal the absolute path of the text file to read.")
         else:
             candidate = safe_file_target(raw_match.group(1))
             directory = safe_directory_target(raw_match.group(1)) if candidate is None else None
             if candidate is None and directory is None:
-                status = "clarified"; notes.append("Vortex only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
+                status = "clarified"; notes.append("Vortex Terminal only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
             elif candidate is not None and probe_executable("cat")["state"] != "installed":
                 status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cat; the requested file was not read.")
             elif candidate is not None:
@@ -2803,7 +2803,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 specs.append(adapter_command("linux.systemd.journal", "journalctl", ["journalctl", "-n", "200", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation="Read the last bounded 200 systemd journal lines; this is the observed local log store on this host."))
                 status = "planned"; notes.append("No /var/log text file matched, so the bounded systemd journal was selected. Log content is untrusted evidence; no vulnerability finding is inferred.")
         elif log_path is None:
-            status = "unavailable"; notes.append("No supported log file was found; Vortex does not read arbitrary files as logs.")
+            status = "unavailable"; notes.append("No supported log file was found; Vortex Terminal does not read arbitrary files as logs.")
         elif probe_executable("tail")["state"] != "installed":
             status = "unavailable"; missing.append("tail"); notes.append("TOOL MISSING: tail; the log was not read.")
         else:
@@ -2887,18 +2887,18 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         risk = "medium"
         authorization = "operator-controlled filesystem operation"
         status = "rejected"
-        notes.append("Vortex does not create, delete, move, copy, or search the host filesystem from a natural-language ask; the reviewed plan engine only issues bounded read-only adapters.")
+        notes.append("Vortex Terminal does not create, delete, move, copy, or search the host filesystem from a natural-language ask; the reviewed plan engine only issues bounded read-only adapters.")
         notes.append("Use the PTY terminal session for an interactive shell, or create an explicit operator-controlled plan with the exact path and operation scope.")
     elif re.search(r"\b(?:show|view|display)\s+[A-Za-z0-9_-]+(?:https?)?\s+config\b", lower) or re.search(r"\b(?:show|read|view)\s+config(?:uration)?\s+(?:for|of|in)?\s*[A-Za-z0-9_-]+\b", lower):
         kind = "config_file_request"
         status = "clarified"
-        notes.append("Vortex reads configuration files only when given an exact safe absolute path. Provide e.g. /etc/nginx/nginx.conf.")
+        notes.append("Vortex Terminal reads configuration files only when given an exact safe absolute path. Provide e.g. /etc/nginx/nginx.conf.")
     elif re.search(r"\b(?:apt-get\s+update|update\s+apt|apt\s+update)\b", lower):
         kind = "package_index_update"
         risk = "medium"
         authorization = "operator-controlled package index refresh"
         status = "rejected"
-        notes.append("Vortex does not refresh the apt package index from a natural-language ask; it refuses silent third-party repository or network trust changes.")
+        notes.append("Vortex Terminal does not refresh the apt package index from a natural-language ask; it refuses silent third-party repository or network trust changes.")
         notes.append("Use the PTY terminal session for an operator-controlled apt-get update, or create an explicit reviewed plan.")
     elif sigit_slug is not None:
         kind = "osint_tool"
@@ -3056,7 +3056,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             kind = "abstain"
             status = "clarified"
-            notes += ["Vortex does not have a reviewed adapter for this request yet.", "Try system health, disk usage, listening ports, Git status, a service status query, enable host-tool access for newly installed Kali tools, or create an authorized engagement for supported reconnaissance."]
+            notes += ["Vortex Terminal does not have a reviewed adapter for this request yet.", "Try system health, disk usage, listening ports, Git status, a service status query, enable host-tool access for newly installed Kali tools, or create an authorized engagement for supported reconnaissance."]
 
     created = now_iso()
     expires = datetime.fromtimestamp(time.time() + 15 * 60, tz=timezone.utc).isoformat(timespec="milliseconds")
@@ -3746,7 +3746,7 @@ def build_undo_plan(store: Store, operation_id: str) -> dict[str, Any]:
 
 def report_markdown(operation: dict[str, Any]) -> str:
     analysis = operation.get("analysis") or {}
-    lines = ["# Linux Vortex operation report", "", f"- Status: **{operation.get('status', 'unknown')}**", f"- Operation: `{operation.get('id', '')}`", f"- Plan: `{operation.get('plan_id', '')}`", f"- Started: `{operation.get('started_at', '')}`", f"- Ended: `{operation.get('ended_at', '')}`", "", "## Observed analysis", "", str(analysis.get("fact", "No analysis was recorded.")), "", "## Command timeline", ""]
+    lines = ["# Linux Vortex Terminal operation report", "", f"- Status: **{operation.get('status', 'unknown')}**", f"- Operation: `{operation.get('id', '')}`", f"- Plan: `{operation.get('plan_id', '')}`", f"- Started: `{operation.get('started_at', '')}`", f"- Ended: `{operation.get('ended_at', '')}`", "", "## Observed analysis", "", str(analysis.get("fact", "No analysis was recorded.")), "", "## Command timeline", ""]
     for index, command in enumerate(operation.get("commands", []), 1):
         lines += [f"### {index}. `{command.get('display', '')}`", "", f"- Status: `{command.get('status')}`", f"- Exit code: `{command.get('exit_code')}`", f"- Signal: `{command.get('signal')}`", f"- Evidence digest: `{command.get('evidence_digest')}`", ""]
         if command.get("stdout"): lines += ["```text", command["stdout"], "```", ""]
@@ -3879,7 +3879,7 @@ def analysis_next_steps(plan: dict[str, Any], op: dict[str, Any]) -> list[dict[s
     if op.get("status") in {"failed", "timed_out", "cancelled", "interrupted"}:
         steps.append({"label": "diagnose", "text": "Review the failing command's output and exit status before creating any replacement plan."})
         if op.get("status") in {"failed", "timed_out"}:
-            steps.append({"label": "fresh plan", "text": "Ask for a narrower, reviewed follow-up; Vortex never silently retries a failed mutation."})
+            steps.append({"label": "fresh plan", "text": "Ask for a narrower, reviewed follow-up; Vortex Terminal never silently retries a failed mutation."})
     if not steps:
         steps.append({"label": "explain", "text": "Review the observed command timeline and evidence digests."})
     steps.append({"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."})
@@ -5473,7 +5473,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None, f
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Vortex local Linux sidecar")
+    parser = argparse.ArgumentParser(description="Vortex Terminal local Linux sidecar")
     parser.add_argument("--host", default=os.environ.get("VORTEX_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("VORTEX_PORT", "8765")))
     parser.add_argument("--token", default=os.environ.get("VORTEX_SIDECAR_TOKEN"))

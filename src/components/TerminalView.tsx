@@ -265,6 +265,26 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       try {
         const final = await watchOperation(String(operation.id), turn);
         if (!mountedRef.current) return;
+        if (String(final.status) === 'awaiting_confirmation') {
+          setIsProcessing(false);
+          setStage('');
+          appendLines([{
+            id: `preflight-${Date.now()}`, timestamp: new Date().toLocaleTimeString(),
+            type: 'warning',
+            content: 'Operation paused at a mutation preflight — review opened. Confirm the mutation to continue, or leave it paused.',
+            rawCommand: trimmed,
+          }]);
+          onOpenPopup('approvals', {
+            plan: plan as JsonRecord, guardian,
+            mutation: { operation: final as JsonRecord, approvalToken: String(plan.approval_token || '') },
+            onApproved: (done: OperationDocument) => appendOperationLines(done, trimmed),
+            onRejected: () => appendLines([{
+              id: `rej-${Date.now()}`, timestamp: new Date().toLocaleTimeString(),
+              type: 'warning', content: 'Plan rejected by operator. Nothing was executed.', rawCommand: trimmed,
+            }]),
+          });
+          return;
+        }
         appendOperationLines(final, trimmed);
       } catch (err) {
         appendLines([{

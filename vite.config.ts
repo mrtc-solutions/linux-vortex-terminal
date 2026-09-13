@@ -16,4 +16,21 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  // Dev/preview ergonomics: listen on all interfaces (sandbox previews),
+  // accept the preview host, and proxy /api to a local sidecar so
+  // `npm run dev` against `./vortex serve` just works.
+  server: {
+    host: "0.0.0.0",
+    allowedHosts: true,
+    proxy: {
+      "/api": "http://127.0.0.1:8765",
+    },
+  },
+  preview: {
+    host: "0.0.0.0",
+    allowedHosts: true,
+    proxy: {
+      "/api": "http://127.0.0.1:8765",
+    },
+  },
 });

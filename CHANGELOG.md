@@ -26,6 +26,21 @@
 - **Product naming.** User-visible surfaces now say "Vortex Terminal"
   (all-caps VORTEX TERMINAL only for the header wordmark and window titles);
   the APK label, report titles, agent name, and backend messages match.
+- **Desktop + token auth for the React shell.** API calls ride Electron IPC
+  (`window.vortexApi`) when hosted in the desktop app, with an IPC timeout
+  race; token-protected sidecars get a one-shot `#vortex-token=PASTE`
+  cookie bootstrap, and 401s explain exactly how to authenticate. Closed
+  four IPC allowlist gaps the shell needs (`plan`, operation
+  cancel/complete-task, artifact analysis, assessment reads).
+- **Mutation preflight review.** Operations that pause in
+  `awaiting_confirmation` now open a second explicit CONFIRM MUTATION step
+  (preflight digest + next command shown); leaving it paused is honest too.
+- **Task ledger cancel.** Tasks bound to a live operation offer Cancel op;
+  removed the dead `approveOperation`/`completeOperationTask` client exports.
+- **Reconnect prefers your shell.** The Host Shell popup re-attaches to its
+  own PTY session instead of grabbing whichever session lists first.
+- **Dev ergonomics.** Vite dev/preview listen on all interfaces, accept
+  preview hosts, and proxy `/api` to a local sidecar on 8765.
 
 ## 0.3.0 — 2026-09-13
 
@@ -166,7 +181,7 @@ review findings are closed so the tree is consistent at every layer.
 - PTY live ring is 400 events / 4 MiB (persisted replay 800 events) so typical
   small terminal chunks have usable scrollback without unbounded memory.
 - Privilege handoff documents the OS `sudo -v` timestamp window (~15 minutes)
-  in the CLI prompt, SECURITY.md, and USER_GUIDE. VORTEX still never sees the
+  in the CLI prompt, SECURITY.md, and USER_GUIDE. Vortex Terminal still never sees the
   password.
 - Version identity is 0.2.22 / APK code 222 across sidecar, CLI, frontend,
   APK, and `.deb`.
@@ -212,7 +227,7 @@ the decorative rain background.
   REMOVE** buttons (a `MODELS →` link opens the full installer). Model
   downloads are gated until Ollama is installed and the service is running.
   Agent install proposals are clarified: the source repository is a clickable
-  link and the window states plainly that VORTEX will not download or run
+  link and the window states plainly that Vortex Terminal will not download or run
   third-party agent code (operator-installed, license-verified by the user).
 - `backend/health.py` reports an actionable `diagnostics` step for Ollama
   (`install` / `start` / `pull` / `ok`).
@@ -303,7 +318,7 @@ before the fix and are covered by frontend regression tests.
 
 ## 0.2.19 — 2026-08-28
 
-- Host PATH scanner discovers Kali/Linux tools that were installed after VORTEX
+- Host PATH scanner discovers Kali/Linux tools that were installed after Vortex Terminal
   started, including binaries outside the builtin catalog. Newly seen names are
   marked `new_since_last_scan`. `GET /api/tools/host`, `POST /api/tools/host/rescan`,
   and `./vortex host-tools` expose the live inventory.
@@ -344,7 +359,7 @@ before it was fixed and covered by a regression test. Test suite 141 → 153.
 
 ## 0.2.17 — 2026-08-27
 
-- Electron now uses a VORTEX-owned Linux title bar with working minimize,
+- Electron now uses a Vortex Terminal-owned Linux title bar with working minimize,
   maximize/restore, close, drag, and double-click-to-maximize behavior. First-run,
   dependency, and terminal windows expose the same visible controls; closing the
   terminal panel preserves live PTY sessions.
@@ -450,7 +465,7 @@ before it was fixed and covered by a regression test. Test suite 141 → 153.
 
 - HTTP `/api/execute` never accepts `allow_root`. Offline policy cannot be
   cleared by the renderer. GET `/api/plans/{id}` omits the approval token.
-- HTTP backups must land inside the VORTEX data directory.
+- HTTP backups must land inside the Vortex Terminal data directory.
 - Safe profile always confirms: settings cannot enable auto-run, medium auto,
   root, or a non-loopback Ollama endpoint.
 
@@ -459,7 +474,7 @@ before it was fixed and covered by a regression test. Test suite 141 → 153.
 - Unknown, closed, or expired engagement IDs cannot plan outbound work and
   are not bound onto local diagnostics.
 - Guardian matches `mkfs.ext4`-style destructive stems. HTTP artifact analyze
-  stays inside the VORTEX data directory. Wordlists must live under `/usr/share`
+  stays inside the Vortex Terminal data directory. Wordlists must live under `/usr/share`
   or the data directory; `/etc/passwd` is never accepted.
 - sqlmap/msfconsole requests stay UNAVAILABLE with no fabricated command.
 

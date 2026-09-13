@@ -75,11 +75,14 @@ export function App() {
         const guardian = (props.guardian || {}) as JsonRecord;
         const onApproved = (props.onApproved as ((op: OperationDocument) => void) | undefined) || (() => undefined);
         const onRejected = (props.onRejected as (() => void) | undefined) || (() => undefined);
+        const mutation = (props.mutation && typeof props.mutation === 'object'
+          ? props.mutation as { operation: OperationDocument; approvalToken: string }
+          : undefined);
         spec = {
-          id, title: 'GUARDIAN PLAN REVIEW',
+          id, title: mutation ? 'MUTATION PREFLIGHT REVIEW' : 'GUARDIAN PLAN REVIEW',
           icon: <ShieldCheck className="w-3.5 h-3.5 text-[var(--theme-primary)]" />,
           width: 680, height: 560,
-          content: <Approvals plan={plan} guardian={guardian} onApproved={onApproved} onRejected={onRejected} onClose={close} />,
+          content: <Approvals plan={plan} guardian={guardian} onApproved={onApproved} onRejected={onRejected} onClose={close} mutation={mutation} />,
         };
         break;
       }

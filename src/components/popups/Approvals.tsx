@@ -1,8 +1,11 @@
-/* Guardian plan-review popup — approve & execute, or reject. Real routes only. */
+/* Guardian plan-review popup — approve & execute, or reject. Real routes only.
+   Also hosts the second confirmation step: when a mutation operation pauses in
+   `awaiting_confirmation` (preflight), this popup offers CONFIRM MUTATION —
+   there is no other surface that can complete that gate. */
 import React, { useState } from 'react';
-import { ShieldCheck, ShieldX, Play, Loader2 } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, ShieldX, Play, Loader2 } from 'lucide-react';
 import { JsonRecord, OperationDocument, PlanDocument, TurnResult, rejectPlan } from '../../services/vortexApi';
-import { executePlan, watchOperation } from '../../services/turnRunner';
+import { approveMutation, executePlan, watchOperation } from '../../services/turnRunner';
 import { sound } from '../../services/soundEffects';
 
 interface ApprovalsProps {
@@ -11,6 +14,7 @@ interface ApprovalsProps {
   onApproved: (operation: OperationDocument) => void;
   onRejected: () => void;
   onClose: () => void;
+  mutation?: { operation: OperationDocument; approvalToken: string };
 }
 
 function riskColor(risk: string): string {
@@ -19,16 +23,34 @@ function riskColor(risk: string): string {
   return 'text-emerald-400 border-emerald-800 bg-emerald-950/40';
 }
 
-export const Approvals: React.FC<ApprovalsProps> = ({ plan, guardian, onApproved, onRejected, onClose }) => {
+export const Approvals: React.FC<ApprovalsProps> = ({ plan, guardian, onApproved, onRejected, onClose, mutation }) => {
   const [busy, setBusy] = useState(false);
   const [liveStatus, setLiveStatus] = useState('');
   const [error, setError] = useState('');
+  const [pendingMutation, setPendingMutation] = useState<OperationDocument | null>(() => {
+    const op = mutation?.operation;
+    return op && String(op.status) === 'awaiting_confirmation' ? op : null;
+  });
 
   const commands = Array.isArray(plan.commands) ? plan.commands as JsonRecord[] : [];
   const notes = Array.isArray(plan.notes) ? (plan.notes as unknown[]).map(String) : [];
   const reasons = Array.isArray(guardian.reasons) ? (guardian.reasons as unknown[]).map(String) : [];
   const risk = String(guardian.risk || plan.risk || 'unknown');
   const decision = String(guardian.decision || 'review');
+  const approvalToken = String(mutation?.approvalToken || plan.approval_token || '');
+
+  const finishOrPreflight = async (operation: OperationDocument) => {
+    if (String(operation.status) === 'awaiting_confirmation') {
+      setPendingMutation(operation);
+      setBusy(false);
+      setLiveStatus('');
+      sound.playAlert();
+      return;
+    }
+    sound.playSuccess();
+    onApproved(operation);
+    onClose();
+  };
 
   const handleApprove = async () => {
     if (busy) return;
@@ -37,14 +59,43 @@ export const Approvals: React.FC<ApprovalsProps> = ({ plan, guardian, onApproved
     setLiveStatus('Starting approved execution…');
     sound.playExecute();
     try {
-      const operation = await executePlan(String(plan.id), String(plan.approval_token || ''));
+      const operation = await executePlan(String(plan.id), approvalToken);
+      if (String(operation.status) === 'awaiting_confirmation') {
+        await finishOrPreflight(operation);
+        return;
+      }
       setLiveStatus(`Running (${operation.status || 'started'})… streaming real output.`);
       const final = await watchOperation(String(operation.id), { plan } as unknown as TurnResult, {
         onLive: (live) => setLiveStatus(`Running (${String(live.status || 'running')})… streaming real output.`),
       });
-      sound.playSuccess();
-      onApproved(final);
-      onClose();
+      await finishOrPreflight(final);
+    } catch (err) {
+      sound.playAlert();
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+      setLiveStatus('');
+    }
+  };
+
+  const handleConfirmMutation = async () => {
+    if (busy || !pendingMutation) return;
+    const digest = String((pendingMutation as JsonRecord).preflight_digest || '');
+    if (!approvalToken || !digest) {
+      setError('Cannot confirm: the approval token or preflight digest is missing. Re-run the request for a fresh plan.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setLiveStatus('Confirming mutation preflight…');
+    sound.playExecute();
+    try {
+      const resumed = await approveMutation(String(pendingMutation.id), approvalToken, digest);
+      setPendingMutation(null);
+      setLiveStatus(`Running (${resumed.status || 'started'})… streaming real output.`);
+      const final = await watchOperation(String(resumed.id), { plan } as unknown as TurnResult, {
+        onLive: (live) => setLiveStatus(`Running (${String(live.status || 'running')})… streaming real output.`),
+      });
+      await finishOrPreflight(final);
     } catch (err) {
       sound.playAlert();
       setError(err instanceof Error ? err.message : String(err));
@@ -68,6 +119,66 @@ export const Approvals: React.FC<ApprovalsProps> = ({ plan, guardian, onApproved
       setBusy(false);
     }
   };
+
+  if (pendingMutation) {
+    const op = pendingMutation as JsonRecord;
+    const preflight = (op.preflight && typeof op.preflight === 'object' ? op.preflight : {}) as JsonRecord;
+    const ran = Array.isArray(op.commands) ? (op.commands as unknown[]).length : 0;
+    return (
+      <div className="p-4 space-y-3 text-stone-300">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded border text-amber-400 border-amber-800 bg-amber-950/40">
+            MUTATION PREFLIGHT
+          </span>
+          <span className="text-[11px] text-stone-500 font-mono">op {String(op.id || '').slice(0, 12)}…</span>
+        </div>
+        <div className="text-[11px] leading-relaxed p-2 rounded bg-black/50 border border-amber-900/40 flex gap-1.5">
+          <ShieldAlert className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400" />
+          <span>
+            The operation paused before a mutating step and will not continue without this second,
+            explicit confirmation. {ran} command{ran === 1 ? '' : 's'} already ran.
+            {preflight.next_command ? (
+              <> Next: <span className="font-mono text-stone-200">{String(preflight.next_command).slice(0, 120)}</span></>
+            ) : null}
+          </span>
+        </div>
+        <div className="text-[10px] text-stone-600 font-mono break-all">
+          preflight {String(op.preflight_digest || 'unknown').slice(0, 32)}…
+        </div>
+
+        {liveStatus && (
+          <div className="flex items-center gap-2 text-[11px] text-[var(--theme-primary)]">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span>{liveStatus}</span>
+          </div>
+        )}
+
+        {error && (
+          <div className="text-[11px] text-rose-400 p-2 rounded bg-rose-950/20 border border-rose-900/40 whitespace-pre-wrap">
+            {error}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            onClick={handleConfirmMutation}
+            disabled={busy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[var(--theme-primary)] text-black font-bold text-xs hover:opacity-90 disabled:opacity-40 transition-opacity cursor-pointer"
+          >
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            <span>CONFIRM MUTATION</span>
+          </button>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[var(--theme-border)] text-stone-300 font-bold text-xs hover:bg-black/60 disabled:opacity-40 transition-colors cursor-pointer"
+          >
+            <span>LEAVE PAUSED</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 space-y-3 text-stone-300">

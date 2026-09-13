@@ -144,6 +144,14 @@ assert.strictEqual(isAllowedApiRequest('/api/tasks/abc123/events', 'GET'), true)
 assert.strictEqual(isAllowedApiRequest('/api/license', 'POST'), false);
 assert.strictEqual(isAllowedApiRequest('/api/artifacts', 'POST'), false);
 assert.strictEqual(isAllowedApiRequest('/api/tasks/abc123/episode', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/plan', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/operations/abc/cancel', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/operations/abc/complete-task', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/artifacts/analyze', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/reports/assessment/eng123', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/plan', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/artifacts/analyze', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/operations/abc/delete', 'POST'), false);
 assert.strictEqual(isAllowedApiRequest('/api/models/../../etc/passwd', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/execute', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/store/backup', 'POST'), false);

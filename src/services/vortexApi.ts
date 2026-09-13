@@ -1,6 +1,9 @@
 /* Vortex Terminal sidecar API client — the ONLY bridge between the React shell and reality.
    Every function below calls the loopback Python sidecar (127.0.0.1:8765);
-   nothing here fabricates data. All failures surface honestly to the caller. */
+   nothing here fabricates data. All failures surface honestly to the caller.
+   Transports: Electron IPC (window.vortexApi) when hosted in the desktop app,
+   else direct fetch — with a one-shot #vortex-token=PASTE cookie bootstrap
+   for token-protected sidecars. Streams and downloads ride the same session. */
 
 export interface ApiErrorShape {
   status: number;
@@ -40,12 +43,110 @@ function toError(status: number, payload: Record<string, unknown>, fallback: str
   });
 }
 
+/* ---------------- Auth transports: Electron IPC or browser session ---------------- */
+
+interface ElectronBridge {
+  request: (route: string, options?: { method?: string; body?: unknown }) => Promise<unknown>;
+}
+
+function electronBridge(): ElectronBridge | null {
+  try {
+    const candidate = (window as unknown as { vortexApi?: { request?: unknown } }).vortexApi;
+    if (candidate && typeof candidate.request === 'function') return candidate as ElectronBridge;
+  } catch {
+    /* no Electron bridge in this context */
+  }
+  return null;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, what: string): Promise<T> {
+  void promise.catch(() => {});
+  let timer = 0;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => reject(new ApiError({
+      status: 0,
+      code: 'timeout',
+      message: `${what} timed out after ${Math.round(timeoutMs / 1000)}s. The sidecar may be busy — retry the action.`,
+    })), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer)) as Promise<T>;
+}
+
+// Token-protected sidecars (remote or `--token`) mint a cookie session from a
+// capability the operator appends once as a URL fragment: #vortex-token=PASTE.
+// The fragment is consumed and stripped before any API call runs.
+let browserCapability = '';
+let capabilityConsumed = false;
+let sessionPromise: Promise<void> | null = null;
+
+function consumeCapabilityFragment(): string {
+  if (capabilityConsumed) return browserCapability;
+  capabilityConsumed = true;
+  try {
+    const match = (window.location.hash || '').match(/vortex-token=([^&]+)/);
+    if (match?.[1]) {
+      browserCapability = decodeURIComponent(match[1]).slice(0, 256);
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  } catch {
+    /* location unavailable (non-browser context) */
+  }
+  return browserCapability;
+}
+
+async function ensureBrowserSession(): Promise<void> {
+  if (electronBridge()) return;
+  if (!consumeCapabilityFragment()) return;
+  if (!sessionPromise) {
+    const token = browserCapability;
+    browserCapability = '';
+    sessionPromise = (async () => {
+      const response = await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Vortex-Token': token },
+        body: '{}',
+      });
+      if (!response.ok) {
+        sessionPromise = null;
+        throw new ApiError({
+          status: response.status,
+          code: 'unauthorized',
+          message: 'The sidecar capability was rejected. Check the token printed at sidecar startup and retry with #vortex-token=PASTE.',
+        });
+      }
+    })();
+  }
+  return sessionPromise;
+}
+
+function unauthorizedError(path: string): ApiError {
+  return new ApiError({
+    status: 401,
+    code: 'unauthorized',
+    message: `Sidecar rejected ${path} (401): it requires the capability token printed at startup. Reload with #vortex-token=PASTE, then retry.`,
+  });
+}
+
 export async function apiGet<T = Record<string, unknown>>(path: string, timeoutMs = 15000): Promise<T> {
+  const bridge = electronBridge();
+  if (bridge) {
+    try {
+      const payload = await withTimeout(
+        Promise.resolve(bridge.request(path, { method: 'GET' })), timeoutMs, `GET ${path}`,
+      );
+      return payload as T;
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      throw new ApiError({ status: 0, code: 'sidecar', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  await ensureBrowserSession();
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(path, { method: 'GET', signal: controller.signal });
     const payload = await parseJson(response);
+    if (response.status === 401) throw unauthorizedError(`GET ${path}`);
     if (!response.ok) throw toError(response.status, payload, `GET ${path} failed (${response.status})`);
     return payload as T;
   } catch (err) {
@@ -62,6 +163,19 @@ export async function apiGet<T = Record<string, unknown>>(path: string, timeoutM
 export async function apiPost<T = Record<string, unknown>>(
   path: string, body: Record<string, unknown> = {}, timeoutMs = 60000,
 ): Promise<T> {
+  const bridge = electronBridge();
+  if (bridge) {
+    try {
+      const payload = await withTimeout(
+        Promise.resolve(bridge.request(path, { method: 'POST', body })), timeoutMs, `POST ${path}`,
+      );
+      return payload as T;
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      throw new ApiError({ status: 0, code: 'sidecar', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  await ensureBrowserSession();
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -72,6 +186,7 @@ export async function apiPost<T = Record<string, unknown>>(
       signal: controller.signal,
     });
     const payload = await parseJson(response);
+    if (response.status === 401) throw unauthorizedError(`POST ${path}`);
     if (!response.ok) throw toError(response.status, payload, `POST ${path} failed (${response.status})`);
     return payload as T;
   } catch (err) {
@@ -86,7 +201,9 @@ export async function apiPost<T = Record<string, unknown>>(
 }
 
 export async function apiDownload(path: string, filename: string): Promise<void> {
+  await ensureBrowserSession();
   const response = await fetch(path, { method: 'GET' });
+  if (response.status === 401) throw unauthorizedError(`download ${path}`);
   if (!response.ok) throw new ApiError({ status: response.status, code: `http_${response.status}`, message: `Download failed (${response.status})` });
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -191,14 +308,8 @@ export const requestAssist = (fnName: string, request: string) =>
 export const getOperation = (id: string) =>
   apiGet<{ operation?: OperationDocument } & JsonRecord>(`/api/operations/${encodeURIComponent(id)}`);
 
-export const approveOperation = (id: string) =>
-  apiPost<JsonRecord>(`/api/operations/${encodeURIComponent(id)}/approve`, {}, 120000);
-
 export const cancelOperation = (id: string) =>
   apiPost<JsonRecord>(`/api/operations/${encodeURIComponent(id)}/cancel`);
-
-export const completeOperationTask = (id: string) =>
-  apiPost<JsonRecord>(`/api/operations/${encodeURIComponent(id)}/complete-task`);
 
 export const rejectPlan = (id: string) =>
   apiPost<JsonRecord>(`/api/plans/${encodeURIComponent(id)}/reject`);

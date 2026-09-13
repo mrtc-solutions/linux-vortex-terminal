@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * `npm start` entry for the VORTEX desktop shell.
+ * `npm start` entry for the Vortex Terminal desktop shell.
  *
  * Guarantees the Electron platform binary exists (downloading it with
  * mirror fallback when needed) before launching, so a failed first start

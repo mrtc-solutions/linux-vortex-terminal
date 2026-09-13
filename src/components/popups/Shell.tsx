@@ -58,10 +58,12 @@ export const Shell: React.FC = () => {
       const sessions = (existing && Array.isArray((existing as JsonRecord).sessions)
         ? (existing as JsonRecord).sessions as JsonRecord[] : [])
         .filter((item) => item.status === 'running' || !item.status);
-      if (sessions.length > 0 && typeof sessions[0].id === 'string') {
-        setSessionId(sessions[0].id as string);
+      const mine = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+      const target = mine || sessions[0];
+      if (target && typeof target.id === 'string') {
+        setSessionId(target.id as string);
         setStatus('running');
-        attach(sessions[0].id as string);
+        attach(target.id as string);
         return;
       }
       const created = await openSession();

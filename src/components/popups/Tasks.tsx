@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ListChecks, Loader2, RefreshCw } from 'lucide-react';
 import {
-  JsonRecord, TaskDocument, deleteTask, getTaskEvents, listTasks,
+  JsonRecord, TaskDocument, cancelOperation, deleteTask, getTaskEvents, listTasks,
   pauseTask, restartTask, resumeTask,
 } from '../../services/vortexApi';
 import { DangerButton, EmptyLine, ErrorLine, GhostButton, Section, StateBadge } from './common';
@@ -84,6 +84,11 @@ export const Tasks: React.FC = () => {
         <GhostButton onClick={() => void run(`restart-${task.id}`, () => restartTask(String(task.id)))} disabled={!!busy}>
           {busy === `restart-${task.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Restart'}
         </GhostButton>
+        {task.operation_id ? (
+          <GhostButton onClick={() => void run(`cancel-${task.id}`, () => cancelOperation(String(task.operation_id)))} disabled={!!busy}>
+            {busy === `cancel-${task.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Cancel op'}
+          </GhostButton>
+        ) : null}
         <DangerButton onClick={() => void run(`delete-${task.id}`, () => deleteTask(String(task.id)))} disabled={!!busy}>
           {busy === `delete-${task.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Delete'}
         </DangerButton>

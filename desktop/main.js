@@ -90,7 +90,7 @@ function startSidecar() {
     child.on('error', error => {
       if (!settled) fail(error);
       else if (!quitting) {
-        dialog.showErrorBox('VORTEX sidecar error', String(error.message || error));
+        dialog.showErrorBox('Vortex Terminal sidecar error', String(error.message || error));
         app.quit();
       }
     });
@@ -98,7 +98,7 @@ function startSidecar() {
       if (!settled) {
         fail(new Error(`sidecar exited before boot (${signalName || code})`));
       } else if (!bootFailed && !quitting && !stoppingSidecar) {
-        dialog.showErrorBox('VORTEX sidecar stopped', `The local sidecar exited unexpectedly (${signalName || code}).`);
+        dialog.showErrorBox('Vortex Terminal sidecar stopped', `The local sidecar exited unexpectedly (${signalName || code}).`);
         app.quit();
       }
     });
@@ -143,10 +143,10 @@ function secureNavigation(win) {
 
 function createWindow() {
   const win = new BrowserWindow({
-    title: 'VORTEX // Linux Orchestration',
+    title: 'Vortex Terminal // Linux Orchestration',
     width: 1440, height: 940, minWidth: 960, minHeight: 680,
     backgroundColor: '#0a0a0c', show: false,
-    // Linux desktop decorations vary by window manager. VORTEX owns a visible,
+    // Linux desktop decorations vary by window manager. Vortex Terminal owns a visible,
     // tested title bar so minimize/maximize/close remain available everywhere.
     frame: false,
     autoHideMenuBar: true,
@@ -181,7 +181,7 @@ function createWindow() {
   });
   win.loadURL(`${sidecarUrl}/`).catch(error => {
     if (!quitting) {
-      dialog.showErrorBox('VORTEX failed to load', error.message);
+      dialog.showErrorBox('Vortex Terminal failed to load', error.message);
       app.quit();
     }
   });
@@ -209,7 +209,7 @@ app.whenReady().then(async () => {
   createWindow();
 }).catch(error => {
   process.stderr.write(`[vortex-desktop] startup failed: ${error.stack || error}\n`);
-  dialog.showErrorBox('VORTEX could not start', String(error.message || error));
+  dialog.showErrorBox('Vortex Terminal could not start', String(error.message || error));
   app.quit();
 });
 
