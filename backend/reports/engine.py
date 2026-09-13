@@ -168,11 +168,11 @@ def render_system(fmt: str, doctor: dict[str, Any], tools: list[dict[str, Any]])
         "id": "system",
         "plan_id": "",
         "status": "observed",
-        "started_at": doctor.get("cwd"),
+        "started_at": "",
         "ended_at": "",
         "commands": [],
         "analysis": {
-            "fact": f"Observed {doc['tools_installed']} installed tools on {doctor.get('distribution', {}).get('pretty_name')}.",
+            "fact": f"Observed {doc['tools_installed']} installed tools on {doctor.get('distribution', {}).get('pretty_name')} (sidecar cwd {doctor.get('cwd') or 'unknown'}).",
             "inference": "This is a host inventory, not a security finding.",
             "unknown": "Package and service completeness is limited to probed binaries.",
         },

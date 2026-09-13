@@ -4832,6 +4832,9 @@ class VortexHandler(BaseHTTPRequestHandler):
         expected_sha256: str,
     ) -> None:
         """Verify and stream a package without following links or buffering it."""
+        safe_name = "".join(c for c in str(filename or "") if c.isascii() and (c.isalnum() or c in "._-+"))[:128]
+        if not safe_name:
+            safe_name = "download.bin"
         try:
             with open_owner_binary(path, max_bytes=max_bytes) as (handle, details):
                 digest_state = hashlib.sha256()
@@ -4842,7 +4845,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 handle.seek(0)
                 self.send_response(200)
                 self._headers(content_type)
-                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
                 self.send_header("Content-Length", str(details.st_size))
                 self.end_headers()
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
