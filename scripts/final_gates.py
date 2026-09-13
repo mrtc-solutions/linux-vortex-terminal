@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VORTEX final audit: 10 real gates, 10/10 required.
+"""Vortex Terminal final audit: 10 real gates, 10/10 required.
 
 Every gate executes genuine checks against this tree (no simulation):
 unit suites, lint, JS suites, the GGUF provider chain, fuzzy routing,
@@ -345,7 +345,7 @@ def gate_security() -> None:
 
 
 def main() -> int:
-    print("VORTEX final audit — 10 gates, real execution, no simulation.", flush=True)
+    print("Vortex Terminal final audit — 10 gates, real execution, no simulation.", flush=True)
     gate_unit_suite()
     gate_lint()
     gate_js_suites()

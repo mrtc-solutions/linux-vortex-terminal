@@ -155,7 +155,7 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     except Exception:
         ai_hint = {"function": "health", "available": False, "hint": ""}
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "offline": settings.get("offline") is True,
         "privacy_mode": settings.get("privacy_mode") or "local",
         "host": doctor,
@@ -218,7 +218,7 @@ def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str
     ]
     blocking = [step for step in steps if step["required"] and not step["ok"]]
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "first_run_complete": settings.get("first_run_complete") is True,
         "ready": not blocking,
         "blocking": [step["id"] for step in blocking],

@@ -11,7 +11,7 @@ def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None
     task = task or {}
     analysis = operation.get("analysis") or {}
     lines = [
-        "VORTEX operation report",
+        "Vortex Terminal operation report",
         "",
         f"Task: {task.get('id') or 'n/a'}",
         f"Status: {operation.get('status') or task.get('state') or 'unknown'}",
@@ -86,15 +86,15 @@ def to_html(operation: dict[str, Any], plan: dict[str, Any] | None = None, task:
     body = "<br>\n".join(html.escape(line) if line else "<br>" for line in lines)
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
-        "<title>VORTEX report</title>"
+        "<title>Vortex Terminal report</title>"
         "<style>body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0a0a0c;color:#f0f0f4;padding:32px;line-height:1.5}"
         "pre,code{font-family:ui-monospace,monospace;color:#00d4aa}</style></head><body>"
-        f"<h1>VORTEX report</h1><p>{body}</p></body></html>"
+        f"<h1>Vortex Terminal report</h1><p>{body}</p></body></html>"
     )
 
 
 def to_json(operation: dict[str, Any], plan: dict[str, Any] | None = None, task: dict[str, Any] | None = None) -> str:
-    return json.dumps({"schema_version": 1, "product": "VORTEX", "task": task or {}, "plan": plan or {}, "operation": operation}, indent=2, sort_keys=True, ensure_ascii=True)
+    return json.dumps({"schema_version": 1, "product": "Vortex Terminal", "task": task or {}, "plan": plan or {}, "operation": operation}, indent=2, sort_keys=True, ensure_ascii=True)
 
 
 def _pdf_escape(text: str) -> str:
@@ -154,7 +154,7 @@ def system_document(doctor: dict[str, Any], tools: list[dict[str, Any]]) -> dict
     installed = [item for item in tools if item.get("state") == "installed"]
     return {
         "kind": "system",
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "host": doctor,
         "tools_installed": len(installed),
         "tools_catalog": len(tools),

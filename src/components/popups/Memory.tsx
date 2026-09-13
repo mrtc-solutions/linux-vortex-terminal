@@ -96,7 +96,7 @@ export const Memory: React.FC = () => {
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            placeholder="What should VORTEX remember? Facts, preferences, runbooks…"
+            placeholder="What should Vortex Terminal remember? Facts, preferences, runbooks…"
             rows={3}
             spellCheck={false}
             className={`${inputCls} resize-y`}

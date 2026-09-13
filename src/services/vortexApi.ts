@@ -1,4 +1,4 @@
-/* VORTEX sidecar API client — the ONLY bridge between the React shell and reality.
+/* Vortex Terminal sidecar API client — the ONLY bridge between the React shell and reality.
    Every function below calls the loopback Python sidecar (127.0.0.1:8765);
    nothing here fabricates data. All failures surface honestly to the caller. */
 
@@ -50,7 +50,10 @@ export async function apiGet<T = Record<string, unknown>>(path: string, timeoutM
     return payload as T;
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    throw new ApiError({ status: 0, code: 'network', message: `Sidecar unreachable at ${path}. Is VORTEX running?` });
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ApiError({ status: 0, code: 'timeout', message: `Sidecar did not answer GET ${path} within ${Math.round(timeoutMs / 1000)}s. It may be busy (model loading, scan running) — retry the action.` });
+    }
+    throw new ApiError({ status: 0, code: 'network', message: `Sidecar unreachable at ${path}. Is Vortex Terminal running?` });
   } finally {
     window.clearTimeout(timer);
   }
@@ -73,7 +76,10 @@ export async function apiPost<T = Record<string, unknown>>(
     return payload as T;
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    throw new ApiError({ status: 0, code: 'network', message: `Sidecar unreachable at ${path}. Is VORTEX running?` });
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ApiError({ status: 0, code: 'timeout', message: `Sidecar did not answer POST ${path} within ${Math.round(timeoutMs / 1000)}s. It may be busy (model loading, scan running) — retry the action.` });
+    }
+    throw new ApiError({ status: 0, code: 'network', message: `Sidecar unreachable at ${path}. Is Vortex Terminal running?` });
   } finally {
     window.clearTimeout(timer);
   }
@@ -313,6 +319,18 @@ export const searchAll = (query: string) =>
   apiGet<JsonRecord>(`/api/search?q=${encodeURIComponent(query)}`);
 export const analyzeArtifact = (path: string, kind = 'auto') =>
   apiPost<JsonRecord>('/api/artifacts/analyze', { path, kind });
+
+/* ---------------- License / installable packages ---------------- */
+
+export const getLicense = () => apiGet<JsonRecord>('/api/license');
+export const getApkStatus = () => apiGet<JsonRecord>('/api/mobile/apk');
+export const syncApk = (sidecarUrl?: string) =>
+  apiPost<JsonRecord>('/api/mobile/apk', sidecarUrl ? { sidecar_url: sidecarUrl } : {}, 300000);
+export const downloadApk = () => apiDownload('/api/mobile/apk/download', 'vortex.apk');
+export const getDebStatus = () => apiGet<JsonRecord>('/api/desktop/deb');
+export const buildDeb = () => apiPost<JsonRecord>('/api/desktop/deb', {}, 300000);
+export const downloadDeb = (filename: string) =>
+  apiDownload('/api/desktop/deb/download', filename || 'vortex-terminal.deb');
 
 /* ---------------- Real PTY sessions ---------------- */
 

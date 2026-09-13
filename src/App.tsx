@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   ShieldCheck, TerminalSquare, ListChecks, Crosshair, Wrench, BrainCircuit,
   Activity, History as HistoryIcon, Database, Settings as SettingsIcon, LayoutGrid,
-  Bot, CircleHelp,
+  Bot, CircleHelp, Info as InfoIcon,
 } from 'lucide-react';
 import { ThemeMode, FuzzyConsensusResult } from './types/terminal';
 import { sound } from './services/soundEffects';
@@ -32,6 +32,7 @@ import { SettingsPanel } from './components/popups/SettingsPanel';
 import { Launcher } from './components/popups/Launcher';
 import { AiOps } from './components/popups/AiOps';
 import { Help } from './components/popups/Help';
+import { About } from './components/popups/About';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<'terminal' | 'map' | 'out' | 'report' | 'fuzzy' | 'agent-reach'>('terminal');
@@ -116,7 +117,7 @@ export function App() {
         break;
       case 'launcher':
         spec = {
-          id, title: 'VORTEX START MENU',
+          id, title: 'VORTEX TERMINAL START MENU',
           icon: <LayoutGrid className="w-3.5 h-3.5 text-[var(--theme-primary)]" />,
           width: 600, height: 480,
           content: <Launcher onGoTab={(tab) => setActiveTab(tab)} onOpenPopup={(kind) => openPopup(kind)} onClose={close} />,
@@ -126,7 +127,10 @@ export function App() {
         spec = { id, title: 'AI OPERATIONS', icon: <Bot className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 640, height: 560, content: <AiOps /> };
         break;
       case 'helpwin':
-        spec = { id, title: 'VORTEX HELP', icon: <CircleHelp className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 600, height: 540, content: <Help onOpenPopup={(kind) => openPopup(kind)} /> };
+        spec = { id, title: 'VORTEX TERMINAL HELP', icon: <CircleHelp className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 600, height: 540, content: <Help onOpenPopup={(kind) => openPopup(kind)} /> };
+        break;
+      case 'about':
+        spec = { id, title: 'ABOUT · DOWNLOADS · LICENSE', icon: <InfoIcon className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 620, height: 600, content: <About /> };
         break;
       default:
         return;

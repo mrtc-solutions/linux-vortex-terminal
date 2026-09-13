@@ -140,7 +140,7 @@ def encode_manifest(
     package: str = "io.vortex.mobile",
     version_code: int = 219,
     version_name: str = "0.2.23",
-    label: str = "VORTEX",
+    label: str = "Vortex Terminal",
     activity: str = "io.vortex.mobile.MainActivity",
     min_sdk: int = 21,
     target_sdk: int = 34,

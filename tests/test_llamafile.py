@@ -346,6 +346,42 @@ class LlamafileTests(unittest.TestCase):
         self.assertEqual(result["state"], "responded")
         self.assertEqual(result["provider"], "llamafile")
 
+    def test_router_uses_external_server_without_registered_model(self):
+        # No GGUF import and no binary: an operator-configured loopback
+        # llamafile server alone must still serve advisory through the
+        # model it actually serves. Uses the real HTTP chat path.
+        from backend.models.router import advise, choose_route, model_status
+        _FakeLlamafileServer.model_id = "external-3b-q4"
+        self.addCleanup(setattr, _FakeLlamafileServer, "model_id", "test-model.gguf")
+        _, endpoint = self._start_fake()
+        settings = {"ai_enabled": True, "ollama_endpoint": "http://127.0.0.1:9",
+                    "llamafile_endpoint": endpoint, "model_timeout_seconds": 10}
+        snapshot = model_status(settings)
+        self.assertEqual(snapshot["llamafile"]["state"], "healthy")
+        self.assertEqual(snapshot["fuzzy"]["winner"], "llamafile")
+        route = choose_route("hello", phase="conversation", settings=settings, status=snapshot)
+        self.assertEqual(route["primary_provider"], "llamafile")
+        self.assertEqual(route["selected"][0]["model"], "external-3b-q4")
+        result = advise("hello", phase="conversation", settings=settings)
+        self.assertEqual(result["state"], "responded")
+        self.assertEqual(result["provider"], "llamafile")
+        self.assertEqual(result["synthesis"]["fact_summary"], "stub summary")
+
+    def test_chat_and_server_state_merge_saved_endpoint(self):
+        # Partial settings dicts (e.g. {"model_timeout_seconds": 5}) must
+        # still resolve the saved llamafile_endpoint for chat + probes.
+        from backend.config import save_settings
+        _FakeLlamafileServer.model_id = "saved-endpoint-model"
+        self.addCleanup(setattr, _FakeLlamafileServer, "model_id", "test-model.gguf")
+        _, endpoint = self._start_fake()
+        save_settings({"llamafile_endpoint": endpoint})
+        state = llamafile.server_state({"model_timeout_seconds": 5})
+        self.assertEqual(state["state"], "external")
+        self.assertEqual(state["endpoint"], endpoint)
+        result = llamafile.chat([{"role": "user", "content": "hi"}], "saved-endpoint-model",
+                                {"model_timeout_seconds": 5}, timeout=10)
+        self.assertIn("stub summary", result["text"])
+
     def test_router_falls_back_when_llamafile_absent(self):
         from backend.models.router import model_status
         settings = {"ai_enabled": True, "ollama_endpoint": "http://127.0.0.1:9"}

@@ -71,6 +71,6 @@ def list_manifests() -> list[dict[str, Any]]:
             "source": source,
             "executable": False,
             "status": "manifest-only",
-            "message": "Manifest recorded. VORTEX will not import or execute plugin code from this directory.",
+            "message": "Manifest recorded. Vortex Terminal will not import or execute plugin code from this directory.",
         })
     return items

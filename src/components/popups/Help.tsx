@@ -22,7 +22,7 @@ export const Help: React.FC<HelpProps> = ({ onOpenPopup }) => {
     <div className="p-4 space-y-4 text-stone-300">
       <div className="flex items-center gap-2">
         <CircleHelp className="w-4 h-4 text-[var(--theme-primary)]" />
-        <span className="text-[12px] font-bold text-stone-200">VORTEX operator help</span>
+        <span className="text-[12px] font-bold text-stone-200">Vortex Terminal operator help</span>
       </div>
 
       <Section title="How a turn works">
@@ -48,7 +48,8 @@ export const Help: React.FC<HelpProps> = ({ onOpenPopup }) => {
           <Row keys="models · system" what="Open local-AI models or system health." />
           <Row keys="history · memory" what="Open conversations or durable memory." />
           <Row keys="settings · aiops" what="Open policy settings or the AI Ops advisory trace." />
-          <Row keys="launcher" what="Open the VORTEX start menu." />
+          <Row keys="launcher" what="Open the Vortex Terminal start menu." />
+          <Row keys="about" what="Open About: version, MIT license, Android APK and Linux DEB downloads." />
         </div>
       </Section>
 

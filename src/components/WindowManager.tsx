@@ -1,4 +1,4 @@
-/* VORTEX popup window manager — every secondary surface opens here.
+/* Vortex Terminal popup window manager — every secondary surface opens here.
    Minimize / maximize / close + restore tray + focus order + Esc to close.
    Windows are lazy: content mounts only while the popup is open. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';

@@ -109,7 +109,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
               onOpenLauncher();
               sound.playKeypress();
             }}
-            title="VORTEX start menu"
+            title="Vortex Terminal start menu"
             className="p-1.5 rounded bg-[var(--theme-primary)] text-black hover:opacity-90 transition-opacity cursor-pointer"
           >
             <LayoutGrid className="w-4 h-4" />
@@ -121,7 +121,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             </div>
             <div className="font-bold tracking-widest text-sm flex items-center gap-1.5 glow-primary">
               <ShieldCheck className="w-4 h-4 text-[var(--theme-primary)] inline" />
-              <span>VORTEX</span>
+              <span>VORTEX TERMINAL</span>
               <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--theme-border)] text-xs font-mono opacity-80">
                 v0.3.0
               </span>

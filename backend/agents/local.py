@@ -40,7 +40,7 @@ class LocalAdvisor(AgentAdapter):
 
 ADAPTER = LocalAdvisor(AgentManifest(
     "vortex-local",
-    "VORTEX Local Advisor",
+    "Vortex Terminal Local Advisor",
     "builtin",
     "MIT",
     (),

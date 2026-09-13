@@ -1,10 +1,10 @@
-/* VORTEX start menu — a Linux-like launcher grid. Every tile opens a real
+/* Vortex Terminal start menu — a Linux-like launcher grid. Every tile opens a real
    tab or a live sidecar-backed popup. */
 import React from 'react';
 import {
   Activity, BrainCircuit, Crosshair, Database, FileText, FolderDown, History,
   ListChecks, MapPin, Scale, Settings as SettingsIcon, Terminal as TerminalIcon,
-  TerminalSquare, Wrench, Bot, Cpu, CircleHelp,
+  TerminalSquare, Wrench, Bot, Cpu, CircleHelp, Info,
 } from 'lucide-react';
 import { sound } from '../../services/soundEffects';
 
@@ -46,6 +46,7 @@ export const Launcher: React.FC<LauncherProps> = ({ onGoTab, onOpenPopup, onClos
     { label: 'Settings', hint: 'Policy', icon: <SettingsIcon className="w-5 h-5" />, action: go(() => onOpenPopup('settings')) },
     { label: 'AI Ops', hint: 'Advisory trace', icon: <Cpu className="w-5 h-5" />, action: go(() => onOpenPopup('aiops')) },
     { label: 'Help', hint: 'Reference', icon: <CircleHelp className="w-5 h-5" />, action: go(() => onOpenPopup('helpwin')) },
+    { label: 'About', hint: 'App + downloads', icon: <Info className="w-5 h-5" />, action: go(() => onOpenPopup('about')) },
   ];
 
   return (

@@ -96,7 +96,7 @@ def collect(store: Any, workspace: Any, settings: dict[str, Any] | None = None) 
         "vpn": {
             "available": False,
             "state": "unavailable",
-            "detail": "No reviewed VPN/Secure Network Mode is implemented in this build. VORTEX does not claim an active or secure tunnel.",
+            "detail": "No reviewed VPN/Secure Network Mode is implemented in this build. Vortex Terminal does not claim an active or secure tunnel.",
         },
     }
 

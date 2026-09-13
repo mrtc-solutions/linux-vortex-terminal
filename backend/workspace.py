@@ -470,7 +470,7 @@ class Workspace:
             "task_id": record.get("task_id"),
             "operation_id": record.get("operation_id"),
             "kind": record.get("kind") or "task",
-            "title": record.get("title") or "VORTEX report",
+            "title": record.get("title") or "Vortex Terminal report",
             "formats": record.get("formats") or ["md", "html", "json", "pdf"],
             "body": record.get("body") or {},
         }

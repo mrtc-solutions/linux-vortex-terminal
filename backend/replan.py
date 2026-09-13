@@ -38,7 +38,7 @@ def _verdict(plan: dict[str, Any], operation: dict[str, Any] | None) -> dict[str
         return {
             "achieved": False,
             "replan": False,
-            "reason": "A required tool was missing. VORTEX will not invent results or silently install software.",
+            "reason": "A required tool was missing. Vortex Terminal will not invent results or silently install software.",
             "next_request": None,
             "missing_tools": missing,
         }

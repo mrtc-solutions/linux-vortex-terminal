@@ -688,7 +688,7 @@ def _process_alive(pid: Any) -> bool:
 
 def server_state(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """Current managed-server state: running only when the PID lives AND answers."""
-    settings = settings if isinstance(settings, dict) else {}
+    settings = _effective_settings(settings)
     record = _pid_record()
     pid = record.get("pid")
     endpoint = str(record.get("endpoint") or "")
@@ -725,7 +725,7 @@ def server_state(settings: dict[str, Any] | None = None) -> dict[str, Any]:
 def server_start(model: str | None = None, settings: dict[str, Any] | None = None,
                  *, timeout: float | None = None) -> dict[str, Any]:
     """Start the managed loopback server for one validated model."""
-    settings = settings if isinstance(settings, dict) else load_settings()
+    settings = _effective_settings(settings)
     current = server_state(settings)
     if current.get("state") == "running":
         return {"state": "running", "endpoint": current["endpoint"], "model": current.get("model"),
@@ -831,7 +831,7 @@ def chat(messages: list[dict[str, str]], model: str, settings: dict[str, Any] | 
         started = time.monotonic()
         text = handler(messages, model)
         return {"text": str(text), "latency_ms": int((time.monotonic() - started) * 1000), "engine": "test-double"}
-    settings = settings if isinstance(settings, dict) else {}
+    settings = _effective_settings(settings)
     state = server_state(settings)
     endpoint = state.get("endpoint")
     if state.get("state") not in {"running", "external"} or not endpoint:

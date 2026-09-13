@@ -107,7 +107,7 @@ function realDeliberations(input: FuzzyInput): FuzzyConsensusResult['deliberatio
   }
   return [{
     modelId: 'deterministic-core',
-    modelName: `VORTEX deterministic core (${String(input.localAi.provider || 'no-model')})`,
+    modelName: `Vortex Terminal deterministic core (${String(input.localAi.provider || 'no-model')})`,
     thought: String(input.localAi.message || input.explanation || 'No local model responded; planning continued deterministically.').slice(0, 500),
     rawOutput: `fallback_used=${String(asRecord(input.localAi.fallback).used !== false)}`.slice(0, 200),
     confidence: 50,

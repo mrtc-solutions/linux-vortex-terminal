@@ -209,7 +209,7 @@ def decide(providers: list[dict[str, Any]], phase: str = "conversation") -> dict
     elif winner["provider"] == "council":
         reason = "No local model is answering; the deterministic agent council advises without generating text."
     else:
-        reason = "No advisory layer is available; deterministic VORTEX core continues alone."
+        reason = "No advisory layer is available; deterministic Vortex Terminal core continues alone."
     confidence = "high" if winner["score"] >= 0.7 else (
         "moderate" if winner["score"] >= 0.4 else (
             "low" if winner["score"] > 0.0 else "unavailable"))

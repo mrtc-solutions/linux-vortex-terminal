@@ -349,7 +349,7 @@ class UpstreamTrackingTests(unittest.TestCase):
         from backend.agents.upstream import table
 
         data = table()
-        self.assertEqual(set(data), {"vortex-local"}, "no third-party agent code ships with VORTEX")
+        self.assertEqual(set(data), {"vortex-local"}, "no third-party agent code ships with Vortex Terminal")
         self.assertEqual(data["vortex-local"]["sync_state"], "builtin")
 
     def test_refresh_refuses_offline_without_network(self):

@@ -111,7 +111,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_setup_checks_are_live(self):
         from backend.health import setup_checks
         setup = setup_checks(self.store, {"profile": "safe", "first_run_complete": False})
-        self.assertEqual(setup["product"], "VORTEX")
+        self.assertEqual(setup["product"], "Vortex Terminal")
         ids = [step["id"] for step in setup["steps"]]
         self.assertIn("linux", ids)
         self.assertIn("database", ids)

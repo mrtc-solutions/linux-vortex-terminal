@@ -41,7 +41,7 @@ def _secondary_roster() -> list[dict[str, Any]]:
         name = item.get("name") or item.get("id")
         if healthy:
             contribution = (
-                f"{name} is installed. Advisory-only secondary agent; VORTEX does not "
+                f"{name} is installed. Advisory-only secondary agent; Vortex Terminal does not "
                 "invoke its model-backed workflow without a reviewed non-executing consult "
                 "interface, so no agent output is fabricated."
             )
@@ -360,14 +360,14 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                 from backend.vortex_backend import build_plan
             stop_reason = None
             if budget["iterations"] >= MAX_REPLAN_ITERATIONS:
-                stop_reason = f"Replan budget exhausted after {budget['iterations']} follow-up(s); VORTEX stops instead of looping."
+                stop_reason = f"Replan budget exhausted after {budget['iterations']} follow-up(s); Vortex Terminal stops instead of looping."
             if stop_reason is None:
                 settings = load_settings()
                 nxt = build_plan(store, objective["next_request"], plan.get("cwd"), plan.get("engagement_id"), offline=settings.get("offline") is True)
                 # A follow-up that reproduces a plan this task already ran cannot
                 # produce new evidence. Stop rather than repeat the same command.
                 if nxt.get("digest") and nxt["digest"] in set(budget["seen_digests"]):
-                    stop_reason = "The proposed follow-up repeats a plan this task already executed; VORTEX stops instead of looping."
+                    stop_reason = "The proposed follow-up repeats a plan this task already executed; Vortex Terminal stops instead of looping."
                 else:
                     engagement = workspace.enrich_engagement(store.get_engagement(plan.get("engagement_id"))) if plan.get("engagement_id") else None
                     guardian = evaluate(nxt, settings, engagement)

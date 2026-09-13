@@ -133,12 +133,29 @@ export const Models: React.FC = () => {
               {server.endpoint ? <span className="font-mono text-stone-400">{String(server.endpoint)}</span> : null}
               {server.model ? <span className="font-mono text-stone-500">{String(server.model)}</span> : null}
             </div>
-            {installActive && (
-              <div className="flex items-center gap-2 text-[var(--theme-primary)]">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Downloading {String(install.asset || 'llamafile')}… {String(install.received_bytes || 0)} bytes</span>
-              </div>
-            )}
+            {installActive && (() => {
+              const received = Number(install.received_bytes || 0);
+              const total = Number(install.total_bytes || 0);
+              const pct = total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : 0;
+              const mb = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MB`;
+              return (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-[var(--theme-primary)]">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>
+                      Downloading {String(install.asset || 'llamafile')}… {mb(received)}
+                      {total > 0 ? ` / ${mb(total)} (${pct}%)` : ' (resolving size…)'}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded bg-black/60 border border-[var(--theme-border)] overflow-hidden">
+                    <div
+                      className="h-full transition-all duration-500"
+                      style={{ width: `${pct}%`, backgroundColor: 'var(--theme-primary)' }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
             {install.error ? <div className="text-rose-400">{String(install.error)}</div> : null}
             <div className="flex items-center gap-2 pt-1 flex-wrap">
               {binary.present !== true && !installActive && !confirmInstall && (
@@ -189,7 +206,7 @@ export const Models: React.FC = () => {
             {confirmInstall && !installActive && (
               <div className="text-[11px] text-amber-300 p-2 rounded bg-amber-950/20 border border-amber-900/40">
                 This downloads the pinned llamafile {String(llamafile.version || '')} binary from GitHub
-                (SHA-256 verified, ~GB scale). Nothing downloads until you confirm.
+                (SHA-256 verified, tens of MB). Nothing downloads until you confirm.
               </div>
             )}
             <div className="text-[10px] text-stone-600">

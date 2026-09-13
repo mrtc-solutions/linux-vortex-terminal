@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- **llamafile advisory that always reaches the server.** An operator-configured
+  loopback llamafile server now serves advisory through the model it actually
+  serves even when no model file is registered locally, and `server_state`,
+  `server_start`, and `chat` resolve saved settings from partial call-site
+  dicts. Proven end-to-end against a live loopback server (`responded` via
+  `llamafile`) with two new regression tests.
+- **About popup (app + downloads + license).** New `about` command, Launcher
+  tile, and Help row opening live version/sidecar state, the full MIT license
+  text, Android APK sync/download with size and SHA-256, Linux DEB
+  build/download, and an honest no-iOS note (Apple signing cannot be produced
+  or verified on Linux).
+- **Honest timeouts.** The React API client now reports `timeout` (with the
+  elapsed budget and a retry hint) instead of mislabeling slow answers as
+  `network` / "Sidecar unreachable".
+- **Models download progress.** llamafile installs show MB received/total,
+  percent, and a progress bar while the existing 3s poll runs.
+- **Electron allowlist.** Desktop `security.js` now permits the real GET
+  routes the shell calls (`artifacts`, `capabilities`, `license`,
+  `reports/system`, `mobile/apk`, `desktop/deb`, `tasks/:id`,
+  `tasks/:id/events`) plus the system-report download; `test_windows.js`
+  asserts each, including method-mismatch denials.
+- **Product naming.** User-visible surfaces now say "Vortex Terminal"
+  (all-caps VORTEX TERMINAL only for the header wordmark and window titles);
+  the APK label, report titles, agent name, and backend messages match.
+
 ## 0.3.0 — 2026-09-13
 
 New default UI shell (React terminal, served at `/`), free local LLM via

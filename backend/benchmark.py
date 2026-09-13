@@ -54,7 +54,7 @@ def run_suite(store: Any, workspace: Any, executor: Any, cwd: str | None = None)
     passed = sum(1 for item in results if item["success"])
     ai = benchmark_local_ai(load_settings())
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "cases": results,
         "passed": passed,
         "total": len(results),

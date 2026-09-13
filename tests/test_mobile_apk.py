@@ -26,7 +26,7 @@ class ApkBuildTests(unittest.TestCase):
         raw = encode_manifest(version_name="0.2.22")
         self.assertEqual(raw[:4], b"\x03\x00\x08\x00")
         self.assertIn("io.vortex.mobile".encode("utf-16le"), raw)
-        self.assertIn("VORTEX".encode("utf-16le"), raw)
+        self.assertIn("Vortex Terminal".encode("utf-16le"), raw)
 
     def test_dex_header_checksum(self):
         dex = build_webview_dex("http://192.0.2.10:8765/")

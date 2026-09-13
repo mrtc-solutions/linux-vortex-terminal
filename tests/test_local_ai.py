@@ -539,7 +539,7 @@ class SecondaryAdvisorFallbackTests(unittest.TestCase):
             "state": "unavailable",
             "provider": "ollama",
             "endpoint": "http://127.0.0.1:11434",
-            "message": "Local AI unavailable: connection refused. Deterministic VORTEX planning remains authoritative.",
+            "message": "Local AI unavailable: connection refused. Deterministic Vortex Terminal planning remains authoritative.",
             "responses": [],
             "route": {"selected": []},
             "fuzzy": {"confidence": "unavailable", "agreement": "none", "models_responded": 0},

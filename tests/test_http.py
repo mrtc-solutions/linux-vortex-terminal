@@ -393,7 +393,7 @@ class HttpApiTests(unittest.TestCase):
 
     def test_capabilities_and_close_engagement(self):
         caps = self._json("GET", "/api/capabilities")
-        self.assertEqual(caps["product"], "VORTEX")
+        self.assertEqual(caps["product"], "Vortex Terminal")
         self.assertIn("typed-plan-execution", caps["implemented"])
         self.assertIn("nuclei-ffuf-nikto-amass-gobuster-adapters", caps["implemented"])
         self.assertIn("plugin-code-execution", caps["intentionally_not_implemented"])
@@ -460,7 +460,7 @@ class HttpApiTests(unittest.TestCase):
         self.assertIn("sections", block)
         self.assertIsInstance(block["nothing_missing"], bool)
         if not block["nothing_missing"]:
-            self.assertIn("VORTEX AI stack", block["combined"])
+            self.assertIn("Vortex Terminal AI stack", block["combined"])
             self.assertGreaterEqual(len(block["sections"]), 1, "a host always has at least one missing AI layer to report honestly")
             for section in block["sections"]:
                 self.assertTrue(section.get("id"))
@@ -730,7 +730,7 @@ class HttpApiTests(unittest.TestCase):
         denied = self._json("GET", "/api/reports/system?format=exe", expected=422)
         self.assertEqual(denied["error"]["code"], "invalid_plan")
         ok = self._json("GET", "/api/reports/system?format=json")
-        self.assertEqual(ok["product"], "VORTEX")
+        self.assertEqual(ok["product"], "Vortex Terminal")
         self.assertEqual(ok["kind"], "system")
 
     def test_host_tools_and_license_routes(self):

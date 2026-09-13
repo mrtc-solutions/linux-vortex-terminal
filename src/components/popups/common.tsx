@@ -1,4 +1,4 @@
-/* Shared popup primitives — VORTEX theme, no mock data anywhere. */
+/* Shared popup primitives — Vortex Terminal theme, no mock data anywhere. */
 import React from 'react';
 
 export function Section({ title, children }: { title: string; children: React.ReactNode }) {

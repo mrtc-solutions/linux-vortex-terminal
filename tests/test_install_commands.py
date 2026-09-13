@@ -51,7 +51,7 @@ class AssembleTests(unittest.TestCase):
         if block["nothing_missing"]:
             self.assertIn("nothing is missing", block["combined"])
         else:
-            self.assertIn("VORTEX AI stack", block["combined"])
+            self.assertIn("Vortex Terminal AI stack", block["combined"])
             # No non-comment line may carry shell metacharacters.
             for line in block["combined"].splitlines():
                 stripped = line.strip()

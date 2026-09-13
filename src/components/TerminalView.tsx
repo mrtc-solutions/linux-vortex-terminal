@@ -1,4 +1,4 @@
-/* VORTEX terminal — REAL orchestration surface. Every run calls the loopback
+/* Vortex Terminal — REAL orchestration surface. Every run calls the loopback
    Python sidecar (plan -> Guardian -> execute -> observe). Nothing is staged. */
 import React, { useState, useEffect, useRef } from 'react';
 import { TerminalLine, FuzzyConsensusResult } from '../types/terminal';
@@ -32,17 +32,17 @@ interface TerminalViewProps {
   onArtifactCountChange?: () => void;
 }
 
-const HELP_TEXT = `VORTEX // REAL COMMANDS (sidecar-backed, nothing simulated)
+const HELP_TEXT = `Vortex Terminal // REAL COMMANDS (sidecar-backed, nothing simulated)
 
   Just type what you want — \"check disk usage\", \"whoami\", \"list listening ports\".
-  VORTEX builds a typed plan, the Guardian reviews it, and low-risk plans run
+  Vortex Terminal builds a typed plan, the Guardian reviews it, and low-risk plans run
   under your policy. Anything else opens an approval review first.
 
   Terminal:  clear, help, stop, retry   Stop = STOP ALL (kills running work)
   Shell:     shell                      Open a raw host PTY (no Guardian, your keys)
   Views:     map, out, report
   Popups:    tasks, scope, tools, models, system, history, memory, settings,
-             launcher (start menu), aiops (advisory trace)`;
+             launcher (start menu), aiops (advisory trace), about (app + downloads)`;
 
 function shortCwd(cwd: string): string {
   const clean = cwd.replace(/\/+$/, '') || '/';
@@ -124,7 +124,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     appendLines([{
       id: `boot-${Date.now()}`, timestamp: new Date().toLocaleTimeString(),
       type: 'system',
-      content: isRetry ? 'VORTEX TERMINAL — retrying the sidecar handshake…' : 'VORTEX TERMINAL — connecting to the local sidecar…',
+      content: isRetry ? 'Vortex Terminal — retrying the sidecar handshake…' : 'Vortex Terminal — connecting to the local sidecar…',
     }]);
     try {
       const [healthPayload, modelsPayload] = await Promise.all([getSystemHealth(), getModels()]);
@@ -147,7 +147,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         appendLines([
           {
             id: `greet-1-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), type: 'system',
-            content: `VORTEX TERMINAL v0.3.0 — live sidecar connected.\nHost: ${String(distro || 'this machine')} · ${String(host.architecture || '')}\nLocal AI routing: ${states} · winner: ${String(fuzzy.winner || 'deterministic')}\nGuardian: ARMED · Audit chain: ON · PTY: available via 'shell'.`,
+            content: `Vortex Terminal v0.3.0 — live sidecar connected.\nHost: ${String(distro || 'this machine')} · ${String(host.architecture || '')}\nLocal AI routing: ${states} · winner: ${String(fuzzy.winner || 'deterministic')}\nGuardian: ARMED · Audit chain: ON · PTY: available via 'shell'.`,
           },
           {
             id: `greet-2-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), type: 'output',
@@ -349,7 +349,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       setInputValue('');
       return;
     }
-    for (const popup of ['tasks', 'scope', 'tools', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops']) {
+    for (const popup of ['tasks', 'scope', 'tools', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
       if (trimmed === popup) {
         appendLines([{ id: `input-${Date.now()}`, timestamp: timeStr, type: 'input', content: trimmed }]);
         onOpenPopup(popup, {});
@@ -426,7 +426,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
       const commandCandidates = [
         'help', 'clear', 'stop', 'shell', 'map', 'report', 'out',
-        'tasks', 'scope', 'tools', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'retry', 'aiops',
+        'tasks', 'scope', 'tools', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'retry', 'aiops', 'about',
         'whoami', 'check disk usage', 'list listening ports', 'show system health',
       ];
 
@@ -661,7 +661,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask VORTEX anything (e.g. 'check disk usage') or type 'help'..."
+          placeholder="Ask Vortex Terminal anything (e.g. 'check disk usage') or type 'help'..."
           className="flex-1 bg-transparent text-white font-mono text-xs placeholder-stone-600 focus:outline-none caret-[var(--theme-primary)]"
           autoFocus
           spellCheck={false}

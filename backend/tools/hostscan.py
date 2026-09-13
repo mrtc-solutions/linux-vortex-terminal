@@ -386,7 +386,7 @@ def match_request(request: str, installed: dict[str, str] | None = None) -> dict
         return {
             "name": tool,
             "status": "clarified",
-            "reason": "VORTEX could not parse a typed argv without shell metacharacters. Ask for a single tool with literal arguments, or use the PTY.",
+            "reason": "Vortex Terminal could not parse a typed argv without shell metacharacters. Ask for a single tool with literal arguments, or use the PTY.",
         }
     info = classify(tool)
     extra = argv[1:]
@@ -395,7 +395,7 @@ def match_request(request: str, installed: dict[str, str] | None = None) -> dict
         return {
             "name": tool,
             "status": "clarified",
-            "reason": "VORTEX will not pass arbitrary code to interpreters from a natural-language plan. Use the PTY terminal for interactive interpreters.",
+            "reason": "Vortex Terminal will not pass arbitrary code to interpreters from a natural-language plan. Use the PTY terminal for interactive interpreters.",
         }
     if tool in INTERPRETERS and extra and not help_only:
         return {

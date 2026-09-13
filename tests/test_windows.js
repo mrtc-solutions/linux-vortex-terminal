@@ -133,6 +133,17 @@ assert.strictEqual(isAllowedApiRequest('/api/agents/upstream/refresh', 'POST'), 
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream/refresh', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/assist', 'POST'), true);
 assert.strictEqual(isAllowedApiRequest('/api/assist/coverage', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/artifacts', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/capabilities', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/license', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/reports/system', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/mobile/apk', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/desktop/deb', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/tasks/abc123', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/tasks/abc123/events', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/license', 'POST'), false);
+assert.strictEqual(isAllowedApiRequest('/api/artifacts', 'POST'), false);
+assert.strictEqual(isAllowedApiRequest('/api/tasks/abc123/episode', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/models/../../etc/passwd', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/execute', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/store/backup', 'POST'), false);
@@ -144,6 +155,8 @@ assert.strictEqual(isDirectRendererRequest(`${sidecar}/assets/app.js`, sidecar, 
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/health`, sidecar, 'GET'), false);
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/operations/abc/stream`, sidecar, 'GET'), true);
 assert.strictEqual(isSidecarDownloadUrl(`${sidecar}/api/reports/abc/download?format=md`, sidecar), true);
+assert.strictEqual(isSidecarDownloadUrl(`${sidecar}/api/reports/system`, sidecar), true);
+assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/reports/system`, sidecar, 'GET'), true);
 assert.strictEqual(isSidecarDownloadUrl('https://example.test/api/reports/abc/download', sidecar), false);
 assert.strictEqual(sameSidecarUrl(`${sidecar}/api/health`, sidecar), true);
 assert.strictEqual(sameSidecarUrl('http://127.0.0.1:9999/', sidecar), false);

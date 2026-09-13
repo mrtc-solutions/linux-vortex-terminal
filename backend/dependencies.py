@@ -1,6 +1,6 @@
 """Live missing-dependency inventory and operator-controlled install proposals.
 
-VORTEX never silently installs software and never captures a sudo password.
+Vortex Terminal never silently installs software and never captures a sudo password.
 Debian/Kali packages can become a reviewed apt plan. Third-party agents stay
 proposal-only until the operator installs them outside VORTEX.
 """
@@ -155,9 +155,9 @@ def custom_package_proposal(raw_name: str) -> dict[str, Any]:
         ],
         "plan_request": f"install package {name}",
         "message": (
-            f"VORTEX will create a reviewed apt plan for `{name}`. It first checks package metadata, "
+            f"Vortex Terminal will create a reviewed apt plan for `{name}`. It first checks package metadata, "
             "installed/candidate versions, holds, and dependency impact. The mutation requires OS-level "
-            "root approval; VORTEX never captures a sudo password. After success, refresh/rescan discovers "
+            "root approval; Vortex Terminal never captures a sudo password. After success, refresh/rescan discovers "
             "new safe-PATH executables so they can appear in Tools and remain Guardian-gated."
         ),
     }
@@ -403,10 +403,10 @@ def inventory() -> dict[str, Any]:
 
     missing = [item for item in items if not item["installed"]]
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "auto_install": False,
         "sudo": False,
-        "note": "VORTEX never silently installs software and never captures a sudo password.",
+        "note": "Vortex Terminal never silently installs software and never captures a sudo password.",
         "counts": {
             "total": len(items),
             "installed": sum(1 for item in items if item["installed"]),
@@ -433,7 +433,7 @@ def _ollama_runtime_proposal(item: dict[str, Any]) -> dict[str, Any]:
     else:
         commands.extend([
             f"# Review the official installer and license: {OLLAMA_SOURCE}",
-            "# Install Ollama manually on this host. VORTEX will not run an unreviewed internet installer for you.",
+            "# Install Ollama manually on this host. Vortex Terminal will not run an unreviewed internet installer for you.",
             "# After installation, start the loopback runtime and verify it:",
             "ollama serve",
             f"curl {endpoint}/api/version",
@@ -539,7 +539,7 @@ def proposal_for(item_id: str, settings: dict[str, Any] | None = None) -> dict[s
             proposal = {
                 **item,
                 "auto_install": False,
-                "message": f"Already present on this host at {item.get('path') or 'an existing path'}, but VORTEX flagged it for review ({flags}). Reinstall is not required.",
+                "message": f"Already present on this host at {item.get('path') or 'an existing path'}, but Vortex Terminal flagged it for review ({flags}). Reinstall is not required.",
             }
             proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
             return proposal
@@ -561,13 +561,13 @@ def proposal_for(item_id: str, settings: dict[str, Any] | None = None) -> dict[s
         pkg = item["apt_package"]
         install_message = (
             f"{item['title']} can be installed with the reviewed apt adapter. "
-            "VORTEX will build a typed plan. Root is required; no sudo password is captured. "
+            "Vortex Terminal will build a typed plan. Root is required; no sudo password is captured. "
             "Approve the plan only on a host you administer."
         )
         if item.get("kind") == "dataset":
             install_message = (
                 f"{item['title']} are used only as operator-provided scan inputs. "
-                "VORTEX will build a reviewed apt plan for the distro wordlist package and will not substitute /etc/passwd or another sensitive file."
+                "Vortex Terminal will build a reviewed apt plan for the distro wordlist package and will not substitute /etc/passwd or another sensitive file."
             )
         proposal = {
             **item,
@@ -590,7 +590,7 @@ def proposal_for(item_id: str, settings: dict[str, Any] | None = None) -> dict[s
         "auto_install": False,
         "commands": [
             f"# Review upstream documentation for {item['title']}.",
-            "# VORTEX will not download or execute an unreviewed installer.",
+            "# Vortex Terminal will not download or execute an unreviewed installer.",
         ],
         "message": "No reviewed apt package is mapped. Install remains operator-controlled.",
     }

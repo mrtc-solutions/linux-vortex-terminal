@@ -72,7 +72,7 @@ def critic(plan: dict[str, Any], consultations: list[dict[str, Any]]) -> dict[st
         summary = "No command was proposed; the critic will not invent an outcome."
     elif not healthy:
         verdict = "uncertain"
-        summary = "No external agent produced evidence. VORTEX continues with the deterministic plan and Guardian only."
+        summary = "No external agent produced evidence. Vortex Terminal continues with the deterministic plan and Guardian only."
     else:
         verdict = "advisory_only"
         summary = "Agent output is untrusted recommendation data, not authorization."

@@ -2088,7 +2088,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
     elif re.search(r"(?<!-)\b(?:help|capabilities|what can you do)\b", lower) or lower.strip() in {"hello", "hi", "hey"}:
         kind = "help"
         status = "clarified"
-        notes.append("VORTEX reads only reviewed local adapters before any typed plan is approved. Common areas include identity, system health, memory/CPU, files and directories, processes, Git, services/journal, listening ports, network interfaces/routes, disk usage, and installed packages.")
+        notes.append("Vortex Terminal reads only reviewed local adapters before any typed plan is approved. Common areas include identity, system health, memory/CPU, files and directories, processes, Git, services/journal, listening ports, network interfaces/routes, disk usage, and installed packages.")
         notes.append("Active cybersecurity work (nmap, nuclei, gobuster, curl, ping, DNS/WHOIS, SSH) requires an authorized engagement with an owner, target scope, limits, and expiry.")
     elif re.search(r"\bssh\b", lower) and (any(word in lower for word in ("diagnos", "config", "connection", "connect")) or re.search(r"\bssh\s+(?:to|for|towards)\s+", lower)):
         kind = "ssh_diagnostics"
@@ -2164,7 +2164,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.containers.diagnose", runtime, [*runtime_argv, "info"], cwd, required=runtime, explanation=f"Inspect the local {runtime} daemon/user context without changing containers."))
             specs.append(adapter_command("linux.containers.diagnose", runtime, [*runtime_argv, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List local {runtime} containers after daemon facts are observed."))
             status = "planned"
-            notes += [f"Multi-step read-only diagnosis using {runtime}.", "VORTEX stops when daemon facts and container lists are observed; it does not apply a fix unless a separate approved plan is created."]
+            notes += [f"Multi-step read-only diagnosis using {runtime}.", "Vortex Terminal stops when daemon facts and container lists are observed; it does not apply a fix unless a separate approved plan is created."]
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")):
         kind = "container_inspection"
         runtime_info = local_container_runtime()
@@ -2224,7 +2224,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.packages.apt", "apt-get", preflight, cwd, required="apt-get", explanation="Run a fresh apt preflight immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
             specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding preflight and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
             if package_name:
-                verification = adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Verify the exact post-operation package state for {package_name}; VORTEX reports success only when this observation matches the requested action.", privilege="user")
+                verification = adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Verify the exact post-operation package state for {package_name}; Vortex Terminal reports success only when this observation matches the requested action.", privilege="user")
                 verification["success_exit_codes"] = [0] if package_operation == "install" else [1]
                 verification["package_observation"] = "after"
                 verification["expected_package_state"] = "installed" if package_operation == "install" else "absent"
@@ -2924,9 +2924,9 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             else:
                 status = "clarified"
                 if service is not None:
-                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) is a reviewed, engagement-gated OSINT capability; VORTEX never fabricates its output.")
+                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) is a reviewed, engagement-gated OSINT capability; Vortex Terminal never fabricates its output.")
                 else:
-                    notes.append("SIGIT (Simple Information Gathering Toolkit) is reviewed as 14 engagement-gated OSINT services; VORTEX never fabricates their output.")
+                    notes.append("SIGIT (Simple Information Gathering Toolkit) is reviewed as 14 engagement-gated OSINT services; Vortex Terminal never fabricates their output.")
                 notes.append("Create an authorized engagement with an owner, authorization reference, canonical targets, limits, and an expiry before outbound OSINT work.")
         else:
             out_of_scope: list[str] = []
@@ -2953,13 +2953,13 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 status = "clarified"
                 adapter = str(service["safe_adapter"])
                 notes.append(f"SIGIT {service['number']} {service['name']} has a reviewed equivalent adapter ({adapter}); ask for it with the exact scoped target to get a typed, approved command.")
-                notes.append("VORTEX will not auto-run SIGIT for this capability; the equivalent adapter is engagement-scoped and Guardian-authorized.")
+                notes.append("Vortex Terminal will not auto-run SIGIT for this capability; the equivalent adapter is engagement-scoped and Guardian-authorized.")
             else:
                 status = "clarified"
-                notes.append("SIGIT is an interactive TUI; VORTEX will not run it with a fabricated argv or fake its output.")
+                notes.append("SIGIT is an interactive TUI; Vortex Terminal will not run it with a fabricated argv or fake its output.")
                 notes.append("Open a PTY terminal session and run `sigit`, then select the reviewed service by number.")
                 if service is not None:
-                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) runs inside the operator TUI; its output is produced there, not by VORTEX.")
+                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) runs inside the operator TUI; its output is produced there, not by Vortex Terminal.")
     else:
         host_match = None
         try:
@@ -3021,7 +3021,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                     excluded_hits = [] if out_scope else (list(normalized) if scope_mod is None else [target for target in normalized if scope_mod.excluded(target, engagement)])
                     if not normalized:
                         status = "clarified"
-                        notes.append("Tell VORTEX the exact authorized hostname, URL, IP, or CIDR target for this host tool.")
+                        notes.append("Tell Vortex Terminal the exact authorized hostname, URL, IP, or CIDR target for this host tool.")
                     elif out_scope:
                         status = "rejected"
                         notes.append("Target is outside the active engagement scope: " + ", ".join(out_scope))
@@ -3925,7 +3925,7 @@ def capabilities_document() -> dict[str, Any]:
     except Exception:
         sigit_services = []
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "version": APP_VERSION,
         "implemented": [
             "typed-plan-execution", "pty-sessions", "guardian", "engagements",
@@ -3950,7 +3950,7 @@ def capabilities_document() -> dict[str, Any]:
             "toolkit": "SIGIT — Simple Information Gathering Toolkit (MIT)",
             "cli": "sigit (operator-installed, interactive TUI)",
             "source": "reviewed-capability-catalog",
-            "policy": "engagement-gated; never auto-run; runs only in a PTY TUI; VORTEX never fabricates OSINT output.",
+            "policy": "engagement-gated; never auto-run; runs only in a PTY TUI; Vortex Terminal never fabricates OSINT output.",
             "services": sigit_services,
         },
         "unavailable_unless_installed": [
@@ -5254,7 +5254,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                     or stat.S_IMODE(cli_details.st_mode) & 0o022
                     or cli_path.resolve(strict=True).parent != (app_root / "cli").resolve(strict=True)
                 ):
-                    raise PermissionError("the reviewed VORTEX CLI entry point is unavailable or unsafe")
+                    raise PermissionError("the reviewed Vortex Terminal CLI entry point is unavailable or unsafe")
                 python = probe_executable(sys.executable, include_version=False)
                 if python.get("state") != "installed" or not python.get("realpath"):
                     raise PermissionError("the trusted Python runtime is unavailable")
