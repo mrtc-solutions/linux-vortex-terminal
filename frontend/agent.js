@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  var agent = { runId: null, since: 0, es: null, poll: null, lastPlan: null, loading: false };
+  var agent = { runId: null, since: 0, es: null, poll: null, lastPlan: null, lastStatus: null };
 
   function box(id) { return document.getElementById(id); }
 
@@ -132,14 +132,15 @@
     var card = box('agent-approve');
     if (!card) return;
     var plan = agent.lastPlan || {};
+    var isPreflight = !pause.plan_id && !!pause.operation_id;
     var commands = (plan.commands || []).map(function (c) { return '<li><code>' + esc(c) + '</code></li>'; }).join('');
     card.hidden = false;
     card.innerHTML = '<div class="plan-card"><div class="plan-summary"><div class="plan-objective">' +
-      '<span>APPROVE THIS EXACT STEP</span>' + esc(pause.reason || '') + '</div>' +
+      '<span>' + (isPreflight ? 'PREFLIGHT REVIEW' : 'APPROVE THIS EXACT STEP') + '</span>' + esc(pause.reason || '') + '</div>' +
       '<span class="badge warn">' + esc(plan.risk || '') + ' · ' + esc(plan.kind || '') + '</span></div>' +
       (commands ? '<ul class="plan-notes">' + commands + '</ul>' : '') +
       (plan.approval_phrase ? '<p class="form-note">⌁ ' + esc(plan.approval_phrase) + '</p>' : '') +
-      '<div class="worker-row"><button class="primary-button" id="agent-approve-btn" type="button">APPROVE &amp; CONTINUE</button> ' +
+      '<div class="worker-row"><button class="primary-button" id="agent-approve-btn" type="button">' + (isPreflight ? 'CHECK &amp; RESUME' : 'APPROVE &amp; CONTINUE') + '</button> ' +
       '<button class="text-button danger" id="agent-reject-btn" type="button">STOP RUN</button></div></div>';
     var approveBtn = box('agent-approve-btn');
     if (approveBtn) approveBtn.addEventListener('click', approveCurrentRun);
@@ -231,10 +232,12 @@
     resetTranscript('Loading transcript…');
     agent.runId = runId;
     api('/api/agent/runs/' + encodeURIComponent(runId)).then(function (payload) {
+      if (agent.runId !== runId) return; // superseded by a newer selection
       resetTranscript('Empty transcript.');
       applyPayload(payload);
       if (payload.run && payload.run.status !== 'finished') startStream();
     }).catch(function (err) {
+      if (agent.runId !== runId) return;
       resetTranscript('Could not load this run: ' + err.message);
     });
   }

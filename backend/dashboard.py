@@ -54,7 +54,7 @@ def _count_interfaces() -> int | None:
     try:
         with open("/proc/net/dev", encoding="utf-8", errors="replace") as handle:
             lines = handle.read().splitlines()[2:]
-            return sum(1 for line in lines if ":" in line and not line.startswith("lo"))
+            return sum(1 for line in lines if ":" in line and line.split(":")[0].strip() not in {"lo", ""})
     except OSError:
         return None
 

@@ -65,13 +65,14 @@ def gate_lint() -> None:
 
 def gate_js_suites() -> None:
     names = ["test_terminal", "test_windows", "test_frontend", "test_frontend_runtime",
-             "test_frontend_auth", "test_agents_local_ai", "test_hud", "test_responsive"]
+             "test_frontend_auth", "test_agents_local_ai", "test_hud", "test_responsive",
+             "test_agent"]
     failed = []
     for name in names:
         proc = run(["node", f"tests/{name}.js"], timeout=120)
         if proc.returncode != 0:
             failed.append(name)
-    gate("3/10 js suites (8 files)", not failed, f"failed={failed or 'none'}")
+    gate("3/10 js suites (9 files)", not failed, f"failed={failed or 'none'}")
 
 
 def gate_gguf_chain() -> None:

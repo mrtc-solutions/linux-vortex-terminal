@@ -229,6 +229,69 @@ class AgentModeTests(unittest.TestCase):
         run = _wait_run(self.store, result["run"]["id"])
         self.assertEqual(run["summary"]["outcome"], "loop_guard", run["summary"])
 
+    def test_garbage_goal_never_parks_for_approval(self):
+        # A goal that cannot plan must loop-guard on its repeated proposal,
+        # never strand the run as "awaiting approval" of a dead plan.
+        result = self._start("tell me a joke", max_steps=5)
+        run = _wait_run(self.store, result["run"]["id"])
+        self.assertEqual(run["status"], "finished")
+        self.assertEqual(run["summary"]["outcome"], "loop_guard", run["summary"])
+        kinds = [event["kind"] for event in agent_mode.events_since(self.store, run["id"], 0)["events"]]
+        self.assertNotIn("paused", kinds)
+        self.assertIn("note", kinds)
+
+    def test_varied_garbage_exhausts_idle_rounds(self):
+        agent_mode._DEPS = _deps_for(
+            advise=_advise_stub([["tell me a joke"], ["reboot the machine"], ["list files | sort"]]),
+            evaluate=lambda plan, operation, settings=None: {
+                "achieved": False, "replan": False, "reason": "stub never satisfied", "next_request": None},
+        )
+        result = self._start("show my username", max_steps=5)
+        run = _wait_run(self.store, result["run"]["id"])
+        self.assertEqual(run["summary"]["outcome"], "unresolved", run["summary"])
+        kinds = [event["kind"] for event in agent_mode.events_since(self.store, run["id"], 0)["events"]]
+        self.assertNotIn("paused", kinds)
+
+    def test_verdict_evaluated_once_per_step(self):
+        calls = []
+        real = real_evaluate
+
+        def counting(plan, operation, settings=None):
+            calls.append(1)
+            return real(plan, operation, settings)
+
+        agent_mode._DEPS = _deps_for(evaluate=counting)
+        result = self._start("show my username", max_steps=3)
+        run = _wait_run(self.store, result["run"]["id"])
+        self.assertEqual(run["summary"]["outcome"], "achieved", run["summary"])
+        self.assertEqual(len(calls), 1, "one executed step must evaluate the verdict exactly once")
+
+    def test_approved_step_refused_at_execution_is_honest(self):
+        from backend.vortex_backend import PolicyError
+        result = self._start("show my username", settings=dict(SAFE_SETTINGS))
+        run_id = result["run"]["id"]
+        paused = _wait_status(self.store, run_id, "awaiting_approval")
+        pending = paused["config"]["pending_plan_id"]
+        original_start = self.executor.start
+        calls = []
+
+        def flaky(plan, *args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise PolicyError("fixture refusal")
+            return original_start(plan, *args, **kwargs)
+
+        self.executor.start = flaky
+        try:
+            agent_mode.approve_run(self.store, self.workspace, self.executor, run_id, pending, True)
+            run = _wait_run(self.store, run_id)
+        finally:
+            self.executor.start = original_start
+        self.assertEqual(run["summary"]["outcome"], "error", run["summary"])
+        self.assertIn("refused at execution", run["summary"]["reason"])
+        kinds = [event["kind"] for event in agent_mode.events_since(self.store, run_id, 0)["events"]]
+        self.assertIn("step_refused", kinds)
+
     def test_events_paginate_and_reject_bad_ids(self):
         agent_mode._DEPS = _deps_for(model_status=_dark_status)
         result = self._start("show my username")

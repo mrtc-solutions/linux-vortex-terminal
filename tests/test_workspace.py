@@ -1028,5 +1028,33 @@ class ReplanBudgetTests(unittest.TestCase):
             os.environ.pop("VORTEX_DATA_DIR", None)
 
 
+class StartFailureTests(unittest.TestCase):
+    def test_refused_start_fails_task_honestly(self):
+        from backend.orchestrate import _start_operation
+        tmp = tempfile.TemporaryDirectory()
+        os.environ["VORTEX_DATA_DIR"] = tmp.name
+        try:
+            store = Store(Path(tmp.name) / "vortex.db")
+            workspace = Workspace(store)
+            task = workspace.create_task("whoami", None, None)
+            workspace.update_task(task["id"], state="EXECUTING", result={"kind": "identity"})
+
+            class RefusingExecutor:
+                def start(self, *args, **kwargs):
+                    raise PermissionError("exact approval token is required")
+
+            with self.assertRaises(PermissionError):
+                _start_operation(workspace, RefusingExecutor(), task["id"], {"id": "p"}, "bad", False, False, {})
+            final = workspace.get_task(task["id"])
+            self.assertEqual(final["state"], "FAILED")
+            self.assertEqual(final["result"].get("start_error"), "exact approval token is required")
+            self.assertEqual(final["result"].get("kind"), "identity")
+            kinds = [event["kind"] for event in workspace.list_task_events(task["id"])]
+            self.assertIn("start_failed", kinds)
+        finally:
+            tmp.cleanup()
+            os.environ.pop("VORTEX_DATA_DIR", None)
+
+
 if __name__ == "__main__":
     unittest.main()

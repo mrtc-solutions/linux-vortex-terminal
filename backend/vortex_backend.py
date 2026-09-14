@@ -123,6 +123,7 @@ EXECUTION_OUTPUT_QUEUE_CHUNKS = 8
 # facts returned for a single execution-time integrity probe.
 _SAFE_DIRS_CACHE: TTLCache = TTLCache(10.0)
 _EXECUTABLE_LOOKUP_CACHE: TTLCache = TTLCache(10.0)
+_EXECUTABLE_IDENTITY_CACHE: TTLCache = TTLCache(10.0)
 _CAPABILITIES_CACHE: TTLCache = TTLCache(10.0)
 _DEPENDENCIES_CACHE: TTLCache = TTLCache(10.0)
 _TOOLS_REGISTRY_CACHE: TTLCache = TTLCache(10.0)
@@ -133,7 +134,7 @@ _HOST_TOOLS_CACHE: TTLCache = TTLCache(10.0)
 
 def clear_probe_caches() -> None:
     """Force a fresh probe pass. Used by tests, refresh actions, and fresh listings."""
-    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _DOCTOR_CACHE, _HOST_TOOLS_CACHE):
+    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _EXECUTABLE_IDENTITY_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _DOCTOR_CACHE, _HOST_TOOLS_CACHE):
         cache.clear()
     try:
         _load("tools.hostscan").invalidate_host_scan_cache()
@@ -453,6 +454,15 @@ def _resolve_executable_lookup(name: str) -> dict[str, str]:
     return {"status": "absent"}
 
 
+def _copy_identity(item: dict[str, Any]) -> dict[str, Any]:
+    """Copy a cached aggregate identity so callers never share mutable state."""
+    copied = dict(item)
+    flags = copied.get("security_flags")
+    if isinstance(flags, list):
+        copied["security_flags"] = list(flags)
+    return copied
+
+
 def probe_executable(name: str, *, include_version: bool = True) -> dict[str, Any]:
     """Return the executable's factual identity and optionally invoke its version probe.
 
@@ -474,6 +484,12 @@ def probe_executable(name: str, *, include_version: bool = True) -> dict[str, An
     try:
         real = path.resolve(strict=True)
         st = real.stat()
+        identity_key = None
+        if not include_version:
+            identity_key = ("identity", name, st.st_dev, st.st_ino, st.st_size, getattr(st, "st_mtime_ns", st.st_mtime))
+            hit, cached_identity = _EXECUTABLE_IDENTITY_CACHE.peek(identity_key)
+            if hit and isinstance(cached_identity, dict):
+                return _copy_identity(cached_identity)
         mode = stat.S_IMODE(st.st_mode)
         security_flags: list[str] = []
         parent = real.parent
@@ -504,6 +520,8 @@ def probe_executable(name: str, *, include_version: bool = True) -> dict[str, An
             "security_flags": security_flags,
             "version": None,
         }
+        if identity_key is not None:
+            _EXECUTABLE_IDENTITY_CACHE.put(identity_key, _copy_identity(item))
         spec = TOOL_CATALOG.get(name)
         if spec and include_version:
             try:

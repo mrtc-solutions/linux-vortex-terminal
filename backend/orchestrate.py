@@ -151,6 +151,27 @@ def interpret_operation(plan: dict[str, Any], operation: dict[str, Any]) -> str:
     return _with_local_ai(f"Operation ended as {status}. Review the command timeline for observed evidence.", local_ai)
 
 
+def _start_operation(workspace: Any, executor: Any, task_id: str, plan: dict[str, Any], token: str | None, allow_root: bool, offline: bool, settings: dict[str, Any]) -> dict[str, Any]:
+    """Start execution, failing the task honestly when the start is refused.
+
+    Without this, a refused start (bad token, changed DNS, offline policy)
+    leaves the task stuck in EXECUTING with no operation behind it.
+    """
+    try:
+        return executor.start(plan, True, token, allow_root, offline, settings=settings)
+    except Exception as exc:
+        try:
+            task = workspace.get_task(task_id) or {}
+            result = dict(task.get("result") or {})
+            result["start_error"] = str(exc)[:240]
+            result["operation_status"] = "not_started"
+            workspace.update_task(task_id, state="FAILED", result=result)
+            workspace.add_task_event(task_id, "start_failed", {"error": str(exc)[:240]})
+        except Exception:
+            pass
+        raise
+
+
 def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: str | None, engagement_id: str | None, conversation_id: str | None, settings: dict[str, Any], confirm: bool = False, approval_token: str | None = None, allow_root: bool = False) -> dict[str, Any]:
     try:
         from agents.council import consult
@@ -220,7 +241,7 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         # Only the CLI can provide this explicit per-invocation override. The
         # desktop/API callers leave it false, so a renderer can never cause
         # UID 0 execution.
-        operation = executor.start(plan, True, plan["approval_token"], allow_root, offline, settings=settings)
+        operation = _start_operation(workspace, executor, task["id"], plan, plan["approval_token"], allow_root, offline, settings)
         auto = True
         workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
         explanation = _with_local_ai("Guardian authorized a low-risk local diagnostic under the current policy. Real execution started.", local_ai)
@@ -232,7 +253,7 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
         else:
             workspace.update_task(task["id"], state="EXECUTING")
             workspace.record_approval("approve", plan["id"], task["id"], guardian.get("risk"), {"cli_yes": True})
-            operation = executor.start(plan, True, token, allow_root, offline, settings=settings)
+            operation = _start_operation(workspace, executor, task["id"], plan, token, allow_root, offline, settings)
             workspace.update_task(task["id"], state="OBSERVING", operation_id=operation["id"])
             explanation = _with_local_ai("Approved plan execution started.", local_ai)
     else:

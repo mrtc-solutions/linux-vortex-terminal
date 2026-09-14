@@ -108,6 +108,7 @@ function isDirectRendererRequest(rawUrl, sidecarUrl, method = 'GET') {
       pathname === '/api/aiops/stream' ||
       new RegExp(`^/api/operations/${SAFE_ID}/stream$`).test(pathname) ||
       new RegExp(`^/api/sessions/${SAFE_ID}/stream$`).test(pathname) ||
+      new RegExp(`^/api/agent/runs/${SAFE_ID}/stream$`).test(pathname) ||
       isSidecarDownloadUrl(rawUrl, sidecarUrl);
   } catch (_) {
     return false;

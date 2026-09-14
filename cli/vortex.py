@@ -15,6 +15,7 @@ import os
 import select
 import shutil
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import urllib.error
@@ -168,7 +169,10 @@ def shell_command(shell, action, yes, as_json):
         fd, temp_name = tempfile.mkstemp(prefix='.vortex-shell-', dir=str(rc.parent), text=True)
         try:
             with os.fdopen(fd, 'w', encoding='utf-8', newline='') as handle: handle.write(proposed)
-            os.chmod(temp_name, 0o600)
+            try:
+                os.chmod(temp_name, stat.S_IMODE(rc.stat().st_mode) if rc.exists() else 0o644)
+            except OSError:
+                os.chmod(temp_name, 0o600)
             os.replace(temp_name, rc)
         finally:
             if os.path.exists(temp_name): os.unlink(temp_name)
@@ -409,7 +413,6 @@ def main(argv=None):
     if os.getuid() == 0 and os.environ.get('SUDO_USER'):
         print('vortex: do not run Vortex Terminal itself with sudo; run `vortex run <plan-id>` as your user and Vortex Terminal will hand only the reviewed mutation to OS authentication', file=sys.stderr)
         return EXIT_CODES['confirmation_required']
-    store = Store()
     managers = []
     def execution_manager(workspace=None):
         manager = ExecutionManager(store)
@@ -418,6 +421,7 @@ def main(argv=None):
         managers.append(manager)
         return manager
     try:
+        store = Store()
         if args.subcommand == 'doctor': emit({'doctor': detect_context()}, args.as_json); return EXIT_CODES['success']
         if args.subcommand == 'health':
             from backend.health import collect

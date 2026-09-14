@@ -39,8 +39,6 @@ for _alias in ("agent_mode", "backend.agent_mode"):
     _sys.modules.setdefault(_alias, _sys.modules[__name__])
 
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-TERMINAL_RUN_STATUSES = ("finished",)
-WAITING_RUN_STATUSES = ("awaiting_approval",)
 TERMINAL_OP_STATUSES = (
     "succeeded", "failed", "cancelled", "timed_out", "unavailable",
     "interrupted", "unknown_after_crash",
@@ -350,7 +348,7 @@ def _op_summary(operation: dict[str, Any]) -> dict[str, Any]:
             "output_digest": operation.get("output_digest")}
 
 
-def _wait_operation(store: Any, operation_id: str, stop: threading.Event) -> dict[str, Any] | None:
+def _wait_operation(store: Any, executor: Any, operation_id: str, stop: threading.Event) -> dict[str, Any] | None:
     deadline = time.monotonic() + OP_WAIT_SECONDS
     last: dict[str, Any] | None = None
     while time.monotonic() < deadline and not stop.is_set():
@@ -358,6 +356,18 @@ def _wait_operation(store: Any, operation_id: str, stop: threading.Event) -> dic
         if not last or last.get("status") in TERMINAL_OP_STATUSES or last.get("status") == "awaiting_confirmation":
             return last
         time.sleep(OP_POLL_SECONDS)
+    if last is not None and last.get("status") not in TERMINAL_OP_STATUSES and last.get("status") != "awaiting_confirmation":
+        try:
+            executor.cancel(operation_id)
+        except Exception:
+            pass
+        grace = time.monotonic() + 5
+        while time.monotonic() < grace:
+            reread = store.get_operation(operation_id)
+            if reread is None or reread.get("status") in TERMINAL_OP_STATUSES:
+                return reread
+            time.sleep(OP_POLL_SECONDS)
+        last = store.get_operation(operation_id) or last
     return last
 
 
@@ -441,7 +451,7 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                     continue
                 plan = store.get_plan(operation.get("plan_id") or "") if operation.get("plan_id") else None
                 record_event(store, run_id, "resumed", {"operation_id": pending_op_id})
-                last_plan, last_op = plan, _wait_operation(store, pending_op_id, stop)
+                last_plan, last_op = plan, _wait_operation(store, executor, pending_op_id, stop)
                 config["pending_operation_id"] = None
                 if last_op is None or stop.is_set():
                     _finish(store, run, "stopped", "Stopped by the operator.")
@@ -456,8 +466,8 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                         _finish(store, run, "stopped", "Stopped by the operator.")
                         return
                     continue
-                _record_step_outcome(store, deps, run, config, step_index, last_plan, last_op, settings)
-                advanced = _step_advance(store, run, config, step_index, last_plan, last_op, deps, settings, goal)
+                verdict = _record_step_outcome(store, deps, run, config, step_index, last_plan, last_op, settings)
+                advanced = _step_advance(store, run, config, step_index, last_plan, last_op, verdict)
                 if advanced == "halt":
                     return
                 last_plan, last_op = advanced
@@ -471,14 +481,19 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                     _finish(store, run, "error", "Approved step expired before execution.")
                     return
                 record_event(store, run_id, "resumed", {"plan_id": plan["id"]})
-                operation = executor.start(plan, True, plan["approval_token"], False,
-                                           settings.get("offline") is True, settings=settings)
+                try:
+                    operation = executor.start(plan, True, plan["approval_token"], False,
+                                               settings.get("offline") is True, settings=settings)
+                except Exception as exc:
+                    record_event(store, run_id, "step_refused", {"plan_id": plan["id"], "message": _clip(exc, 300)})
+                    _finish(store, run, "error", f"The approved step was refused at execution: {str(exc)[:200]}")
+                    return
                 config["pending_plan_id"] = None
                 config["pending_operation_id"] = operation["id"]
                 run["config"] = config
                 _save_run(store, run)
                 record_event(store, run_id, "step_started", {"step": step_index + 1, "operation_id": operation["id"], "approved": True})
-                last_plan, last_op = plan, _wait_operation(store, operation["id"], stop)
+                last_plan, last_op = plan, _wait_operation(store, executor, operation["id"], stop)
                 config["pending_operation_id"] = None
                 if last_op is None or stop.is_set():
                     _finish(store, run, "stopped", "Stopped by the operator.")
@@ -493,8 +508,8 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                         _finish(store, run, "stopped", "Stopped by the operator.")
                         return
                     continue
-                _record_step_outcome(store, deps, run, config, step_index, last_plan, last_op, settings)
-                advanced = _step_advance(store, run, config, step_index, last_plan, last_op, deps, settings, goal)
+                verdict = _record_step_outcome(store, deps, run, config, step_index, last_plan, last_op, settings)
+                advanced = _step_advance(store, run, config, step_index, last_plan, last_op, verdict)
                 if advanced == "halt":
                     return
                 last_plan, last_op = advanced
@@ -506,6 +521,9 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
 
             thought = _think(store, run, goal, settings, last_plan, last_op)
             record_event(store, run_id, "think", {"step": step_index + 1, **thought})
+            if stop.is_set():
+                _finish(store, run, "stopped", "Stopped by the operator.")
+                return
             if thought["state"] != "responded":
                 if step_index == 0:
                     record_event(store, run_id, "note", {"message": "Local thinking is unavailable; the run still grounds the goal itself deterministically for one evidence step."})
@@ -513,9 +531,9 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                     _finish(store, run, "unresolved", f"Local advisory became unavailable mid-run ({thought.get('state')}). Partial evidence stays in the transcript.")
                     return
             if thought.get("done_claimed") and last_op is not None:
-                verdict = deps.evaluate_objective(last_plan or {}, last_op, settings)
-                if verdict.get("achieved"):
-                    _finish(store, run, "achieved", verdict.get("reason") or "Objective verified against observed output.")
+                cached = config.get("last_verdict") or {}
+                if cached.get("achieved"):
+                    _finish(store, run, "achieved", cached.get("reason") or "Objective verified against observed output.")
                     return
                 record_event(store, run_id, "note", {"message": "The model claims the goal is met, but observed evidence does not verify it. Gathering one more evidence step."})
 
@@ -542,7 +560,7 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
             seen = config.get("seen_digests") or []
             fingerprint = _stable_fingerprint(plan)
             if fingerprint in seen:
-                _finish(store, run, "loop_guard", "The next step repeats a plan this run already executed. Vortex Terminal stops instead of looping.")
+                _finish(store, run, "loop_guard", "The next step repeats a proposal this run already made. Vortex Terminal stops instead of looping.")
                 return
             config["seen_digests"] = (seen + [fingerprint])[-32:]
             if not config.get("conversation_id") and (turn.get("conversation") or {}).get("id"):
@@ -561,6 +579,19 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                 "step": step_index + 1, "decision": guardian.get("decision"), "risk": guardian.get("risk"),
                 "reasons": [str(item)[:200] for item in (guardian.get("reasons") or [])[:4]],
             })
+            if plan.get("status") != "planned" or not plan.get("commands"):
+                idle = int(config.get("idle_rounds") or 0) + 1
+                config["idle_rounds"] = idle
+                run["config"] = config
+                _save_run(store, run)
+                record_event(store, run_id, "note", {
+                    "step": step_index + 1,
+                    "message": f"The proposal was not executable (status {plan.get('status') or 'unknown'}). Thinking again ({idle}/3)."})
+                if idle >= 3:
+                    _finish(store, run, "unresolved", "Three consecutive proposals could not be turned into executable plans. Partial evidence stays in the transcript.")
+                    return
+                continue
+            config["idle_rounds"] = 0
             operation = turn.get("operation")
             if not turn.get("auto_executed") or not operation:
                 config["pending_plan_id"] = plan.get("id")
@@ -578,11 +609,18 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                     _finish(store, run, "stopped", "Stopped by the operator.")
                     return
                 continue
+            if stop.is_set():
+                try:
+                    executor.cancel(operation["id"])
+                except Exception:
+                    pass
+                _finish(store, run, "stopped", "Stopped by the operator.")
+                return
             record_event(store, run_id, "step_started", {"step": step_index + 1, "operation_id": operation["id"], "plan_id": plan.get("id")})
             config["pending_operation_id"] = operation["id"]
             run["config"] = config
             _save_run(store, run)
-            last_plan, last_op = plan, _wait_operation(store, operation["id"], stop)
+            last_plan, last_op = plan, _wait_operation(store, executor, operation["id"], stop)
             config["pending_operation_id"] = None
             if last_op is None or stop.is_set():
                 if last_op is not None:
@@ -602,8 +640,8 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                     _finish(store, run, "stopped", "Stopped by the operator.")
                     return
                 continue
-            _record_step_outcome(store, deps, run, config, step_index, last_plan, last_op, settings)
-            advanced = _step_advance(store, run, config, step_index, last_plan, last_op, deps, settings, goal)
+            verdict = _record_step_outcome(store, deps, run, config, step_index, last_plan, last_op, settings)
+            advanced = _step_advance(store, run, config, step_index, last_plan, last_op, verdict)
             if advanced == "halt":
                 return
             last_plan, last_op = advanced
@@ -631,16 +669,16 @@ def _record_step_outcome(store: Any, deps: SimpleNamespace, run: dict[str, Any],
         "step": step_index + 1, "achieved": bool(verdict.get("achieved")), "replan": bool(verdict.get("replan")),
         "reason": _clip(verdict.get("reason"), 400), "next_request": _clip(verdict.get("next_request"), 300) if verdict.get("next_request") else None,
     })
+    # One verdict evaluation per step: the recorded verdict is the decision
+    # input (see _step_advance) and the done-claim evidence below.
+    config["last_verdict"] = {"achieved": bool(verdict.get("achieved")), "reason": _clip(verdict.get("reason"), 400)}
     return verdict
 
 
 def _step_advance(store: Any, run: dict[str, Any], config: dict[str, Any], step_index: int,
                   plan: dict[str, Any] | None, operation: dict[str, Any] | None,
-                  deps: SimpleNamespace, settings: dict[str, Any], goal: str) -> Any:
-    try:
-        verdict = deps.evaluate_objective(plan or {}, operation, settings)
-    except Exception:
-        verdict = {"achieved": False}
+                  verdict: dict[str, Any] | None) -> Any:
+    verdict = verdict or {}
     config["step_index"] = step_index + 1
     run["config"] = config
     _save_run(store, run)

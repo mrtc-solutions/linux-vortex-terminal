@@ -32,6 +32,18 @@ class TTLCache:
             self._data[key] = (time.monotonic(), value)
         return value
 
+    def peek(self, key: Hashable) -> tuple[bool, T | None]:
+        now = time.monotonic()
+        with self._lock:
+            cached = self._data.get(key)
+            if cached is not None and now - cached[0] < self.ttl:
+                return True, cached[1]
+            return False, None
+
+    def put(self, key: Hashable, value: T) -> None:
+        with self._lock:
+            self._data[key] = (time.monotonic(), value)
+
     def clear(self) -> None:
         with self._lock:
             self._data.clear()
