@@ -95,7 +95,7 @@ def discover_wordlist(request: str = "") -> dict[str, Any]:
         return {
             "state": "absent",
             "path": None,
-            "message": "The requested wordlist is missing, world-writable, too large, or outside /usr/share and the VORTEX data directory.",
+            "message": "The requested wordlist is missing, world-writable, too large, or outside /usr/share and the Vortex Terminal data directory.",
         }
     for raw in WORDLIST_CANDIDATES:
         found = _inspect_wordlist(raw)
@@ -104,7 +104,7 @@ def discover_wordlist(request: str = "") -> dict[str, Any]:
     return {
         "state": "absent",
         "path": None,
-        "message": "No reviewed wordlist was found. Provide an existing host path with `wordlist /absolute/path` under /usr/share or the VORTEX data directory.",
+        "message": "No reviewed wordlist was found. Provide an existing host path with `wordlist /absolute/path` under /usr/share or the Vortex Terminal data directory.",
     }
 
 

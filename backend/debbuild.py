@@ -1,4 +1,4 @@
-"""Build the Linux desktop (.deb) package of the VORTEX workbench.
+"""Build the Linux desktop (.deb) package of the Vortex Terminal workbench.
 
 The package is a real Debian archive produced by the reviewed
 ``packaging/deb/build.sh`` script — the single source of truth for packaging.
@@ -7,7 +7,7 @@ This module only orchestrates it:
 - runs the builder against the live repository tree (the same files the
   running sidecar serves), so a downloaded package can never lag behind the
   workbench that produced it;
-- stages output under the VORTEX data root (never inside the repository);
+- stages output under the Vortex Terminal data root (never inside the repository);
 - reports size/sha256 plus a frontend digest proving which UI the package
   carries.
 
@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - top-level backend import
     from fileio import exclusive_file_lock, open_owner_binary  # type: ignore
 
 PACKAGE = "linux-vortex-terminal"
-FRONTEND_FILES = ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "models.js", "hud.js", "styles.css")
+FRONTEND_FILES = ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "models.js", "aiops.js", "agent.js", "hud.js", "styles.css")
 _BUILD_LOCK = threading.Lock()
 _MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 
@@ -132,6 +132,13 @@ def _verify_deb(path: Path, version: str, dpkg_deb: str, env: dict[str, str]) ->
     info = subprocess.run([dpkg_deb, "--info", str(path)], capture_output=True, text=True, timeout=20, env=env)
     if info.returncode != 0:
         raise RuntimeError("dpkg-deb could not verify the built package")
+    # Probe each control member explicitly: dpkg-deb exits 0 only when the
+    # member exists, so a present maintainer script cannot hide behind output
+    # formatting, and a Description that merely mentions one cannot trip us.
+    for script in ("preinst", "postinst", "prerm", "postrm", "triggers"):
+        probe = subprocess.run([dpkg_deb, "--info", str(path), script], capture_output=True, text=True, timeout=20, env=env)
+        if probe.returncode == 0:
+            raise RuntimeError(f"deb package unexpectedly contains a maintainer script ({script})")
     if any(marker in info.stdout.lower() for marker in (" preinst", " postinst", " prerm", " postrm", " triggers")):
         raise RuntimeError("deb package unexpectedly contains a maintainer script")
 

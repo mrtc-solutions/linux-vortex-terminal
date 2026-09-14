@@ -4,12 +4,16 @@ const MAX_ROUTE_LENGTH = 2048;
 const SAFE_ID = '[A-Za-z0-9._:@-]+';
 
 const GET_ROUTES = [
-  /^\/api\/(?:doctor|tools|engagements|history|reports|sessions|dashboard|health|ollama|settings|setup|agents|conversations|tasks|memory|learning|findings|models|search)$/,
+  /^\/api\/(?:doctor|tools|engagements|history|reports|sessions|dashboard|health|ollama|settings|setup|agents|conversations|tasks|memory|learning|findings|models|search|artifacts|capabilities|license)$/,
   /^\/api\/tools\/host$/,
   /^\/api\/system\/health$/,
   /^\/api\/audit\/verify$/,
   /^\/api\/assets\/graph$/,
   /^\/api\/models\/gguf$/,
+  /^\/api\/llamafile$/,
+  /^\/api\/reports\/system$/,
+  /^\/api\/mobile\/apk$/,
+  /^\/api\/desktop\/deb$/,
   /^\/api\/install\/commands$/,
   /^\/api\/agents\/upstream$/,
   /^\/api\/assist\/coverage$/,
@@ -17,23 +21,34 @@ const GET_ROUTES = [
   new RegExp(`^/api/operations/${SAFE_ID}$`),
   new RegExp(`^/api/sessions/${SAFE_ID}/events$`),
   new RegExp(`^/api/agents/${SAFE_ID}/install$`),
-  new RegExp(`^/api/conversations/${SAFE_ID}$`)
+  new RegExp(`^/api/conversations/${SAFE_ID}$`),
+  new RegExp(`^/api/tasks/${SAFE_ID}$`),
+  new RegExp(`^/api/tasks/${SAFE_ID}/events$`),
+  new RegExp(`^/api/reports/assessment/${SAFE_ID}$`),
+  new RegExp(`^/api/reports/${SAFE_ID}$`),
+  new RegExp('^/api/agent/runs$'),
+  new RegExp(`^/api/agent/runs/${SAFE_ID}$`),
+  new RegExp(`^/api/agent/runs/${SAFE_ID}/stream$`)
 ];
 
 const POST_ROUTES = [
-  /^\/api\/(?:engagements|sessions|conversations|palette|settings|secrets|execute|assist)$/,
+  /^\/api\/(?:engagements|sessions|conversations|palette|settings|secrets|execute|assist|memory|plan)$/,
+  /^\/api\/artifacts\/analyze$/,
   /^\/api\/(?:mobile\/apk|desktop\/deb|workspace\/turn|tools\/host\/rescan|control\/stop-all|setup\/complete|refresh|dependencies\/(?:plan|execute))$/,
   /^\/api\/ollama\/(?:install(?:\/cancel)?|server\/(?:start|stop)|models\/(?:pull|activate|cancel|remove))$/,
   /^\/api\/models\/gguf\/(?:activate|import)$/,
+  /^\/api\/llamafile\/(?:install(?:\/cancel)?|import|server\/(?:start|stop)|models\/(?:activate|remove))$/,
   /^\/api\/agents\/upstream\/refresh$/,
   new RegExp(`^/api/engagements/${SAFE_ID}/close$`),
-  new RegExp(`^/api/operations/${SAFE_ID}/approve$`),
+  new RegExp(`^/api/operations/${SAFE_ID}/(?:approve|cancel|complete-task)$`),
   new RegExp(`^/api/sessions/${SAFE_ID}/(?:input|kill|resize)$`),
   new RegExp(`^/api/conversations/${SAFE_ID}/(?:rename|archive|delete)$`),
   new RegExp(`^/api/conversations/${SAFE_ID}/messages/${SAFE_ID}/edit$`),
   new RegExp(`^/api/tasks/${SAFE_ID}/(?:restart|resume|delete|pause)$`),
   new RegExp(`^/api/reports/${SAFE_ID}/delete$`),
-  new RegExp(`^/api/plans/${SAFE_ID}/reject$`)
+  new RegExp(`^/api/plans/${SAFE_ID}/reject$`),
+  new RegExp('^/api/agent/runs$'),
+  new RegExp(`^/api/agent/runs/${SAFE_ID}/(?:approve|stop)$`)
 ];
 
 function parseRelativeRoute(route) {
@@ -79,7 +94,8 @@ function isSidecarDownloadUrl(rawUrl, sidecarUrl) {
     return /^\/api\/(?:mobile\/apk\/download|desktop\/deb\/download)$/.test(pathname) ||
       new RegExp(`^/api/reports/${SAFE_ID}/download$`).test(pathname) ||
       new RegExp(`^/api/reports/assessment/${SAFE_ID}$`).test(pathname) ||
-      new RegExp(`^/api/conversations/${SAFE_ID}/export$`).test(pathname);
+      new RegExp(`^/api/conversations/${SAFE_ID}/export$`).test(pathname) ||
+      pathname === '/api/reports/system';
   } catch (_) {
     return false;
   }
@@ -90,8 +106,10 @@ function isDirectRendererRequest(rawUrl, sidecarUrl, method = 'GET') {
   try {
     const pathname = decodeURIComponent(new URL(rawUrl).pathname);
     return pathname === '/' || pathname === '/index.html' || pathname.startsWith('/assets/') ||
+      pathname === '/api/aiops/stream' ||
       new RegExp(`^/api/operations/${SAFE_ID}/stream$`).test(pathname) ||
       new RegExp(`^/api/sessions/${SAFE_ID}/stream$`).test(pathname) ||
+      new RegExp(`^/api/agent/runs/${SAFE_ID}/stream$`).test(pathname) ||
       isSidecarDownloadUrl(rawUrl, sidecarUrl);
   } catch (_) {
     return false;

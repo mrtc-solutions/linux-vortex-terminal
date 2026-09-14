@@ -38,7 +38,7 @@ def _verdict(plan: dict[str, Any], operation: dict[str, Any] | None) -> dict[str
         return {
             "achieved": False,
             "replan": False,
-            "reason": "A required tool was missing. VORTEX will not invent results or silently install software.",
+            "reason": "A required tool was missing. Vortex Terminal will not invent results or silently install software.",
             "next_request": None,
             "missing_tools": missing,
         }
@@ -48,7 +48,10 @@ def _verdict(plan: dict[str, Any], operation: dict[str, Any] | None) -> dict[str
         return {"achieved": False, "replan": True, "reason": "A command did not complete successfully. A fresh plan is required.", "next_request": plan.get("request")}
     if status == "succeeded" or (not operation and plan.get("status") == "planned"):
         if kind == "container_diagnose":
-            joined = "\n".join((item.get("stdout") or "") + (item.get("stderr") or "") for item in commands).lower()
+            joined = "\n".join(
+                (item.get("stdout") or "") + (item.get("stderr") or "")
+                for item in commands if isinstance(item, dict)
+            ).lower()
             if "cannot connect" in joined or "is the docker daemon running" in joined:
                 return {
                     "achieved": False,

@@ -8,7 +8,7 @@ cancelling, and removing local models.
 Safety invariants:
 
 * Every install/download is explicitly operator-confirmed and never runs in
-  offline mode. VORTEX never captures a sudo password: the install path is a
+  offline mode. Vortex Terminal never captures a sudo password: the install path is a
   user-space tarball, not ``curl | sh``.
 * The service binds to loopback (``127.0.0.1``) only.
 * Model names are validated before ``ollama pull``; they are passed as a
@@ -151,7 +151,7 @@ def _trusted_executable(path: Path, *, managed: bool = False) -> str | None:
 def _locate_binary() -> str | None:
     # Never execute an ambient PATH entry from a writable project/virtualenv.
     # System binaries come only from the controlled runtime PATH; the one
-    # user-owned exception is VORTEX's fixed, mode-0700 managed data tree.
+    # user-owned exception is Vortex Terminal's fixed, mode-0700 managed data tree.
     controlled_path = minimal_env(False).get("PATH", "/usr/local/bin:/usr/bin:/bin")
     found = shutil.which("ollama", path=controlled_path)
     trusted = _trusted_executable(Path(found)) if found else None
@@ -230,7 +230,7 @@ def _loopback_open(request: urllib.request.Request, timeout: float):
 def _api_version(endpoint: str | None = None, timeout: float = 0.8) -> str | None:
     url = (endpoint or _configured_endpoint()).rstrip("/")
     try:
-        request = urllib.request.Request(url + "/api/version", headers={"User-Agent": "Vortex/0.2"})
+        request = urllib.request.Request(url + "/api/version", headers={"User-Agent": "Vortex/0.3"})
         with _loopback_open(request, timeout) as response:
             payload = _read_json_response(response, limit=64 * 1024)
         version = payload.get("version") if isinstance(payload, dict) else None
@@ -243,7 +243,7 @@ def _ollama_tags(endpoint: str | None = None, timeout: float = 2.0) -> list[str]
     """Return the live local model names, or None when the loopback API is down."""
     url = (endpoint or _configured_endpoint()).rstrip("/")
     try:
-        request = urllib.request.Request(url + "/api/tags", headers={"User-Agent": "Vortex/0.2"})
+        request = urllib.request.Request(url + "/api/tags", headers={"User-Agent": "Vortex/0.3"})
         with _loopback_open(request, timeout) as response:
             payload = _read_json_response(response, limit=2 * 1024 * 1024)
         models = payload.get("models") if isinstance(payload, dict) else None
@@ -389,7 +389,7 @@ def _latest_runtime_asset(arch: str) -> dict[str, Any]:
     """Resolve one exact official release asset with GitHub's SHA-256 digest."""
     request = urllib.request.Request(
         _RELEASE_API,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "Vortex/0.2"},
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "Vortex/0.3"},
     )
     with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - fixed GitHub API URL
         _validate_response_origin(response, frozenset({"api.github.com"}))
@@ -607,7 +607,7 @@ def _download_to(url: str, destination: Path, job: dict[str, Any], *, expected_s
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temp_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".part", dir=str(destination.parent))
     temp = Path(temp_name)
-    request = urllib.request.Request(url, headers={"User-Agent": "Vortex/0.2 (operator-confirmed local install)"})
+    request = urllib.request.Request(url, headers={"User-Agent": "Vortex/0.3 (operator-confirmed local install)"})
     cancel_event = job.get("cancel_event")
     try:
         with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 - reviewed GitHub release URL
@@ -863,7 +863,10 @@ def _publish_managed_root(staged: Path, managed: Path) -> None:
             os.replace(backup, managed)
         raise
     if had_previous:
-        shutil.rmtree(backup)
+        try:
+            shutil.rmtree(backup)
+        except OSError:
+            pass
     directory_fd = os.open(managed.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(directory_fd)
@@ -1454,12 +1457,9 @@ def catalog(status: dict[str, Any] | None = None, settings: dict[str, Any] | Non
 
     items: list[dict[str, Any]] = []
     for canonical_name, meta in MODEL_CATALOG.items():
-        installed = canonical_name in installed_names or any(
-            n == canonical_name or n.startswith(meta["family"] + ":") for n in installed_names
-        )
-        installed_name = canonical_name if canonical_name in installed_names else next(
-            (n for n in installed_names if n.startswith(meta["family"] + ":")), None
-        )
+        family_matches = sorted(n for n in installed_names if n.startswith(meta["family"] + ":"))
+        installed = canonical_name in installed_names or bool(family_matches)
+        installed_name = canonical_name if canonical_name in installed_names else (family_matches[0] if family_matches else None)
         job = live_jobs.get(canonical_name)
         items.append({
             "name": canonical_name,

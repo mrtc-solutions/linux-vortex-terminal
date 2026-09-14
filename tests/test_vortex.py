@@ -66,6 +66,35 @@ class VortexCoreTests(unittest.TestCase):
             path.symlink_to(victim)
             self.assertIsNone(cli.runtime_metadata())
 
+    def test_cli_run_accepts_flags_after_plan_id(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from cli import vortex as cli
+
+        env = {
+            "VORTEX_CONFIG_DIR": str(Path(self.tmp.name) / "cli-cfg"),
+            "VORTEX_DATA_DIR": str(Path(self.tmp.name) / "cli-data"),
+        }
+        with patch.dict(os.environ, env):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                self.assertEqual(cli.main(["plan", "--json", "what is my username"]), 0)
+            plan = json.loads(buf.getvalue())["plan"]
+            # Flags after the plan id must parse as flags (argparse REMAINDER
+            # used to swallow them into `direct` and silently misroute).
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.main(["--yes", "--non-interactive", "run", plan["id"],
+                               "--digest", plan["digest"], "--approval-token", plan["approval_token"]])
+            self.assertEqual(rc, 0)
+            self.assertIn("[SUCCEEDED]", buf.getvalue())
+            denied = io.StringIO()
+            with redirect_stdout(denied):
+                rc = cli.main(["--yes", "--non-interactive", "run", plan["id"],
+                               "--digest", "wrong", "--approval-token", "wrong"])
+            self.assertEqual(rc, vtx_backend.EXIT_CODES["policy_denied"])
+
     def test_cli_remote_request_rejects_non_loopback_before_network(self):
         from cli import vortex as cli
         with patch.object(cli.urllib.request, "build_opener") as opener:
@@ -1025,6 +1054,19 @@ The following packages will be upgraded:
         self.assertEqual(facts['state'], 'observed')
         self.assertEqual(resolution_digest(facts), resolution_digest(facts))
 
+    def test_cidr_targets_are_never_resolved(self):
+        for target in ('10.0.0.0/24', '127.0.0.1/32', '2001:db8::/64'):
+            fact = resolve_target(target)
+            self.assertEqual(fact['state'], 'not_applicable', target)
+            self.assertEqual(fact['addresses'], [])
+
+    def test_malformed_target_endpoints_never_raise(self):
+        from backend.network import target_endpoint
+        for target in ('http://x:abc/', 'https://[::1', 'http://[::1]:99999/'):
+            self.assertEqual(target_endpoint(target), (None, None), target)
+            fact = resolve_target(target)
+            self.assertEqual(fact['state'], 'not_applicable', target)
+
     def test_dns_change_invalidates_active_plan_before_connection(self):
         import backend.vortex_backend as backend_module
         if not shutil.which('curl'):
@@ -1153,15 +1195,15 @@ The following packages will be upgraded:
 
     def test_app_version_is_consistent_across_surfaces(self):
         root = Path(__file__).resolve().parent.parent
-        self.assertEqual(vtx_backend.APP_VERSION, "0.2.23")
+        self.assertEqual(vtx_backend.APP_VERSION, "0.3.0")
         self.assertIn(f"version='vortex {vtx_backend.APP_VERSION}'", (root / "cli" / "vortex.py").read_text(encoding="utf-8"))
         self.assertIn(f'"version": "{vtx_backend.APP_VERSION}"', (root / "package.json").read_text(encoding="utf-8"))
         html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
-        self.assertIn(f"VORTEX {vtx_backend.APP_VERSION}", html)
+        self.assertIn(f"VORTEX TERMINAL {vtx_backend.APP_VERSION}", html)
         self.assertNotIn("0.2.21", html)
         from backend.mobile.apkbuild import VERSION_CODE, VERSION_NAME
         self.assertEqual(VERSION_NAME, vtx_backend.APP_VERSION)
-        self.assertEqual(VERSION_CODE, 223)
+        self.assertEqual(VERSION_CODE, 230)
 
     def test_privilege_handoff_documents_sudo_timestamp_window(self):
         source = Path(__file__).resolve().parent.parent.joinpath("cli", "vortex.py").read_text(encoding="utf-8")
@@ -1173,6 +1215,30 @@ The following packages will be upgraded:
         analysis = make_analysis({}, op)
         self.assertIn("not a security guarantee", analysis["inference"])
         self.assertIn("No command was run", analysis["fact"])
+
+
+class DownloadFilenameTests(unittest.TestCase):
+    def test_header_injection_is_stripped(self):
+        hostile = 'vortex.apk";\r\nX-Injected: 1\r\nContent-Length: 0\r\n\r\n'
+        safe = vtx_backend._safe_download_filename(hostile)
+        self.assertNotIn('"', safe)
+        self.assertNotIn("\r", safe)
+        self.assertNotIn("\n", safe)
+        self.assertNotIn(";", safe)
+        self.assertNotIn(" ", safe)
+        self.assertTrue(safe.startswith("vortex.apk"))
+
+    def test_traversal_and_unicode_are_stripped(self):
+        self.assertEqual(vtx_backend._safe_download_filename("../../etc/passwd"), "....etcpasswd")
+        self.assertEqual(vtx_backend._safe_download_filename("vörtex✓.apk"), "vrtex.apk")
+
+    def test_empty_and_long_names_fall_back_safely(self):
+        self.assertEqual(vtx_backend._safe_download_filename(""), "download.bin")
+        self.assertEqual(vtx_backend._safe_download_filename("...///..."), "......")
+        long_name = "a" * 200 + ".apk"
+        safe = vtx_backend._safe_download_filename(long_name)
+        self.assertEqual(len(safe), 128)
+        self.assertEqual(vtx_backend._safe_download_filename("vortex-terminal_0.3.0_amd64.deb"), "vortex-terminal_0.3.0_amd64.deb")
 
 
 if __name__ == "__main__":

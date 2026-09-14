@@ -101,7 +101,7 @@ class AgentAdapter:
             "state": "requires_configuration",
             "result": None,
             "message": (
-                f"{self.manifest.name} is installed, but VORTEX will not invoke its interactive or model-backed "
+                f"{self.manifest.name} is installed, but Vortex Terminal will not invoke its interactive or model-backed "
                 "workflow until a reviewed non-executing consult interface is configured. "
                 "No agent output was fabricated."
             ),

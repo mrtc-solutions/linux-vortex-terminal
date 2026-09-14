@@ -1,7 +1,7 @@
 """Minimal Android binary XML (AXML) encoder.
 
 Produces the resource-table XML used inside APKs. Only the constructs needed
-for VORTEX's WebView manifest are implemented. Values are typed; nothing is
+for Vortex Terminal's WebView manifest are implemented. Values are typed; nothing is
 left as plaintext XML inside the APK.
 """
 from __future__ import annotations
@@ -55,11 +55,6 @@ def _s32(n: int) -> bytes:
     return struct.pack("<i", n)
 
 
-def _pad4(data: bytes) -> bytes:
-    pad = (4 - (len(data) % 4)) % 4
-    return data + (b"\x00" * pad)
-
-
 def _utf16_string(value: str) -> bytes:
     encoded = value.encode("utf-16le")
     # uint16 char count, then data, then 0x0000 terminator.
@@ -109,8 +104,15 @@ def _attr(ns: int, name: int, raw: int, typed: tuple[int, int]) -> bytes:
 
 def _start_element(ns: int, name: int, attrs: list[bytes], line: int = 3) -> bytes:
     header_size = 16
-    # id/class/style indices: 0x00100000 means "none" in the attribute index field.
-    ext = _s32(ns) + _u32(name) + _u16(0x0014) + _u16(len(attrs)) + _u16(0) + _u16(0) + _u16(0)
+    # ResXMLTree_attrExt: ns, name, then attributeStart, attributeSize,
+    # attributeCount, idIndex, classIndex, styleIndex. attributeSize is the
+    # size of one attribute (20), not the attribute count; the indices are 0
+    # when the element has no id/class/style attribute.
+    ext = (
+        _s32(ns) + _u32(name)
+        + _u16(0x0014) + _u16(ATTR_SIZE) + _u16(len(attrs))
+        + _u16(0) + _u16(0) + _u16(0)
+    )
     payload = ext + b"".join(attrs)
     total = header_size + len(payload)
     return _u16(RES_XML_START_ELEMENT_TYPE) + _u16(header_size) + _u32(total) + _u32(line) + _u32(0xFFFFFFFF) + payload
@@ -138,9 +140,9 @@ class _Pool:
 def encode_manifest(
     *,
     package: str = "io.vortex.mobile",
-    version_code: int = 219,
-    version_name: str = "0.2.23",
-    label: str = "VORTEX",
+    version_code: int = 230,
+    version_name: str = "0.3.0",
+    label: str = "Vortex Terminal",
     activity: str = "io.vortex.mobile.MainActivity",
     min_sdk: int = 21,
     target_sdk: int = 34,
@@ -223,12 +225,13 @@ def encode_manifest(
         bool_attr("hardwareAccelerated", True),
     ], line))
     line += 1
-    # configChanges: orientation|keyboardHidden|screenSize = 0x00A0
+    # configChanges: orientation|keyboardHidden|screenSize = 0x04A0, so rotation
+    # does not destroy and recreate the WebView activity (API 13+).
     chunks.append(_start_element(-1, activity_el, [
         str_attr("name", activity_val),
         str_attr("label", label_val),
         bool_attr("exported", True),
-        int_attr("configChanges", 0x00A0),
+        int_attr("configChanges", 0x04A0),
     ], line))
     line += 1
     chunks.append(_start_element(-1, intent_filter, [], line))

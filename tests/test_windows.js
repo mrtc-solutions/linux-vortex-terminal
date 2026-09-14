@@ -115,6 +115,19 @@ assert.ok(main.includes('setWindowOpenHandler'), 'unexpected popup creation must
 assert.ok(main.includes("on('will-navigate'"), 'unexpected navigation must be denied');
 assert.ok(main.includes('setPermissionRequestHandler'), 'renderer permissions must fail closed');
 assert.ok(main.includes('isDirectRendererRequest'), 'token injection must be route-scoped');
+assert.ok(main.includes('contextIsolation: true'), 'renderer must be context-isolated');
+assert.ok(main.includes('nodeIntegration: false'), 'renderer must not have node integration');
+assert.ok(main.includes('sandbox: true'), 'renderer must be sandboxed');
+assert.ok(main.includes('webSecurity: true'), 'renderer web security must stay enabled');
+assert.ok(main.includes('allowRunningInsecureContent: false'), 'renderer must block insecure content');
+assert.ok(main.includes('webviewTag: false'), 'renderer must not allow webview tags');
+assert.ok(main.includes("on('will-redirect'"), 'unexpected redirects must be denied');
+assert.ok(main.includes("action: 'deny'"), 'unexpected popup creation must be denied');
+assert.ok(preload.includes('Object.freeze'), 'preload bridge must be frozen');
+assert.strictEqual(
+  (preload.match(/exposeInMainWorld/g) || []).length, 2,
+  'preload must expose exactly the vortexApi + vortexWindow bridges'
+);
 
 const sidecar = 'http://127.0.0.1:8765';
 assert.strictEqual(isAllowedApiRequest('/api/health', 'GET'), true);
@@ -131,8 +144,35 @@ assert.strictEqual(isAllowedApiRequest('/api/models/gguf/activate', 'GET'), fals
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream', 'GET'), true);
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream/refresh', 'POST'), true);
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream/refresh', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123/stream', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123/approve', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123/stop', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123/approve', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs', 'DELETE'), false);
 assert.strictEqual(isAllowedApiRequest('/api/assist', 'POST'), true);
 assert.strictEqual(isAllowedApiRequest('/api/assist/coverage', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/artifacts', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/capabilities', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/license', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/reports/system', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/mobile/apk', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/desktop/deb', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/tasks/abc123', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/tasks/abc123/events', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/license', 'POST'), false);
+assert.strictEqual(isAllowedApiRequest('/api/artifacts', 'POST'), false);
+assert.strictEqual(isAllowedApiRequest('/api/tasks/abc123/episode', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/plan', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/operations/abc/cancel', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/operations/abc/complete-task', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/artifacts/analyze', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/reports/assessment/eng123', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/plan', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/artifacts/analyze', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/operations/abc/delete', 'POST'), false);
 assert.strictEqual(isAllowedApiRequest('/api/models/../../etc/passwd', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/execute', 'GET'), false);
 assert.strictEqual(isAllowedApiRequest('/api/store/backup', 'POST'), false);
@@ -143,7 +183,11 @@ assert.strictEqual(isDirectRendererRequest(`${sidecar}/`, sidecar, 'GET'), true)
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/assets/app.js`, sidecar, 'GET'), true);
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/health`, sidecar, 'GET'), false);
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/operations/abc/stream`, sidecar, 'GET'), true);
+assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/aiops/stream`, sidecar, 'GET'), true);
+assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/agent/runs/abc123/stream?since=4`, sidecar, 'GET'), true);
 assert.strictEqual(isSidecarDownloadUrl(`${sidecar}/api/reports/abc/download?format=md`, sidecar), true);
+assert.strictEqual(isSidecarDownloadUrl(`${sidecar}/api/reports/system`, sidecar), true);
+assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/reports/system`, sidecar, 'GET'), true);
 assert.strictEqual(isSidecarDownloadUrl('https://example.test/api/reports/abc/download', sidecar), false);
 assert.strictEqual(sameSidecarUrl(`${sidecar}/api/health`, sidecar), true);
 assert.strictEqual(sameSidecarUrl('http://127.0.0.1:9999/', sidecar), false);

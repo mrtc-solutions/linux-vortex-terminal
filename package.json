@@ -1,6 +1,6 @@
 {
   "name": "linux-vortex-terminal",
-  "version": "0.2.23",
+  "version": "0.3.0",
   "description": "Linux-native Vortex AI cybersecurity and operations workbench",
   "private": true,
   "license": "MIT",
@@ -10,13 +10,33 @@
     "start": "node scripts/start.js",
     "start:electron": "electron desktop/main.js",
     "preview": "python3 backend/vortex_backend.py --host 127.0.0.1 --port 4173",
-    "test": "python3 -m unittest discover -s tests -v && node tests/test_terminal.js && node tests/test_windows.js && node tests/test_frontend.js && node tests/test_frontend_runtime.js && node tests/test_frontend_auth.js && node tests/test_agents_local_ai.js && node tests/test_hud.js && node tests/test_responsive.js",
-    "lint": "python3 -m compileall -q backend cli && node --check frontend/app.js && node --check frontend/terminal.js && node --check frontend/windows.js && node --check frontend/workspace.js && node --check frontend/models.js && node --check frontend/hud.js && node --check tests/test_frontend.js && node --check tests/test_frontend_runtime.js && node --check tests/test_frontend_auth.js && node --check tests/test_agents_local_ai.js && node --check tests/test_hud.js && node --check tests/test_responsive.js && node --check desktop/main.js && node --check desktop/preload.js && node --check desktop/security.js && node --check desktop/window-controls.js && node --check scripts/ensure-electron.js && node --check scripts/start.js",
+    "dev": "vite",
+    "build": "vite build",
+    "preview:ui": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "python3 -m unittest discover -s tests -v && node tests/test_terminal.js && node tests/test_windows.js && node tests/test_frontend.js && node tests/test_frontend_runtime.js && node tests/test_frontend_auth.js && node tests/test_agents_local_ai.js && node tests/test_hud.js && node tests/test_responsive.js && node tests/test_agent.js",
+    "lint": "python3 -m compileall -q backend cli && node --check frontend/app.js && node --check frontend/aiops.js && node --check frontend/terminal.js && node --check frontend/windows.js && node --check frontend/workspace.js && node --check frontend/models.js && node --check frontend/agent.js && node --check frontend/hud.js && node --check tests/test_frontend.js && node --check tests/test_frontend_runtime.js && node --check tests/test_frontend_auth.js && node --check tests/test_agents_local_ai.js && node --check tests/test_hud.js && node --check tests/test_responsive.js && node --check tests/test_agent.js && node --check tests/test_terminal.js && node --check tests/test_windows.js && node --check desktop/main.js && node --check desktop/preload.js && node --check desktop/security.js && node --check desktop/window-controls.js && node --check scripts/ensure-electron.js && node --check scripts/start.js && npx tsc --noEmit",
     "format:check": "python3 -m compileall -q backend cli",
     "package:deb": "packaging/deb/build.sh"
   },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "lucide-react": "^1.45.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "tailwind-merge": "3.4.0"
+  },
   "devDependencies": {
-    "electron": "^44.2.0"
+    "@tailwindcss/vite": "4.1.17",
+    "@types/node": "22.19.17",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.1",
+    "electron": "^44.2.0",
+    "tailwindcss": "4.1.17",
+    "typescript": "5.9.3",
+    "vite": "7.3.2",
+    "vite-plugin-singlefile": "2.3.0"
   },
   "engines": {
     "node": ">=22.12.0"

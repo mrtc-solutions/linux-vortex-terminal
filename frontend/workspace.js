@@ -24,7 +24,7 @@
     const el = $('chat-thread');
     if (!el) return;
     if (!messages || !messages.length) {
-      el.innerHTML = '<div class="chat-empty">Ask VORTEX to inspect this host. You will see the plan, the real terminal evidence, and a natural-language explanation.</div>';
+      el.innerHTML = '<div class="chat-empty">Ask Vortex Terminal to inspect this host. You will see the plan, the real terminal evidence, and a natural-language explanation.</div>';
       return;
     }
     el.innerHTML = messages.map(m => {
@@ -260,7 +260,8 @@
     try {
       const data = await api('/api/tasks');
       const interrupted = data.interrupted || [];
-      $('interrupted-tasks').textContent = interrupted.length ? `Resume available: ${interrupted.map(t => t.id).join(', ')}` : 'No interrupted tasks.';
+      const interruptedEl = $('interrupted-tasks');
+      if (interruptedEl) interruptedEl.textContent = interrupted.length ? `Resume available: ${interrupted.map(t => t.id).join(', ')}` : 'No interrupted tasks.';
       renderList('task-list', data.tasks || [], 'No tasks recorded.', t => `<article class="activity-item"><span class="activity-icon ${t.state === 'COMPLETED' ? '' : t.state === 'FAILED' ? 'failed' : 'running'}"></span><div><div class="activity-title">${esc(t.id)} · ${esc(t.state)}</div><div class="activity-command">${esc(t.request)}</div></div><div class="activity-meta"><div>${esc(t.risk || '—')}</div><div>${esc(fmtDate(t.updated_at))}</div><div><button class="text-button" data-task-restart="${esc(t.id)}">RESTART</button> <button class="text-button" data-task-resume="${esc(t.id)}">RESUME</button> <button class="text-button" data-task-delete="${esc(t.id)}">DELETE</button></div></div></article>`);
       document.querySelectorAll('[data-task-restart]').forEach(btn => btn.addEventListener('click', async () => {
         try { await api(`/api/tasks/${encodeURIComponent(btn.dataset.taskRestart)}/restart`, { method: 'POST', body: { cwd: state.doctor?.cwd } }); toast('Task restarted with a fresh plan.'); loadTasks(); }
@@ -375,9 +376,10 @@
     body.textContent = 'Loading report…';
     if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
     else host.hidden = false;
-    const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}/download?format=md`);
-    if (!response.ok) throw new Error(`Preview failed (${response.status})`);
-    body.textContent = await response.text();
+    // JSON read through api() so the desktop bridge authenticates the call;
+    // a raw fetch has no capability header and 401s inside Electron.
+    const data = await api(`/api/reports/${encodeURIComponent(reportId)}`);
+    body.textContent = data.markdown || 'Report has no rendered content.';
   }
   $('close-report-preview')?.addEventListener('click', () => {
     const host = $('report-window');
@@ -698,7 +700,7 @@
           list.innerHTML = '<div class="empty-inline">No missing catalog items on this host.</div>';
           return;
         }
-        list.innerHTML = missing.map(item => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')}</small></div><span class="badge ${item.required ? 'badge-red' : 'badge-muted'}">${item.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="text-button" data-dep-install="${esc(item.id)}" title="${item.method === 'apt' ? 'Open the reviewed install proposal' : 'No reviewed installer is mapped for this item; VORTEX shows operator instructions only and never auto-installs'}">${item.method === 'apt' ? 'INSTALL' : 'REVIEW'}</button></div>`).join('');
+        list.innerHTML = missing.map(item => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')}</small></div><span class="badge ${item.required ? 'badge-red' : 'badge-muted'}">${item.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="text-button" data-dep-install="${esc(item.id)}" title="${item.method === 'apt' ? 'Open the reviewed install proposal' : 'No reviewed installer is mapped for this item; Vortex Terminal shows operator instructions only and never auto-installs'}">${item.method === 'apt' ? 'INSTALL' : 'REVIEW'}</button></div>`).join('');
         list.querySelectorAll('[data-dep-install]').forEach(btn => btn.addEventListener('click', () => window.openDependency(btn.dataset.depInstall)));
       } catch (e) { toast(e.message, true); }
     }
@@ -728,14 +730,14 @@
           : esc(source);
         const isAgent = item.kind === 'agent' || Boolean(item.agent);
         const note = isAgent
-          ? '<p class="form-note">VORTEX cannot download or run third-party agent code — run the commands in your main Linux terminal, then return and refresh. Local AI (Ollama + models) is installed from the Agents or Models view instead.</p>'
+          ? '<p class="form-note">Vortex Terminal cannot download or run third-party agent code — run the commands in your main Linux terminal, then return and refresh. Local AI (Ollama + models) is installed from the Agents or Models view instead.</p>'
           : (canPlan
             ? ''
-            : '<p class="form-note">This item is operator-installed. VORTEX will not download it.</p>');
+            : '<p class="form-note">This item is operator-installed. Vortex Terminal will not download it.</p>');
         const commandActions = commands
           ? `<div class="command-actions"><button class="secondary-button" data-copy-commands>COPY COMMANDS</button><button class="secondary-button" data-terminal-commands>OPEN IN TERMINAL</button></div>`
           : '';
-        detail.innerHTML = `<strong>${esc(item.title || itemId)}</strong><p>${esc(item.message || '')}</p><p>Source: ${sourceHtml} · License: ${esc(item.license || 'n/a')}</p>${commands ? `<p class="form-note">Run these in your main Linux terminal, then click REFRESH ↻ so the rescan finds the result.</p>` : ''}<pre>${commands || 'No command is executed by VORTEX.'}</pre>${commandActions}${canPlan ? `<div class="form-foot"><button class="primary-button" id="dep-plan">CREATE APT PLAN</button></div>` : note}`;
+        detail.innerHTML = `<strong>${esc(item.title || itemId)}</strong><p>${esc(item.message || '')}</p><p>Source: ${sourceHtml} · License: ${esc(item.license || 'n/a')}</p>${commands ? `<p class="form-note">Run these in your main Linux terminal, then click REFRESH ↻ so the rescan finds the result.</p>` : ''}<pre>${commands || 'No command is executed by Vortex Terminal.'}</pre>${commandActions}${canPlan ? `<div class="form-foot"><button class="primary-button" id="dep-plan">CREATE APT PLAN</button></div>` : note}`;
         detail.querySelector('[data-copy-commands]')?.addEventListener('click', () => copyText(commands, 'Install commands copied.'));
         detail.querySelector('[data-terminal-commands]')?.addEventListener('click', () => openInTerminal(commands, 'Install commands'));
         $('dep-plan')?.addEventListener('click', async () => {

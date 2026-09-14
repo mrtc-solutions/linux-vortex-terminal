@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+:root {
+  --terminal-font: 'JetBrains Mono', 'Fira Code', 'Share Tech Mono', monospace;
+  --theme-primary: #00ff66;
+  --theme-primary-rgb: 0, 255, 102;
+  --theme-bg: #050b07;
+  --theme-surface: #0a140d;
+  --theme-border: rgba(0, 255, 102, 0.25);
+  --theme-dim: #00993d;
+  --theme-glow: 0 0 12px rgba(0, 255, 102, 0.45);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--theme-bg);
+  color: var(--theme-primary);
+  font-family: var(--terminal-font);
+  overflow: hidden;
+  user-select: text;
+}
+
+/* CRT Scanlines and Screen Overlay */
+.crt-overlay::before {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.35) 50%);
+  background-size: 100% 4px;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+.crt-vignette {
+  box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.85);
+}
+
+.crt-flicker {
+  animation: flicker 0.15s infinite;
+}
+
+@keyframes flicker {
+  0% { opacity: 0.985; }
+  50% { opacity: 1; }
+  100% { opacity: 0.992; }
+}
+
+/* Glow utility classes */
+.glow-primary {
+  text-shadow: 0 0 8px var(--theme-primary), 0 0 18px rgba(var(--theme-primary-rgb), 0.5);
+}
+
+.box-glow {
+  box-shadow: 0 0 15px rgba(var(--theme-primary-rgb), 0.15), inset 0 0 15px rgba(var(--theme-primary-rgb), 0.05);
+}
+
+.box-glow-strong {
+  box-shadow: 0 0 25px rgba(var(--theme-primary-rgb), 0.35), inset 0 0 20px rgba(var(--theme-primary-rgb), 0.1);
+}
+
+/* Custom hacker scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #060e08;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(var(--theme-primary-rgb), 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--theme-primary-rgb), 0.65);
+}
+
+/* Terminal Cursor */
+.terminal-cursor {
+  display: inline-block;
+  width: 9px;
+  height: 1.15em;
+  vertical-align: middle;
+  background-color: var(--theme-primary);
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Pulsing radar scan */
+@keyframes radar-sweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.radar-sweep {
+  animation: radar-sweep 4s linear infinite;
+}
+
+/* Pulse badge */
+@keyframes soft-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.97); }
+}
+
+.animate-soft-pulse {
+  animation: soft-pulse 2s ease-in-out infinite;
+}

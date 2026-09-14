@@ -1,6 +1,7 @@
-# VORTEX — install, test, and use
+# Vortex Terminal — install, test, and use
 
 **Verified Orchestration, Reasoning, Testing, Execution & eXperience**
+(VORTEX for short)
 
 This is a real Linux application. Every command you approve is executed as
 typed argv (`shell=False`) on the host. Missing tools, agents, Docker, and
@@ -24,7 +25,7 @@ when you are ready.
 | Optional: `nmap`, `curl`, `nuclei`, … | Security adapters (engagement required) |
 | Optional: Docker/Podman, Ollama, agent CLIs | Probed; stay UNAVAILABLE if missing |
 
-Installing VORTEX does **not** apt-install Kali tools, Docker, or agents.
+Installing Vortex Terminal does **not** apt-install Kali tools, Docker, or agents.
 
 ## 2. Get the source
 
@@ -70,9 +71,9 @@ All Python tests must print `OK`. The terminal emulator prints `PASS`.
 
 This writes `~/.local/bin/vortex` pointing at this source tree. It does
 **not** install apt packages and never asks for a sudo password. Reviewed
-package installs stay separate: VORTEX builds a plan first, opens it in a
+package installs stay separate: Vortex Terminal builds a plan first, opens it in a
 managed installation PTY, performs a fresh preflight, and lets the operating
-system authenticate only the final typed mutation. Do not launch VORTEX itself
+system authenticate only the final typed mutation. Do not launch Vortex Terminal itself
 with `sudo`.
 
 ```bash
@@ -99,13 +100,13 @@ rm -f ~/.local/bin/vortex
 Local data stays in `$XDG_DATA_HOME/vortex` (usually `~/.local/share/vortex`).
 Remove that directory if you also want history, tasks, and the audit DB gone.
 
-### Optional Debian package (unsigned 0.2)
+### Optional Debian package (unsigned)
 
 ```bash
-# requires dpkg-deb on a Linux builder
-VORTEX_VERSION=0.2.22 packaging/deb/build.sh
+# requires dpkg-deb on a Linux builder (defaults to the current 0.3.0 version)
+packaging/deb/build.sh
 # then, as an administrator of that machine:
-# sudo dpkg -i dist/deb/linux-vortex-terminal_0.2.22_all.deb
+# sudo dpkg -i dist/deb/linux-vortex-terminal_0.3.0_all.deb
 ```
 
 The package does not start a daemon, create user data, or install agents.
@@ -127,7 +128,7 @@ vortex mobile apk --sidecar-url http://127.0.0.1:8765/
 ```
 
 Read the `state` fields. `absent` / `UNAVAILABLE` means the binary is not
-on this host. `blocked` or a component `warning` means VORTEX found the tool
+on this host. `blocked` or a component `warning` means Vortex Terminal found the tool
 but refused to silently trust the path because of path-safety policy; reinstall
 is not automatically required. That is expected in some sandboxes and custom
 `/usr/local/bin` setups.
@@ -142,11 +143,11 @@ before writing the APK. In the UI, **DOWNLOAD APK** does the same sync-then-
 download. The phone talks to this sidecar over the same HTTP API as the
 desktop workbench.
 
-VORTEX is MIT-licensed (`LICENSE`, `GET /api/license`, Settings → License).
+Vortex Terminal is MIT-licensed (`LICENSE`, `GET /api/license`, Settings → License).
 
 ### Optional local AI (on-device GGUF first, Ollama loopback second)
 
-VORTEX is local-AI-first only in an **advisory** sense. Deterministic planning,
+Vortex Terminal is local-AI-first only in an **advisory** sense. Deterministic planning,
 Guardian, and the typed executor remain authoritative.
 
 - **Primary:** your own GGUF files in `~/linux-vortex-terminal/models/` —
@@ -170,7 +171,7 @@ vortex deps --json
 vortex benchmark --json
 ```
 
-If `runtime:ollama` or `data:ollama-models` is missing in Dependencies, VORTEX
+If `runtime:ollama` or `data:ollama-models` is missing in Dependencies, Vortex Terminal
 shows operator steps such as `ollama serve`, `ollama pull <model>`, and
 `curl http://127.0.0.1:11434/api/version`. It does **not** run an upstream
 installer, does **not** pull models for you, and does **not** send model traffic
@@ -228,7 +229,31 @@ python3 backend/vortex_backend.py --host 127.0.0.1 --port 4173
 A non-loopback bind (`0.0.0.0` or a LAN address) is refused unless you pass a
 capability token of at least 32 characters (`--token` / `VORTEX_SIDECAR_TOKEN`).
 
-In the UI:
+The default shell is the Vortex Terminal React terminal (served automatically
+once `npm run build` has produced `dist/`): six tabs — Terminal, Tactical Map,
+/out, Reports, Fuzzy, Agent Reach — plus pop-up windows for plan approvals,
+tasks, scope, tools, models, system, conversations, memory, settings, AI Ops,
+help, about/downloads, and a raw host shell. Set `VORTEX_UI=legacy` to force
+the previous vanilla workbench instead.
+
+In the React shell:
+
+1. Type a request such as `check disk usage` in the terminal and press **Run**.
+2. Low-risk plans auto-run under your policy profile (Settings popup);
+   everything else opens a **Guardian plan review** — APPROVE & EXECUTE or REJECT.
+3. Watch real output stream in; **Stop** (STOP ALL) signals running work.
+4. Type `launcher` (or press the grid button in the header) for every surface;
+   `shell` opens a raw host PTY; `aiops` shows the last advisory trace;
+   `about` shows the version, MIT license, and APK/DEB downloads.
+5. Mutation plans pause a second time at a **preflight review** — CONFIRM
+   MUTATION is a separate, explicit click; nothing auto-continues past it.
+6. For free local AI, open **Models**: install llamafile (confirmed download),
+   drop a `.gguf` file into `models/`, then start the loopback server.
+7. If the sidecar was started with `--token`, open the shell once with
+   `#vortex-token=PASTE` appended to the URL (token printed at startup);
+   the shell exchanges it for a session cookie and strips it from the address bar.
+
+In the legacy vanilla UI:
 
 1. Complete first-run checks (optional components stay unavailable).
 2. Type a request such as `system health` and press **SEND**.
@@ -238,9 +263,9 @@ In the UI:
 6. Open **Dependencies** and type one exact Debian package, `ollama`, or a
    validated local `model:tag`. A package creates a reviewed apt plan; **OPEN
    INSTALL TERMINAL** preserves that exact plan while OS authentication stays
-   outside VORTEX. Ollama/model workflows show download, verification,
-   cancellation, retry, rescan, and role-integration status. VORTEX never
-   silent-installs.
+   outside Vortex Terminal. Ollama/model workflows show download, verification,
+   cancellation, retry, rescan, and role-integration status. Vortex Terminal
+   never silent-installs.
 7. When local Ollama is healthy, the plan/result views show role-aware **Local
    AI** advisory output and explicit fallback attribution. That text never
    authorizes execution.
@@ -273,9 +298,12 @@ entirely and test the identical workbench in a browser with
 start:electron` bypasses the wrapper and invokes Electron directly.
 
 Electron starts the Python sidecar on `127.0.0.1` with a random capability
-token. The renderer cannot spawn processes.
+token. The renderer cannot spawn processes: every API call travels over
+authenticated main-process IPC (route-allowlisted), while the shell bundle,
+live streams, and package downloads ride direct renderer requests with an
+injected token.
 
-The VORTEX title bar provides minimize, maximize/restore, and close controls on
+The Vortex Terminal title bar provides minimize, maximize/restore, and close controls on
 Linux without depending on window-manager decorations. Drag the title bar to
 move the app or double-click it to maximize/restore. Auto-opened first-run and
 dependency dialogs have their own minimize, maximize/restore, and close controls.
@@ -311,7 +339,7 @@ Reviewed security adapters (tool must be installed; otherwise UNAVAILABLE):
 | `ffuf` / `gobuster` | content discovery | engagement + URL + existing host wordlist |
 
 Wordlist: pass `wordlist /absolute/path` or have a standard Kali path such as
-`/usr/share/wordlists/dirb/common.txt`. If no reviewed wordlist exists, VORTEX
+`/usr/share/wordlists/dirb/common.txt`. If no reviewed wordlist exists, Vortex Terminal
 does not invent one; Dependencies can instead propose a reviewed apt plan for a
 distro wordlist package such as `seclists`.
 
@@ -320,8 +348,8 @@ execution adapter.
 
 ## 10. Kali vs this sandbox
 
-Installing VORTEX on Kali does **not** install the rest of Kali. Kali
-already has many tools; VORTEX only probes `PATH` and uses what is present.
+Installing Vortex Terminal on Kali does **not** install the rest of Kali. Kali
+already has many tools; Vortex Terminal only probes `PATH` and uses what is present.
 
 In this Arena sandbox: Debian 12, no Docker/Podman, no default Ollama runtime,
 typically no nmap. Local Linux adapters (whoami, df,
@@ -329,10 +357,10 @@ ss, git, systemd inspect, os-release, lscpu, …) work because those binaries
 exist. On the audited host, `node`, `npm`, and `yarn` were discoverable under
 `/usr/local/bin` but reported as blocked-by-review rather than trusted installs.
 
-## 11. If VORTEX restarts mid-operation
+## 11. If Vortex Terminal restarts mid-operation
 
 A command runs in a process owned by one sidecar. If that sidecar is killed
-(crash, `Ctrl+C`, reboot) while an operation is in flight, VORTEX cannot know
+(crash, `Ctrl+C`, reboot) while an operation is in flight, Vortex Terminal cannot know
 what the host actually did, so on the next start it says so instead of
 guessing:
 
@@ -350,7 +378,7 @@ vortex task show <task-id>
 
 ## 12. Automatic follow-ups are bounded
 
-When an observed result does not meet the objective, VORTEX may propose one
+When an observed result does not meet the objective, Vortex Terminal may propose one
 reviewed follow-up. That loop is capped: at most **2** follow-up iterations per
 task, and a follow-up is refused if it repeats a plan the same task already
 executed. Both the count and the executed plan digests are stored on the task,
@@ -367,7 +395,7 @@ follow-up never escalates into network or mutating work.
 | Config | `~/.config/vortex` |
 | Runtime sidecar metadata | `$XDG_RUNTIME_DIR/vortex/sidecar.json` |
 
-STOP ALL in the UI (or cancel from the CLI) interrupts VORTEX-owned process
+STOP ALL in the UI (or cancel from the CLI) interrupts Vortex Terminal-owned process
 groups. It does not kill unrelated user processes.
 
 The path to “installed tools ⇒ real execution, nothing fabricated” is

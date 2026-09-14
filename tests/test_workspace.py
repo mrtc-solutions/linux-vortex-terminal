@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from backend.agents.council import critic, discover, consult
-from backend.reports.engine import render, to_pdf
+from backend.reports.engine import render, render_system, to_pdf
 from backend.security.guardian import evaluate, recompute_risk
 from backend.vortex_backend import ExecutionManager, Store, analysis_next_steps, build_plan, cancel_task_operation, command_spec, make_analysis, plan_digest, safe_file_target, suggestion_hints
 from backend.workspace import Workspace
@@ -111,7 +111,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_setup_checks_are_live(self):
         from backend.health import setup_checks
         setup = setup_checks(self.store, {"profile": "safe", "first_run_complete": False})
-        self.assertEqual(setup["product"], "VORTEX")
+        self.assertEqual(setup["product"], "Vortex Terminal")
         ids = [step["id"] for step in setup["steps"]]
         self.assertIn("linux", ids)
         self.assertIn("database", ids)
@@ -850,6 +850,16 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(pdf.startswith(b"%PDF-1.4"))
         self.assertIn(b"hello", pdf)
 
+    def test_system_report_never_prints_cwd_as_started(self):
+        doctor = {"distribution": {"pretty_name": "Test Linux"}, "cwd": "/tmp/fake-cwd"}
+        tools = [{"name": "ls", "state": "installed", "version": "1"}]
+        md, _, _ = render_system("md", doctor, tools)
+        text = md.decode("utf-8")
+        for line in text.splitlines():
+            if line.startswith("Started:"):
+                self.assertNotIn("/", line, "a path must never masquerade as a timestamp")
+        self.assertIn("sidecar cwd /tmp/fake-cwd", text)
+
     def test_procedure_learning_from_validated_success(self):
         task = self.workspace.create_task("system health")
         self.workspace.update_task(task["id"], state="COMPLETED", result={"kind": "linux.system.health", "commands": ["uname -a", "uptime"]})
@@ -1013,6 +1023,34 @@ class ReplanBudgetTests(unittest.TestCase):
             self.assertEqual(recorder.started, 0)
             events = [e["kind"] for e in workspace.list_task_events(task["id"])]
             self.assertIn("replan_stopped", events)
+        finally:
+            tmp.cleanup()
+            os.environ.pop("VORTEX_DATA_DIR", None)
+
+
+class StartFailureTests(unittest.TestCase):
+    def test_refused_start_fails_task_honestly(self):
+        from backend.orchestrate import _start_operation
+        tmp = tempfile.TemporaryDirectory()
+        os.environ["VORTEX_DATA_DIR"] = tmp.name
+        try:
+            store = Store(Path(tmp.name) / "vortex.db")
+            workspace = Workspace(store)
+            task = workspace.create_task("whoami", None, None)
+            workspace.update_task(task["id"], state="EXECUTING", result={"kind": "identity"})
+
+            class RefusingExecutor:
+                def start(self, *args, **kwargs):
+                    raise PermissionError("exact approval token is required")
+
+            with self.assertRaises(PermissionError):
+                _start_operation(workspace, RefusingExecutor(), task["id"], {"id": "p"}, "bad", False, False, {})
+            final = workspace.get_task(task["id"])
+            self.assertEqual(final["state"], "FAILED")
+            self.assertEqual(final["result"].get("start_error"), "exact approval token is required")
+            self.assertEqual(final["result"].get("kind"), "identity")
+            kinds = [event["kind"] for event in workspace.list_task_events(task["id"])]
+            self.assertIn("start_failed", kinds)
         finally:
             tmp.cleanup()
             os.environ.pop("VORTEX_DATA_DIR", None)

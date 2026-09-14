@@ -10,7 +10,7 @@ export PATH
 # emits a placeholder artifact. Run this on a Linux builder with dpkg-deb.
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out="${1:-$root/dist/deb}"
-version="${VORTEX_VERSION:-0.2.23}"
+version="${VORTEX_VERSION:-0.3.0}"
 package="linux-vortex-terminal"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -39,7 +39,7 @@ mkdir -p "$out" "$stage/DEBIAN" "$stage/usr/share/vortex" "$stage/usr/share/man/
 while IFS= read -r -d '' source; do
   install -D -m 0644 "$source" "$stage/usr/share/vortex/$source"
 done < <(find backend cli -type f -name '*.py' -print0)
-for source in index.html app.js workspace.js terminal.js windows.js models.js hud.js styles.css; do
+for source in index.html app.js workspace.js terminal.js windows.js models.js aiops.js agent.js hud.js styles.css; do
   install -D -m 0644 "$root/frontend/$source" "$stage/usr/share/vortex/frontend/$source"
 done
 for source in README.md hooded-researcher.svg; do

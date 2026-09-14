@@ -1,4 +1,4 @@
-"""Build a signed Android APK of the VORTEX workbench client.
+"""Build a signed Android APK of the Vortex Terminal workbench client.
 
 The APK is a real Android package:
 
@@ -44,9 +44,9 @@ except ImportError:  # pragma: no cover - top-level mobile package import
     from fileio import exclusive_file_lock, open_owner_binary  # type: ignore
 
 PACKAGE = "io.vortex.mobile"
-APP_LABEL = "VORTEX"
-VERSION_NAME = "0.2.23"
-VERSION_CODE = 223
+APP_LABEL = "Vortex Terminal"
+VERSION_NAME = "0.3.0"
+VERSION_CODE = 230
 _BUILD_LOCK = threading.Lock()
 _MAX_APK_BYTES = 128 * 1024 * 1024
 
@@ -151,7 +151,7 @@ def connect_html(sidecar_url: str) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VORTEX</title>
+  <title>Vortex Terminal</title>
   <style>
     body {{ margin:0; font-family: system-ui, sans-serif; background:#0a0a0c; color:#f0f0f4; }}
     main {{ max-width: 420px; margin: 12vh auto; padding: 24px; }}
@@ -165,13 +165,13 @@ def connect_html(sidecar_url: str) -> str:
 </head>
 <body>
   <main>
-    <h1>VORTEX</h1>
-    <p>This Android client is the same workbench. Enter the URL of the VORTEX sidecar running on your Kali/Linux host (same LAN).</p>
+    <h1>Vortex Terminal</h1>
+    <p>This Android client is the same workbench. Enter the URL of the Vortex Terminal sidecar running on your Kali/Linux host (same LAN).</p>
     <form id="f">
       <label for="u">Sidecar URL</label>
-      <input id="u" value="{url}" aria-label="VORTEX sidecar URL" inputmode="url">
+      <input id="u" value="{url}" aria-label="Vortex Terminal sidecar URL" inputmode="url">
       <label for="t">Sidecar capability</label>
-      <input id="t" type="password" autocomplete="off" aria-label="VORTEX sidecar capability" placeholder="Shown when the remote sidecar starts">
+      <input id="t" type="password" autocomplete="off" aria-label="Vortex Terminal sidecar capability" placeholder="Shown when the remote sidecar starts">
       <button type="submit">OPEN WORKBENCH</button>
     </form>
     <p id="error" role="alert" aria-live="assertive"></p>
@@ -209,7 +209,7 @@ def sync_payload(sidecar_url: str, dest: Path) -> dict[str, Any]:
     www.mkdir(parents=True)
     frontend = repo_root() / "frontend"
     copied: list[str] = []
-    for name in ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "models.js", "hud.js", "styles.css"):
+    for name in ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "models.js", "aiops.js", "agent.js", "hud.js", "styles.css"):
         src = frontend / name
         if src.is_file():
             shutil.copy2(src, www / name)
@@ -275,7 +275,7 @@ def _generate_signing_material(work: Path) -> tuple[Path, Path]:
     _openssl(
         "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-days", "3650",
         "-nodes", "-keyout", str(key), "-out", str(cert),
-        "-subj", "/CN=VORTEX Mobile/O=VORTEX/OU=MIT-License",
+        "-subj", "/CN=Vortex Terminal Mobile/O=Vortex Terminal/OU=MIT-License",
     )
     try:
         key.chmod(0o600)
@@ -287,7 +287,7 @@ def _generate_signing_material(work: Path) -> tuple[Path, Path]:
 
 def _jar_sign(entries: dict[str, bytes], key: Path, cert: Path) -> dict[str, bytes]:
     """APK signature scheme v1 (JAR signing) using OpenSSL CMS."""
-    mf_lines = ["Manifest-Version: 1.0", "Created-By: VORTEX apkbuild", ""]
+    mf_lines = ["Manifest-Version: 1.0", "Created-By: Vortex Terminal apkbuild", ""]
     sf_entries: list[tuple[str, str]] = []
     for name in sorted(entries):
         digest = _sha256_b64(entries[name])
@@ -297,7 +297,7 @@ def _jar_sign(entries: dict[str, bytes], key: Path, cert: Path) -> dict[str, byt
     manifest = ("\n".join(mf_lines) + "\n").encode("utf-8")
     sf_lines = [
         "Signature-Version: 1.0",
-        "Created-By: VORTEX apkbuild",
+        "Created-By: Vortex Terminal apkbuild",
         f"SHA-256-Digest-Manifest: {_sha256_b64(manifest)}",
         "",
     ]
@@ -522,7 +522,7 @@ def _build_apk(*, sidecar_url: str, output: Path | None = None) -> dict[str, Any
         "contents": sorted(signed),
         "signed": True,
         "signature": "apk-v1-jar",
-        "message": "APK synced from the live workbench and signed. Install on Android (allow unknown sources). The app loads this VORTEX sidecar.",
+        "message": "APK synced from the live workbench and signed. Install on Android (allow unknown sources). The app loads this Vortex Terminal sidecar.",
     }
 
 

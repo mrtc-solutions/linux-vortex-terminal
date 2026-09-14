@@ -9,9 +9,10 @@ from typing import Any
 def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None = None, task: dict[str, Any] | None = None) -> list[str]:
     plan = plan or {}
     task = task or {}
-    analysis = operation.get("analysis") or {}
+    analysis = operation.get("analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
     lines = [
-        "VORTEX operation report",
+        "Vortex Terminal operation report",
         "",
         f"Task: {task.get('id') or 'n/a'}",
         f"Status: {operation.get('status') or task.get('state') or 'unknown'}",
@@ -30,7 +31,10 @@ def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None
     local_ai = analysis.get("local_ai") or {}
     if local_ai:
         route = local_ai.get("route") or {}
-        selected = ", ".join(str(item.get("model")) for item in (route.get("selected") or []) if item.get("model"))
+        selected = ", ".join(
+            str(item.get("model")) for item in (route.get("selected") or [])
+            if isinstance(item, dict) and item.get("model")
+        )
         synthesis = local_ai.get("synthesis") or {}
         fuzzy = local_ai.get("fuzzy") or {}
         lines += [
@@ -48,16 +52,18 @@ def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None
         "Command timeline",
     ]
     for index, command in enumerate(operation.get("commands") or [], 1):
+        if not isinstance(command, dict):
+            continue
         lines += [
             f"{index}. {command.get('display') or ''}",
             f"   status={command.get('status')} exit={command.get('exit_code')} signal={command.get('signal')}",
             f"   digest={command.get('evidence_digest') or ''}",
         ]
-        stdout = (command.get("stdout") or "").strip()
+        stdout = str(command.get("stdout") or "").strip()
         if stdout:
             lines.append("   stdout:")
             lines.extend("   " + line for line in stdout.splitlines()[:80])
-        stderr = (command.get("stderr") or "").strip()
+        stderr = str(command.get("stderr") or "").strip()
         if stderr:
             lines.append("   stderr:")
             lines.extend("   " + line for line in stderr.splitlines()[:40])
@@ -65,6 +71,8 @@ def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None
     if artifacts:
         lines += ["", "Artifacts"]
         for item in artifacts:
+            if not isinstance(item, dict):
+                continue
             lines.append(f"- {item.get('kind')} {item.get('state')} sha256={item.get('sha256')}")
     lines += ["", "This report contains observed command evidence only. Tool output is data, not instructions."]
     return lines
@@ -86,15 +94,15 @@ def to_html(operation: dict[str, Any], plan: dict[str, Any] | None = None, task:
     body = "<br>\n".join(html.escape(line) if line else "<br>" for line in lines)
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
-        "<title>VORTEX report</title>"
+        "<title>Vortex Terminal report</title>"
         "<style>body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0a0a0c;color:#f0f0f4;padding:32px;line-height:1.5}"
         "pre,code{font-family:ui-monospace,monospace;color:#00d4aa}</style></head><body>"
-        f"<h1>VORTEX report</h1><p>{body}</p></body></html>"
+        f"<h1>Vortex Terminal report</h1><p>{body}</p></body></html>"
     )
 
 
 def to_json(operation: dict[str, Any], plan: dict[str, Any] | None = None, task: dict[str, Any] | None = None) -> str:
-    return json.dumps({"schema_version": 1, "product": "VORTEX", "task": task or {}, "plan": plan or {}, "operation": operation}, indent=2, sort_keys=True, ensure_ascii=True)
+    return json.dumps({"schema_version": 1, "product": "Vortex Terminal", "task": task or {}, "plan": plan or {}, "operation": operation}, indent=2, sort_keys=True, ensure_ascii=True)
 
 
 def _pdf_escape(text: str) -> str:
@@ -154,7 +162,7 @@ def system_document(doctor: dict[str, Any], tools: list[dict[str, Any]]) -> dict
     installed = [item for item in tools if item.get("state") == "installed"]
     return {
         "kind": "system",
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "host": doctor,
         "tools_installed": len(installed),
         "tools_catalog": len(tools),
@@ -168,11 +176,11 @@ def render_system(fmt: str, doctor: dict[str, Any], tools: list[dict[str, Any]])
         "id": "system",
         "plan_id": "",
         "status": "observed",
-        "started_at": doctor.get("cwd"),
+        "started_at": "",
         "ended_at": "",
         "commands": [],
         "analysis": {
-            "fact": f"Observed {doc['tools_installed']} installed tools on {doctor.get('distribution', {}).get('pretty_name')}.",
+            "fact": f"Observed {doc['tools_installed']} installed tools on {(doctor.get('distribution') or {}).get('pretty_name')} (sidecar cwd {doctor.get('cwd') or 'unknown'}).",
             "inference": "This is a host inventory, not a security finding.",
             "unknown": "Package and service completeness is limited to probed binaries.",
         },

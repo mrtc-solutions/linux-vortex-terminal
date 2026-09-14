@@ -24,7 +24,7 @@ def proposal(agent_id: str) -> dict[str, Any]:
     guide = install_guide(agent_id)
     upstream = (table().get(agent_id) or {})
     commands = [f"# {step}" if not str(step).startswith("#") else str(step) for step in guide]
-    commands.append("# VORTEX will not run this for you.")
+    commands.append("# Vortex Terminal will not run this for you.")
     return {
         "agent": agent_id,
         "name": adapter.manifest.name,
@@ -36,5 +36,5 @@ def proposal(agent_id: str) -> dict[str, Any]:
         "sync_state": upstream.get("sync_state") or "not_checked",
         "permissions": ["operator-owned-python-or-docker", "network-to-source", "no-sudo-from-vortex"],
         "commands": commands,
-        "message": "Install is operator-controlled. VORTEX does not silently install third-party agents.",
+        "message": "Install is operator-controlled. Vortex Terminal does not silently install third-party agents.",
     }

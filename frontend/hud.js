@@ -1,4 +1,4 @@
-/* ARENA AI // VORTEX — tactical HUD wiring.
+/* Vortex Terminal — tactical HUD wiring.
    Loaded last, after app.js/workspace.js/models.js (which provide $, esc, api,
    toast, fmtDate, state). Every readout is derived from real backend state:
    /api/dashboard (CPU load, memory, disk, network, AI, sessions) and
@@ -215,7 +215,8 @@
     var assistant = selected.join(', ') || (workers.map(function (w) { return w.id; }).filter(function (id) { return id !== 'local-model'; }).join(', ')) || 'deterministic planner';
     setText('ai-ops-assistant', assistant);
     var localAi = (op && op.analysis && op.analysis.local_ai) || (task && task.result && task.result.local_ai) || null;
-    setText('ai-ops-model', (localAi && (localAi.state || localAi.route)) || '—');
+    var modelLabel = localAi ? (localAi.state || (typeof localAi.route === 'string' ? localAi.route : null)) : null;
+    setText('ai-ops-model', modelLabel || '—');
     setText('ai-ops-task', task ? String(task.id || '').slice(0, 12) + ' · ' + (opStatus || taskState || '') : '—');
     setText('ai-ops-guardian', guardian ? (guardian.decision || guardian.risk || '') : '—');
   }
@@ -279,7 +280,11 @@
 
   function refresh() {
     if (hud.inflight) return hud.inflight;
-    hud.inflight = Promise.all([loadTelemetry(), loadDiagnostics()]).finally(function () { hud.inflight = null; });
+    hud.inflight = Promise.all([loadTelemetry(), loadDiagnostics()]).finally(function () { hud.inflight = null; }).catch(function (err) {
+      // A render throw (e.g. a missing helper during partial page load) must
+      // never leave an unhandled rejection behind the HUD refresh loop.
+      if (window.console && window.console.error) window.console.error(err);
+    });
     return hud.inflight;
   }
 

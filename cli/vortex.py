@@ -15,6 +15,7 @@ import os
 import select
 import shutil
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import urllib.error
@@ -146,16 +147,16 @@ def shell_command(shell, action, yes, as_json):
     rc = shell_rc_path(shell)
     current = rc.read_text(encoding='utf-8', errors='replace') if rc.exists() else ''
     proposed = shell_proposal(shell, current, action != 'uninstall')
-    diff = ''.join(difflib.unified_diff(current.splitlines(True), proposed.splitlines(True), fromfile=str(rc), tofile=str(rc) + ' (Vortex proposal)'))
+    diff = ''.join(difflib.unified_diff(current.splitlines(True), proposed.splitlines(True), fromfile=str(rc), tofile=str(rc) + ' (Vortex Terminal proposal)'))
     if action == 'preview':
         payload = {'shell': {'shell': shell, 'path': str(rc), 'action': action, 'changes': bool(diff), 'diff': diff}}
         if as_json: emit(payload, True)
-        else: print(diff or 'No Vortex shell changes would be made.')
+        else: print(diff or 'No Vortex Terminal shell changes would be made.')
         return 0
     if not yes:
         if as_json: emit({'shell': {'shell': shell, 'path': str(rc), 'action': action, 'changes': bool(diff), 'diff': diff}, 'error': {'code':'confirmation_required'}}, True)
         else:
-            print(diff or 'No Vortex shell changes would be made.', file=sys.stderr)
+            print(diff or 'No Vortex Terminal shell changes would be made.', file=sys.stderr)
             print('Re-run with --yes to apply only the Vortex-owned block.', file=sys.stderr)
         return EXIT_CODES['confirmation_required']
     if diff:
@@ -168,7 +169,10 @@ def shell_command(shell, action, yes, as_json):
         fd, temp_name = tempfile.mkstemp(prefix='.vortex-shell-', dir=str(rc.parent), text=True)
         try:
             with os.fdopen(fd, 'w', encoding='utf-8', newline='') as handle: handle.write(proposed)
-            os.chmod(temp_name, 0o600)
+            try:
+                os.chmod(temp_name, stat.S_IMODE(rc.stat().st_mode) if rc.exists() else 0o644)
+            except OSError:
+                os.chmod(temp_name, 0o600)
             os.replace(temp_name, rc)
         finally:
             if os.path.exists(temp_name): os.unlink(temp_name)
@@ -244,7 +248,7 @@ def authorize_privileged_handoff(non_interactive=False):
         raise PermissionError(broker.get('reason') or 'trusted sudo is unavailable')
     if non_interactive or not sys.stdin.isatty() or not sys.stderr.isatty():
         raise PermissionError('root-required plans need an interactive terminal for OS authentication')
-    print('\nVORTEX is handing privilege authentication to the operating system. It cannot read or store your password. The OS may cache this authentication for a short timestamp window (commonly about 15 minutes); that cache is operating-system behaviour, not a VORTEX credential store.', file=sys.stderr)
+    print('\nVortex Terminal is handing privilege authentication to the operating system. It cannot read or store your password. The OS may cache this authentication for a short timestamp window (commonly about 15 minutes); that cache is operating-system behaviour, not a Vortex Terminal credential store.', file=sys.stderr)
     result = subprocess.run([broker['realpath'], '-v'], stdin=None, stdout=None, stderr=None, check=False, env={
         key: value for key, value in os.environ.items()
         if key in {'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM'}
@@ -357,14 +361,14 @@ def main(argv=None):
     parser.add_argument('--yes', action='store_true', help='skip the interactive prompt only for a policy-valid plan')
     parser.add_argument('--format', choices=('text', 'json', 'md'), default='text', help='output format')
     parser.add_argument('--profile', choices=('safe', 'standard', 'expert'), default='safe', help='policy friction profile')
-    parser.add_argument('--version', action='version', version='vortex 0.2.23')
+    parser.add_argument('--version', action='version', version='vortex 0.3.0')
     sub = parser.add_subparsers(dest='subcommand')
     for name in ('ask', 'plan'):
         p = sub.add_parser(name); p.add_argument('request')
     sub.add_parser('doctor')
     ht = sub.add_parser('host-tools'); ht.add_argument('action', choices=['list', 'rescan'], nargs='?', default='list')
     mob = sub.add_parser('mobile'); mob.add_argument('action', choices=['apk'], nargs='?', default='apk'); mob.add_argument('--sidecar-url')
-    desk = sub.add_parser('desktop'); desk.add_argument('action', choices=['deb'], nargs='?', default='deb'); desk.add_argument('--output', help='output directory for the .deb (default: VORTEX data dir)')
+    desk = sub.add_parser('desktop'); desk.add_argument('action', choices=['deb'], nargs='?', default='deb'); desk.add_argument('--output', help='output directory for the .deb (default: Vortex Terminal data dir)')
     sub.add_parser('tools')
     sub.add_parser('adapters')
     sub.add_parser('health')
@@ -402,14 +406,13 @@ def main(argv=None):
     e = sub.add_parser('engagement'); e.add_argument('action', choices=['list','create']); e.add_argument('--name'); e.add_argument('--authorization'); e.add_argument('--target', action='append')
     n = sub.add_parser('_request', help=argparse.SUPPRESS); n.add_argument('request', nargs='+')
     sub._choices_actions = [action for action in sub._choices_actions if action.dest != '_request']
-    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--preflight-digest'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs=argparse.REMAINDER)
+    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--preflight-digest'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs='*')
     args = parser.parse_args(argv)
     args.as_json = args.as_json or args.format == 'json'
     is_natural_request = args.subcommand == '_request'
     if os.getuid() == 0 and os.environ.get('SUDO_USER'):
-        print('vortex: do not run VORTEX itself with sudo; run `vortex run <plan-id>` as your user and VORTEX will hand only the reviewed mutation to OS authentication', file=sys.stderr)
+        print('vortex: do not run Vortex Terminal itself with sudo; run `vortex run <plan-id>` as your user and Vortex Terminal will hand only the reviewed mutation to OS authentication', file=sys.stderr)
         return EXIT_CODES['confirmation_required']
-    store = Store()
     managers = []
     def execution_manager(workspace=None):
         manager = ExecutionManager(store)
@@ -418,6 +421,7 @@ def main(argv=None):
         managers.append(manager)
         return manager
     try:
+        store = Store()
         if args.subcommand == 'doctor': emit({'doctor': detect_context()}, args.as_json); return EXIT_CODES['success']
         if args.subcommand == 'health':
             from backend.health import collect
@@ -628,7 +632,7 @@ def main(argv=None):
                 except (urllib.error.URLError, RuntimeError):
                     pass
             if args.action in ('attach', 'kill'):
-                raise ValueError('no live Vortex sidecar owns this session; start the desktop sidecar or use `vortex session new`')
+                raise ValueError('no live Vortex Terminal sidecar owns this session; start the desktop sidecar or use `vortex session new`')
             if not sys.stdin.isatty() and not args.non_interactive:
                 raise PermissionError('session new requires an interactive TTY')
             sessions = SessionManager(store)
@@ -694,7 +698,7 @@ def main(argv=None):
             if not args.as_json:
                 plan_text(plan)
                 if any(spec.get('privilege') == 'root-required' for spec in plan.get('commands', [])) and os.getuid() != 0:
-                    print("\nThis reviewed plan needs OS authentication for the final mutation. VORTEX stays unprivileged, runs a fresh preflight, asks again, then hands only the typed mutation to trusted sudo.\n", file=sys.stderr)
+                    print("\nThis reviewed plan needs OS authentication for the final mutation. Vortex Terminal stays unprivileged, runs a fresh preflight, asks again, then hands only the typed mutation to trusted sudo.\n", file=sys.stderr)
         elif args.subcommand == 'run' and ((args.plan_id is None and (args.direct_mode or args.direct)) or args.plan_id == '--'):
             direct = args.direct_mode or args.direct
             if direct and direct[0] == '--': direct = direct[1:]
@@ -739,7 +743,9 @@ def main(argv=None):
                 return EXIT_CODES['confirmation_required']
         supplied_token = getattr(args, 'approval_token', None)
         token = plan['approval_token'] if supplied_token is None else supplied_token
-        if non_interactive and (not getattr(args, 'digest', None) or supplied_token is None or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
+        if non_interactive and (not getattr(args, 'digest', None) or supplied_token is None or args.digest != plan['digest']):
+            print('vortex: non-interactive execution needs the exact --digest and --approval-token of the plan', file=sys.stderr)
+            return EXIT_CODES['policy_denied']
         needs_privilege = any(spec.get('privilege') == 'root-required' for spec in plan.get('commands', []))
         if needs_privilege and os.getuid() != 0:
             authorize_privileged_handoff(non_interactive)

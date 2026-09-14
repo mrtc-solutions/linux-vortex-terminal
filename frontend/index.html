@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'">
-  <meta name="description" content="ARENA AI — VORTEX command center: an honest, local-first AI-assisted cybersecurity and Linux operations workbench.">
-  <title>ARENA AI // VORTEX Command Center</title>
+  <meta name="description" content="Vortex Terminal: an honest, local-first AI-assisted cybersecurity and Linux operations workbench.">
+  <title>Vortex Terminal</title>
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
@@ -14,8 +14,8 @@
   <header id="app-titlebar" class="app-titlebar" aria-label="Application window controls">
     <div class="app-titlebar-drag">
       <span class="titlebar-mark" aria-hidden="true">◢</span>
-      <span class="titlebar-name">ARENA AI</span>
-      <span class="titlebar-context">VORTEX // COMMAND CENTER</span>
+      <span class="titlebar-name">VORTEX TERMINAL</span>
+      <span class="titlebar-context">LINUX WORKBENCH</span>
     </div>
     <div class="window-controls native-window-controls">
       <button type="button" class="window-control window-control-minimize" data-native-window-action="minimize" aria-label="Minimize application window" title="Minimize"><span aria-hidden="true">—</span></button>
@@ -26,7 +26,7 @@
   <div id="first-run" class="first-run surface-window" data-surface-window data-window-state="normal" hidden>
     <section class="first-run-card surface-card" role="dialog" aria-modal="true" aria-labelledby="first-run-title">
       <div class="surface-titlebar">
-        <div><span class="panel-kicker">VORTEX SETUP</span><strong id="first-run-title">First-run checks</strong></div>
+        <div><span class="panel-kicker">VORTEX TERMINAL SETUP</span><strong id="first-run-title">First-run checks</strong></div>
         <div class="window-controls">
           <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
           <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
@@ -35,7 +35,7 @@
       </div>
       <div class="surface-body first-run-body">
         <div class="eyebrow"><span class="eyebrow-line"></span>FIRST RUN</div>
-        <h1>Welcome to VORTEX</h1>
+        <h1>Welcome to Vortex Terminal</h1>
         <p>These checks use the live host. Missing optional components stay unavailable; nothing is silently installed.</p>
         <div id="setup-steps" class="setup-steps"></div>
         <div class="form-foot"><button class="secondary-button" id="open-deps-from-setup">MISSING DEPENDENCIES</button><button class="secondary-button" id="skip-setup">SKIP</button><button class="primary-button" id="complete-setup">CONTINUE</button></div>
@@ -90,7 +90,7 @@
     <aside class="sidebar" aria-label="Primary navigation">
       <div class="brand">
         <div class="brand-mark"><span>◢</span><i></i></div>
-        <div><div class="brand-name">ARENA AI</div><div class="brand-sub">VORTEX COMMAND CENTER</div></div>
+        <div><div class="brand-name">VORTEX</div><div class="brand-sub">TERMINAL</div></div>
       </div>
       <div class="side-label">OPERATIONS</div>
       <nav id="nav">
@@ -120,10 +120,11 @@
         <div class="side-label nav-zone-label">CONTROL</div>
         <button class="nav-item" data-view="system"><span class="nav-icon">♡</span>System</button>
         <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Settings</button>
-        <button class="nav-item" id="open-help" title="VORTEX Help" aria-label="Open Help"><span class="nav-icon">?</span>Help</button>
-        <button class="nav-item" id="open-about" title="About VORTEX" aria-label="Open About"><span class="nav-icon">◇</span>About</button>
+        <button class="nav-item" id="open-help" title="Vortex Terminal Help" aria-label="Open Help"><span class="nav-icon">?</span>Help</button>
+        <button class="nav-item" id="open-about" title="About Vortex Terminal" aria-label="Open About"><span class="nav-icon">◇</span>About</button>
+        <button class="nav-item" id="open-agent" title="Agent Mode — goal-directed runs" aria-label="Open Agent Mode"><span class="nav-icon">◈</span>Agent Mode</button>
       </nav>
-      <div class="version">VORTEX 0.2.23 <span>•</span> <span id="mode-label">OFFLINE-FIRST</span></div>
+      <div class="version">VORTEX TERMINAL 0.3.0 <span>•</span> <span id="mode-label">OFFLINE-FIRST</span></div>
     </aside>
 
     <main class="main-content" id="main-content" tabindex="-1">
@@ -142,8 +143,8 @@
           <button class="secondary-button" id="open-system" title="Host telemetry, subsystem diagnostics, and environment">SYSTEM</button>
           <button class="secondary-button" id="refresh-all" title="Re-probe agents, tools, models, and health in one pass">REFRESH ALL ↻</button>
           <button class="secondary-button" id="open-deps" title="Show missing host dependencies">DEPENDENCIES</button>
-          <button class="secondary-button" id="download-apk" title="Sync latest VORTEX into an Android APK and download it">DOWNLOAD APK</button>
-          <button class="secondary-button danger-btn" id="stop-all" title="Stop all VORTEX-controlled activity">STOP ALL</button>
+          <button class="secondary-button" id="download-apk" title="Sync latest Vortex Terminal into an Android APK and download it">DOWNLOAD APK</button>
+          <button class="secondary-button danger-btn" id="stop-all" title="Stop all Vortex Terminal-controlled activity">STOP ALL</button>
           <div class="avatar">OP</div>
         </div>
       </header>
@@ -156,8 +157,8 @@
               <div class="eyebrow"><span class="eyebrow-line"></span>CONVERSATION · REAL EXECUTION</div>
               <h1>Talk to <em>Linux.</em></h1>
               <p class="hero-copy">Natural language becomes a typed plan, Guardian review, and real commands. Tool output is data, not instructions.</p>
-              <div id="chat-thread" class="chat-thread"><div class="chat-empty">Ask VORTEX to inspect this host. You will see the plan, the real terminal evidence, and a natural-language explanation.</div></div>
-              <div class="command-bar" id="command-bar"><span class="prompt-mark">❯</span><input id="request-input" autocomplete="off" aria-label="Ask VORTEX" placeholder="Check my disk space." /><button id="plan-button" aria-label="Send"><span class="spark">✦</span> SEND</button></div>
+              <div id="chat-thread" class="chat-thread"><div class="chat-empty">Ask Vortex Terminal to inspect this host. You will see the plan, the real terminal evidence, and a natural-language explanation.</div></div>
+              <div class="command-bar" id="command-bar"><span class="prompt-mark">❯</span><input id="request-input" autocomplete="off" aria-label="Ask Vortex Terminal" placeholder="Check my disk space." /><button id="plan-button" aria-label="Send"><span class="spark">✦</span> SEND</button></div>
               <div class="quick-actions"><button data-prompt="system health"><span class="qa-icon cyan">⌁</span><span><b>System health</b><small>CPU · memory · disk</small></span><span class="qa-arrow">↗</span></button><button data-prompt="show listening ports"><span class="qa-icon amber">⌁</span><span><b>Listening ports</b><small>Local socket inspection</small></span><span class="qa-arrow">↗</span></button><button data-prompt="whoami"><span class="qa-icon violet">⌘</span><span><b>Who am I</b><small>Current user identity</small></span><span class="qa-arrow">↗</span></button><button data-prompt="find disk space usage"><span class="qa-icon green">◒</span><span><b>Disk usage</b><small>Current scope only</small></span><span class="qa-arrow">↗</span></button></div>
             </div>
             <div class="plan-column">
@@ -167,7 +168,7 @@
           </div>
         </section>
 
-        <section class="view" id="view-terminal"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>REAL LINUX PTY / THIS HOST</div><h1>VORTEX terminal</h1><p>This is a real Linux PTY owned by the Python sidecar. Keys and paste go to the host shell. AI plans stay Guardian-gated and separate.</p></div><span class="badge badge-green">HOST PTY</span></div><div class="terminal-window" data-terminal-window data-window-state="normal"><div class="terminal-toolbar"><div class="terminal-window-controls"><button type="button" class="traffic traffic-button red" data-terminal-window-action="close" aria-label="Close terminal window" title="Close terminal"></button><button type="button" class="traffic traffic-button yellow" data-terminal-window-action="minimize" aria-label="Minimize terminal window" title="Minimize terminal"></button><button type="button" class="traffic traffic-button green" data-terminal-window-action="maximize" aria-label="Maximize terminal window" aria-pressed="false" title="Maximize terminal"></button></div><span class="terminal-tab active">vortex / local</span><div class="session-controls"><span id="session-status" class="session-status">NO PTY SESSION</span><button class="terminal-button" id="open-session">OPEN LOCAL SHELL</button><button class="terminal-button danger" id="kill-session" hidden>STOP</button></div><span class="toolbar-right">PTY · UTF-8 · <span id="terminal-cwd">loading</span></span></div><div class="terminal-tabs" id="terminal-tabs"><span class="tab-empty">NO PTY SESSIONS</span><button class="terminal-button" id="new-session">＋ NEW</button><button class="terminal-button" id="split-session">SPLIT VIEW</button></div><div class="terminal-panes" id="terminal-panes"><pre class="terminal-body" id="terminal-output"><span class="terminal-line dim">VORTEX Terminal 0.2.23 · no PTY is started until you explicitly open a local shell</span>
+        <section class="view" id="view-terminal"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>REAL LINUX PTY / THIS HOST</div><h1>Vortex Terminal</h1><p>This is a real Linux PTY owned by the Python sidecar. Keys and paste go to the host shell. AI plans stay Guardian-gated and separate.</p></div><span class="badge badge-green">HOST PTY</span></div><div class="terminal-window" data-terminal-window data-window-state="normal"><div class="terminal-toolbar"><div class="terminal-window-controls"><button type="button" class="traffic traffic-button red" data-terminal-window-action="close" aria-label="Close terminal window" title="Close terminal"></button><button type="button" class="traffic traffic-button yellow" data-terminal-window-action="minimize" aria-label="Minimize terminal window" title="Minimize terminal"></button><button type="button" class="traffic traffic-button green" data-terminal-window-action="maximize" aria-label="Maximize terminal window" aria-pressed="false" title="Maximize terminal"></button></div><span class="terminal-tab active">vortex / local</span><div class="session-controls"><span id="session-status" class="session-status">NO PTY SESSION</span><button class="terminal-button" id="open-session">OPEN LOCAL SHELL</button><button class="terminal-button danger" id="kill-session" hidden>STOP</button></div><span class="toolbar-right">PTY · UTF-8 · <span id="terminal-cwd">loading</span></span></div><div class="terminal-tabs" id="terminal-tabs"><span class="tab-empty">NO PTY SESSIONS</span><button class="terminal-button" id="new-session">＋ NEW</button><button class="terminal-button" id="split-session">SPLIT VIEW</button></div><div class="terminal-panes" id="terminal-panes"><pre class="terminal-body" id="terminal-output"><span class="terminal-line dim">Vortex Terminal 0.3.0 · no PTY is started until you explicitly open a local shell</span>
 <span class="terminal-line"><span class="green-text">operator@vortex</span><span class="dim">:</span><span class="cyan-text">~</span><span class="dim">$</span> <span class="cursor-block"></span></span></pre></div><div class="terminal-input-row"><span class="terminal-prompt">❯</span><input id="terminal-input" disabled aria-label="Terminal input" placeholder="Open a shell to type into the real PTY…"><span class="terminal-hint" id="terminal-hint">OPEN SESSION FIRST</span></div></div><div class="notice"><span>i</span><div><b>Real host shell.</b> Open a session, click the black pane, and type. That is Linux. Typed plans in New Task still require Guardian approval and are never mixed into this PTY.</div></div></section>
 
         <section class="view" id="view-engagements"><div class="section-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>AUTHORIZED SECURITY OPERATIONS</div><h1>Engagements</h1><p>Declare scope before active reconnaissance. Expiry and targets are revalidated at execution.</p></div><button class="primary-button" id="new-engagement">＋ NEW ENGAGEMENT</button></div><div class="engagement-layout"><section class="panel engagement-form" id="engagement-form" hidden><div class="panel-head"><div><span class="panel-kicker">SCOPE GATE</span><h2>Create engagement</h2></div><button class="close-button" id="close-engagement" aria-label="Close engagement form" title="Close engagement form">×</button></div><label>Engagement name<input id="eng-name" placeholder="Linux lab assessment"></label><label>Authorization reference<input id="eng-auth" placeholder="Ticket, client approval, or lab reference"></label><label>Allowed target<input id="eng-target" placeholder="lab.example.test or https://lab.example.test"></label><label>Excluded targets (comma-separated)<input id="eng-excluded" placeholder="prod.example.test, 10.0.0.1"></label><label>Owner<input id="eng-owner" placeholder="operator or ticket owner"></label><label>Environment<input id="eng-env" placeholder="authorized-lab"></label><div class="form-foot"><span class="form-note">Operator-declared; keep your authorization evidence separately.</span><button class="primary-button" id="save-engagement">CREATE SCOPE</button></div></section><div id="engagement-list" class="engagement-list"><div class="empty-state panel"><div class="empty-icon">◎</div><h3>No active engagements</h3><p>Active tools such as nmap stay unavailable until a scope and expiry are declared.</p></div></div></div></section>
@@ -308,7 +309,7 @@
   <div id="help-window" class="help-window surface-window" data-surface-window data-window-state="normal" hidden>
     <section class="help-card surface-card" role="dialog" aria-modal="true" aria-labelledby="help-title">
       <div class="surface-titlebar">
-        <div><span class="panel-kicker">DOCUMENTATION</span><strong id="help-title">VORTEX Help</strong></div>
+        <div><span class="panel-kicker">DOCUMENTATION</span><strong id="help-title">Vortex Terminal Help</strong></div>
         <div class="window-controls">
           <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
           <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
@@ -333,14 +334,14 @@
           <article class="help-section active" id="help-section-getting-started">
             <div class="help-section-header">
               <div class="eyebrow"><span class="eyebrow-line"></span>OVERVIEW</div>
-              <h2>Getting Started with VORTEX</h2>
+              <h2>Getting Started with Vortex Terminal</h2>
             </div>
             <div class="help-prose">
               <h3>Understanding what VORTEX is</h3>
               <p>VORTEX (Verified Orchestration, Reasoning, Testing, Execution &amp; eXperience) is a Linux-native, AI-assisted authorized cybersecurity and Linux operations workbench. It is designed for cybersecurity professionals, Linux administrators, researchers, and educators who work with real systems in controlled, authorized environments.</p>
               <p>VORTEX is <strong>not a simulation</strong>. When authorized and permitted by its security architecture, it executes real commands on the real Linux host it is running on. Results reflect actual observed system state, not invented responses.</p>
 
-              <h3>What is VORTEX designed to do?</h3>
+              <h3>What is Vortex Terminal designed to do?</h3>
               <ul>
                 <li>Accept natural-language requests and translate them into typed, reviewed command plans.</li>
                 <li>Execute approved plans against the local Linux host through a Guardian-gated execution architecture.</li>
@@ -349,7 +350,7 @@
                 <li>Provide honest reporting: unavailable tools, agents, or capabilities are reported as such — never fabricated.</li>
               </ul>
 
-              <h3>How to start using VORTEX</h3>
+              <h3>How to start using Vortex Terminal</h3>
               <ol>
                 <li><strong>Open the New Task view</strong> (the ✦ nav item, selected by default).</li>
                 <li><strong>Type a natural-language request</strong> in the command bar at the bottom of the chat column, or click one of the quick-action buttons.</li>
@@ -442,7 +443,7 @@
                 <li><strong>The analysis</strong> is based entirely on observed output. VORTEX reports what actually happened, including failures, errors, and missing tools.</li>
               </ol>
 
-              <h3>What VORTEX will not do</h3>
+              <h3>What Vortex Terminal will not do</h3>
               <ul>
                 <li>VORTEX will not fabricate successful output for a command that failed or was never run.</li>
                 <li>VORTEX will not report a tool as available when it is not installed.</li>
@@ -461,7 +462,7 @@
           <article class="help-section" id="help-section-safety">
             <div class="help-section-header">
               <div class="eyebrow"><span class="eyebrow-line"></span>PROTECTION</div>
-              <h2>VORTEX Safety Architecture</h2>
+              <h2>Vortex Terminal Safety Architecture</h2>
             </div>
             <div class="help-prose">
               <p>VORTEX is built around a layered safety architecture. These mechanisms are not optional — they operate on every plan and execution request.</p>
@@ -509,7 +510,7 @@
                 </div>
                 <div class="help-arch-item">
                   <h4>STOP ALL</h4>
-                  <p>The red STOP ALL button in the topbar immediately cancels all active VORTEX-controlled operations and kills all open PTY sessions. It does not affect processes you started independently on the host.</p>
+                  <p>The red STOP ALL button in the topbar immediately cancels all active Vortex Terminal-controlled operations and kills all open PTY sessions. It does not affect processes you started independently on the host.</p>
                 </div>
                 <div class="help-arch-item">
                   <h4>Audit Logging</h4>
@@ -517,7 +518,7 @@
                 </div>
                 <div class="help-arch-item">
                   <h4>Offline Mode</h4>
-                  <p>Blocks outbound network plans and external model calls. Local tools and memory remain available. Toggle in Settings → Offline mode, or start VORTEX with the offline flag.</p>
+                  <p>Blocks outbound network plans and external model calls. Local tools and memory remain available. Toggle in Settings → Offline mode, or start Vortex Terminal with the offline flag.</p>
                 </div>
                 <div class="help-arch-item">
                   <h4>Privacy Mode</h4>
@@ -609,7 +610,7 @@
               </div>
               <div class="help-trouble-item">
                 <h3>"I need to stop everything immediately"</h3>
-                <p>Click the red <strong>STOP ALL</strong> button in the top-right toolbar. This cancels all VORTEX-controlled operations and kills all open PTY sessions. It calls <code>/api/control/stop-all</code> and reports how many operations were cancelled and sessions killed. Use this if a plan is executing and you want to halt it immediately.</p>
+                <p>Click the red <strong>STOP ALL</strong> button in the top-right toolbar. This cancels all Vortex Terminal-controlled operations and kills all open PTY sessions. It calls <code>/api/control/stop-all</code> and reports how many operations were cancelled and sessions killed. Use this if a plan is executing and you want to halt it immediately.</p>
               </div>
               <div class="help-trouble-item">
                 <h3>"The application reports an error"</h3>
@@ -665,7 +666,7 @@
                 </div>
                 <div class="help-cli-row">
                   <code>./vortex db integrity</code>
-                  <span>Verify the integrity of the local VORTEX database.</span>
+                  <span>Verify the integrity of the local Vortex Terminal database.</span>
                 </div>
               </div>
               <div class="help-notice">
@@ -679,7 +680,7 @@
           <article class="help-section" id="help-section-terminology">
             <div class="help-section-header">
               <div class="eyebrow"><span class="eyebrow-line"></span>GLOSSARY</div>
-              <h2>VORTEX Terminology</h2>
+              <h2>Vortex Terminal Terminology</h2>
             </div>
             <div class="help-prose">
               <div class="help-term-grid">
@@ -743,11 +744,45 @@
     </section>
   </div>
 
+  <!-- AGENT MODE SURFACE WINDOW -->
+  <div id="agent-window" class="agent-window surface-window" data-surface-window data-window-state="normal" hidden>
+    <section class="agent-card surface-card" role="dialog" aria-modal="true" aria-labelledby="agent-title">
+      <div class="surface-titlebar">
+        <div><span class="panel-kicker">GOAL → TRANSCRIPT</span><strong id="agent-title">Agent Mode — think, plan, Guardian, execute, observe</strong></div>
+        <div class="window-controls">
+          <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
+          <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
+          <button type="button" class="window-control window-control-close" data-surface-action="close" aria-label="Close Agent Mode window" title="Close"><span aria-hidden="true">×</span></button>
+        </div>
+      </div>
+      <div class="surface-body agent-body">
+        <div class="context-row"><label>STATUS</label><span class="badge badge-muted" id="agent-run-status">IDLE</span></div>
+        <div class="context-row"><label>PROGRESS</label><span id="agent-run-step">—</span></div>
+        <div class="context-row"><label>THINKING MODEL</label><span id="agent-run-model">—</span></div>
+        <p class="form-note">Describe a goal. A local model thinks (llamafile first), every proposal is grounded through deterministic planning, the Guardian auto-runs only low-risk steps, and anything else pauses here for your exact approval. One run at a time.</p>
+        <label class="form-label" for="agent-goal">GOAL</label>
+        <textarea id="agent-goal" rows="2" maxlength="2000" placeholder="e.g. Show my username, then show disk usage"></textarea>
+        <div class="worker-row">
+          <label class="form-label" for="agent-max-steps">MAX STEPS</label>
+          <select id="agent-max-steps"><option>3</option><option selected>5</option><option>8</option><option>10</option></select>
+          <button class="primary-button" id="agent-start" type="button">START RUN</button>
+          <button class="text-button danger" id="agent-stop" type="button" disabled>STOP</button>
+          <button class="text-button" id="agent-refresh" type="button">REFRESH</button>
+        </div>
+        <div id="agent-approve" hidden></div>
+        <h3 class="pipeline-title">VISIBLE TRANSCRIPT</h3>
+        <div id="agent-transcript" class="ai-ops-turn"><div class="empty-inline">No run selected.</div></div>
+        <h3 class="pipeline-title">RECENT RUNS</h3>
+        <div id="agent-runs"><div class="empty-inline">No agent runs yet.</div></div>
+      </div>
+    </section>
+  </div>
+
   <!-- ABOUT SURFACE WINDOW -->
   <div id="about-window" class="about-window surface-window" data-surface-window data-window-state="normal" hidden>
     <section class="about-card surface-card" role="dialog" aria-modal="true" aria-labelledby="about-title">
       <div class="surface-titlebar">
-        <div><span class="panel-kicker">APPLICATION INFO</span><strong id="about-title">About VORTEX</strong></div>
+        <div><span class="panel-kicker">APPLICATION INFO</span><strong id="about-title">About Vortex Terminal</strong></div>
         <div class="window-controls">
           <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
           <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
@@ -759,13 +794,13 @@
         <div class="about-hero">
           <div class="about-brand-mark"><span>V</span></div>
           <div class="about-brand-text">
-            <div class="about-name">VORTEX</div>
+            <div class="about-name">VORTEX TERMINAL</div>
             <div class="about-full-name">Verified Orchestration, Reasoning, Testing, Execution &amp; eXperience</div>
             <div class="about-tagline">Linux-native, AI-assisted authorized cybersecurity and Linux operations workbench</div>
           </div>
           <div class="about-version-chip">
             <div class="about-version-label">VERSION</div>
-            <div class="about-version-value" id="about-version">0.2.23</div>
+            <div class="about-version-value" id="about-version">0.3.0</div>
           </div>
         </div>
 
@@ -793,7 +828,7 @@
             <div class="eyebrow"><span class="eyebrow-line"></span>SYSTEM INFORMATION</div>
             <h3>Runtime</h3>
             <div class="about-sysinfo" id="about-sysinfo">
-              <div class="context-row"><label>VERSION</label><span>0.2.23</span></div>
+              <div class="context-row"><label>VERSION</label><span>0.3.0</span></div>
               <div class="context-row"><label>LICENSE</label><span>MIT</span></div>
               <div class="context-row"><label>PLATFORM</label><span id="about-platform">Linux</span></div>
               <div class="context-row"><label>DISTRIBUTION</label><span id="about-distro">—</span></div>
@@ -821,13 +856,13 @@
             <p>VORTEX itself is released under the MIT License and is free and open-source software. It is committed to using free and open-source tooling where possible.</p>
             <p><strong>Important distinctions:</strong></p>
             <ul>
-              <li><strong>VORTEX core</strong> — MIT License (this repository).</li>
+              <li><strong>Vortex Terminal core</strong> — MIT License (this repository).</li>
               <li><strong>Optional AI agents</strong> — Third-party projects with their own licenses (see NOTICE). VORTEX does not vendor these; adapters only probe for a local executable. Verify each project's license before installation.</li>
               <li><strong>Optional system tools</strong> — Tools such as nmap, Metasploit, and others have their own licenses. VORTEX does not install or bundle them.</li>
               <li><strong>External AI models</strong> — Commercial cloud providers (OpenAI, Anthropic, etc.) are optional and not free/open-source. They are disabled by default and never used without explicit configuration.</li>
               <li><strong>System packages</strong> — Standard Linux system utilities retain their upstream licenses.</li>
             </ul>
-            <p>No third-party AI agent code is bundled or consulted. The built-in VORTEX Local Advisor is the only bundled advisor; the deterministic core and Guardian remain the authority. Do not copy proprietary code into VORTEX.</p>
+            <p>No third-party AI agent code is bundled or consulted. The built-in Vortex Terminal Local Advisor is the only bundled advisor; the deterministic core and Guardian remain the authority. Do not copy proprietary code into Vortex Terminal.</p>
           </section>
 
           <section class="about-section about-section-full">
@@ -861,7 +896,7 @@
   <dialog id="capability-dialog" aria-labelledby="capability-title" aria-describedby="capability-help">
     <form id="capability-form" method="dialog" class="panel" style="max-width:460px;padding:24px">
       <div class="eyebrow"><span class="eyebrow-line"></span>REMOTE SIDECAR AUTHENTICATION</div>
-      <h2 id="capability-title">Enter the VORTEX capability</h2>
+      <h2 id="capability-title">Enter the Vortex Terminal capability</h2>
       <p id="capability-help">Remote and mobile connections require the capability shown when the sidecar was started. It stays in this browser tab and is exchanged for an eight-hour, HTTP-only session cookie.</p>
       <label for="capability-input">Sidecar capability</label>
       <input id="capability-input" type="password" autocomplete="off" spellcheck="false" maxlength="256" required>
@@ -877,6 +912,7 @@
   <script src="/assets/workspace.js"></script>
   <script src="/assets/models.js"></script>
   <script src="/assets/aiops.js"></script>
+  <script src="/assets/agent.js"></script>
   <script src="/assets/hud.js"></script>
 </body>
 </html>

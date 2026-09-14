@@ -157,6 +157,75 @@ class GgufDiscoveryTests(unittest.TestCase):
         self.assertNotEqual(llama, qwen)
 
 
+class GgufPythonEngineTests(unittest.TestCase):
+    def setUp(self):
+        gguf_provider.set_test_engine(None)
+        self.addCleanup(gguf_provider.set_test_engine, None)
+        self.addCleanup(gguf_provider._LOADED.update,
+                        {"path": None, "handle": None, "family": None, "engine": None})
+
+    def test_worker_error_is_not_reported_as_timeout(self):
+        def broken(prompt, **kwargs):
+            raise ValueError("empty completion from local model")
+
+        with self.assertRaisesRegex(ValueError, "empty completion"):
+            gguf_provider._complete_python(broken, "prompt", {}, 5.0)
+
+    def test_hung_worker_does_not_block_past_timeout(self):
+        import threading
+        import time
+
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+
+        def stuck(prompt, **kwargs):
+            stop.wait(timeout=30)
+            return {"choices": [{"text": "too late"}]}
+
+        started = time.monotonic()
+        with self.assertRaisesRegex(TimeoutError, "timed out after 1"):
+            gguf_provider._complete_python(stuck, "prompt", {}, 1.0)
+        self.assertLess(time.monotonic() - started, 10.0)
+
+    def test_python_inference_serializes_on_single_slot_lock(self):
+        import threading
+        import time
+
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def gated(prompt, **kwargs):
+            calls.append(1)
+            entered.set()
+            self.assertTrue(release.wait(timeout=15))
+            return {"choices": [{"text": "ok"}]}
+
+        gguf_provider._LOADED.update({"path": "/tmp/x.gguf", "handle": gated,
+                                      "family": "llama", "engine": "python"})
+        entry = {"path": "/tmp/x.gguf", "family": "llama", "name": "x.gguf"}
+        with patch.object(gguf_provider, "_ensure_loaded_locked",
+                          return_value={"engine": "python", "handle": gated}):
+            first = threading.Thread(target=gguf_provider.complete,
+                                     args=(entry, "s", "{}", {}, 15.0))
+            first.start()
+            self.assertTrue(entered.wait(timeout=15))
+            done = []
+            second = threading.Thread(
+                target=lambda: done.append(gguf_provider.complete(entry, "s", "{}", {}, 15.0)))
+            second.start()
+            time.sleep(0.5)
+            self.assertTrue(second.is_alive())
+            self.assertEqual(len(calls), 1)
+            release.set()
+            first.join(timeout=15)
+            second.join(timeout=15)
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["engine"], "python")
+
+
 class FuzzyRoutingTests(unittest.TestCase):
     def setUp(self):
         _reset_caches()
@@ -349,7 +418,7 @@ class UpstreamTrackingTests(unittest.TestCase):
         from backend.agents.upstream import table
 
         data = table()
-        self.assertEqual(set(data), {"vortex-local"}, "no third-party agent code ships with VORTEX")
+        self.assertEqual(set(data), {"vortex-local"}, "no third-party agent code ships with Vortex Terminal")
         self.assertEqual(data["vortex-local"]["sync_state"], "builtin")
 
     def test_refresh_refuses_offline_without_network(self):
@@ -372,6 +441,21 @@ class UpstreamTrackingTests(unittest.TestCase):
 
         result = upstream_module.refresh("not-a-real-agent")
         self.assertEqual(result["state"], "unknown_agent")
+
+    def test_fetch_head_tolerates_empty_commit_message(self):
+        from unittest.mock import MagicMock
+
+        from backend.agents import upstream as upstream_module
+
+        payload = json.dumps([{"sha": "abc123", "commit": {}}]).encode()
+        response = MagicMock()
+        response.geturl.return_value = "https://api.github.com/repos/o/r/commits?per_page=1"
+        response.read.return_value = payload
+        response.__enter__.return_value = response
+        with patch("urllib.request.urlopen", return_value=response):
+            head = upstream_module._fetch_head("https://api.github.com/repos/o/r/commits?per_page=1", 8.0)
+        self.assertEqual(head["sha"], "abc123")
+        self.assertEqual(head["message"], "")
 
     def test_council_discover_carries_upstream(self):
         from backend.agents.council import discover

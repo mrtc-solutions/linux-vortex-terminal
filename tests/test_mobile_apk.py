@@ -26,7 +26,85 @@ class ApkBuildTests(unittest.TestCase):
         raw = encode_manifest(version_name="0.2.22")
         self.assertEqual(raw[:4], b"\x03\x00\x08\x00")
         self.assertIn("io.vortex.mobile".encode("utf-16le"), raw)
-        self.assertIn("VORTEX".encode("utf-16le"), raw)
+        self.assertIn("Vortex Terminal".encode("utf-16le"), raw)
+
+    def test_axml_config_changes_survives_rotation(self):
+        raw = encode_manifest()
+        # orientation|keyboardHidden|screenSize so API 13+ rotation does not
+        # destroy the WebView activity.
+        self.assertIn(b"\xa0\x04\x00\x00", raw)
+
+    def test_axml_elements_decode_per_android_spec(self):
+        # Independent structural decode following AOSP's ResXMLTree layout
+        # (ResourceTypes.h): chunk headers, UTF-16 string pool, resource map,
+        # then namespace/element nodes with ResXMLTree_attrExt headers. A
+        # manifest whose attributes only exist as unreachable bytes installs
+        # nowhere, so every launch-critical attribute is read back the way
+        # Android's PackageParser would read it.
+        import struct
+        raw = encode_manifest()
+        self.assertEqual(struct.unpack_from("<HHI", raw, 0), (0x0003, 8, len(raw)))
+        off = 8
+        ptype, pheader, psize = struct.unpack_from("<HHI", raw, off)
+        self.assertEqual((ptype, pheader), (0x0001, 28))
+        count, styles, flags, strings_start, _styles_start = struct.unpack_from("<IIIII", raw, off + 8)
+        self.assertEqual(styles, 0)
+        self.assertEqual(flags, 0)
+        offsets = struct.unpack_from("<%dI" % count, raw, off + 28)
+        strings = []
+        for item in offsets:
+            base = off + strings_start + item
+            (nchars,) = struct.unpack_from("<H", raw, base)
+            text = raw[base + 2:base + 2 + nchars * 2].decode("utf-16le")
+            strings.append(text)
+        off += psize
+        mtype, mheader, msize = struct.unpack_from("<HHI", raw, off)
+        self.assertEqual((mtype, mheader), (0x0180, 8))
+        off += msize
+        stack: list[str] = []
+        seen: dict[str, list[dict]] = {}
+        while off < len(raw):
+            ctype, cheader, csize = struct.unpack_from("<HHI", raw, off)
+            self.assertEqual(cheader, 16)
+            self.assertGreater(csize, 16)
+            if ctype == 0x0102:  # START_ELEMENT
+                ns, name = struct.unpack_from("<iI", raw, off + 16)
+                astart, asize, acount, _id, _cls, _style = struct.unpack_from("<HHHHHH", raw, off + 24)
+                self.assertEqual((astart, asize), (20, 20), "attrExt must describe 20-byte attributes")
+                attrs = []
+                for i in range(acount):
+                    base = off + 16 + astart + i * asize
+                    ans, aname, araw, _size, _res0, dtype, data = struct.unpack_from("<iIiHBBI", raw, base)
+                    attrs.append({
+                        "ns": strings[ans] if ans >= 0 else None,
+                        "name": strings[aname],
+                        "raw": strings[araw] if araw >= 0 else None,
+                        "type": dtype,
+                        "data": data,
+                    })
+                tag = strings[name]
+                stack.append(tag)
+                seen.setdefault(tag, []).append({a["name"]: a for a in attrs})
+            elif ctype == 0x0103:  # END_ELEMENT
+                _ns, name = struct.unpack_from("<iI", raw, off + 16)
+                self.assertEqual(stack.pop(), strings[name])
+            off += csize
+        self.assertEqual(stack, [])
+        manifest = seen["manifest"][0]
+        self.assertEqual(manifest["package"]["raw"], "io.vortex.mobile")
+        self.assertEqual((manifest["versionCode"]["type"], manifest["versionCode"]["data"]), (0x10, 230))
+        self.assertEqual(manifest["versionName"]["raw"], "0.3.0")
+        sdk = seen["uses-sdk"][0]
+        self.assertEqual((sdk["minSdkVersion"]["data"], sdk["targetSdkVersion"]["data"]), (21, 34))
+        app = seen["application"][0]
+        self.assertEqual(app["label"]["raw"], "Vortex Terminal")
+        self.assertEqual(app["usesCleartextTraffic"]["data"], 0xFFFFFFFF)
+        activity = seen["activity"][0]
+        self.assertEqual(activity["name"]["raw"], "io.vortex.mobile.MainActivity")
+        self.assertEqual(activity["exported"]["data"], 0xFFFFFFFF)
+        self.assertEqual(activity["configChanges"]["data"], 0x04A0)
+        self.assertEqual(seen["action"][0]["name"]["raw"], "android.intent.action.MAIN")
+        self.assertEqual(seen["category"][0]["name"]["raw"], "android.intent.category.LAUNCHER")
 
     def test_dex_header_checksum(self):
         dex = build_webview_dex("http://192.0.2.10:8765/")
@@ -35,18 +113,120 @@ class ApkBuildTests(unittest.TestCase):
         self.assertIn(b"io/vortex/mobile/MainActivity", dex)
         self.assertIn(b"http://192.0.2.10:8765/", dex)
 
+    def test_dex_structure_decodes_per_dalvik_spec(self):
+        # Independent structural decode following the Dalvik executable format:
+        # header coherence, checksum/signature recomputation, string/type/
+        # proto/method tables, class_data index sequences, and the onCreate
+        # bytecode. A dex whose bytes merely contain the right substrings can
+        # still fail verification on device; this reads it the way ART does.
+        import hashlib
+        import struct
+        import zlib
+        url = "http://192.0.2.10:8765/"
+        dex = build_webview_dex(url)
+
+        def u32(off):
+            return struct.unpack_from("<I", dex, off)[0]
+
+        def read_uleb(off):
+            result = shift = 0
+            while True:
+                byte = dex[off]
+                off += 1
+                result |= (byte & 0x7F) << shift
+                if not byte & 0x80:
+                    return result, off
+                shift += 7
+
+        self.assertEqual(u32(8), zlib.adler32(dex[12:]) & 0xFFFFFFFF)
+        self.assertEqual(dex[12:32], hashlib.sha1(dex[32:]).digest())
+        self.assertEqual(u32(32), len(dex))  # file_size
+        self.assertEqual(u32(36), 0x70)  # header_size
+        self.assertEqual(u32(40), 0x12345678)  # endian_tag
+
+        n_strings, strings_off = u32(56), u32(60)
+        n_types, types_off = u32(64), u32(68)
+        n_protos, protos_off = u32(72), u32(76)
+        n_methods, methods_off = u32(88), u32(92)
+        n_classes, classes_off = u32(96), u32(100)
+        self.assertEqual(n_classes, 1)
+        strings = []
+        for i in range(n_strings):
+            size, pos = read_uleb(u32(strings_off + 4 * i))
+            text = dex[pos:pos + size].decode("utf-8")
+            self.assertEqual(dex[pos + size], 0)
+            strings.append(text)
+        self.assertIn(url, strings)
+        types = [strings[u32(types_off + 4 * i)] for i in range(n_types)]
+        protos = []
+        for i in range(n_protos):
+            shorty, ret, params_off = (u32(protos_off + 12 * i + 4 * j) for j in range(3))
+            params = []
+            if params_off:
+                count = u32(params_off)
+                params = [types[struct.unpack_from("<H", dex, params_off + 4 + 2 * k)[0]] for k in range(count)]
+            protos.append((strings[shorty], types[ret], params))
+        methods = []
+        for i in range(n_methods):
+            cls, proto = struct.unpack_from("<HH", dex, methods_off + 8 * i)
+            name = u32(methods_off + 8 * i + 4)
+            methods.append((types[cls], protos[proto], strings[name]))
+        self.assertEqual(methods[10][:1] + methods[10][2:], ("Lio/vortex/mobile/MainActivity;", "<init>"))
+        self.assertEqual(methods[11][:1] + methods[11][2:], ("Lio/vortex/mobile/MainActivity;", "onCreate"))
+
+        cls_type, _flags, super_type, _, _, _, class_data_off, _ = (
+            u32(classes_off + 4 * j) for j in range(8))
+        self.assertEqual(types[cls_type], "Lio/vortex/mobile/MainActivity;")
+        self.assertEqual(types[super_type], "Landroid/app/Activity;")
+        pos = class_data_off
+        counts = []
+        for _ in range(4):
+            value, pos = read_uleb(pos)
+            counts.append(value)
+        self.assertEqual(counts, [0, 0, 1, 1])
+        direct_idx, pos = read_uleb(pos)
+        _direct_flags, pos = read_uleb(pos)
+        _direct_code, pos = read_uleb(pos)
+        virtual_idx, pos = read_uleb(pos)
+        virtual_flags, pos = read_uleb(pos)
+        virtual_code, _pos = read_uleb(pos)
+        # First index of each list is absolute: MainActivity.<init> is method
+        # 10 and MainActivity.onCreate is method 11.
+        self.assertEqual(direct_idx, 10)
+        self.assertEqual(virtual_idx, 11)
+        self.assertEqual(virtual_flags, 0x4)
+
+        regs, ins, _outs, tries, _debug, units = struct.unpack_from("<HHHHII", dex, virtual_code)
+        self.assertEqual((regs, ins, tries), (6, 2, 0))
+        insns = dex[virtual_code + 16:virtual_code + 16 + units * 2]
+        self.assertEqual(insns[0], 0x6F)  # invoke-super
+        self.assertEqual(insns[2] | (insns[3] << 8), 1)  # Activity.onCreate
+        url_idx = strings.index(url)
+        const_strings = [insns[i + 2] | (insns[i + 3] << 8)
+                         for i in range(len(insns) - 3) if insns[i] == 0x1A]
+        self.assertIn(url_idx, const_strings)  # const-string loads the startup URL
+        self.assertEqual(insns[-2:], bytes([0x0E, 0x00]))  # return-void
+
+    def test_dex_rejects_non_ascii_url(self):
+        with self.assertRaises(ValueError):
+            build_webview_dex("http://exämple.test/")
+
     def test_sync_copies_live_frontend_and_license(self):
         dest = Path(self.tmp.name) / "sync"
         result = sync_payload("http://127.0.0.1:8765/", dest)
         self.assertIn("index.html", result["copied"])
         self.assertTrue((dest / "www" / "index.html").is_file())
         self.assertTrue((dest / "www" / "app.js").is_file())
-        # Every script the embedded index.html references must be synced, or the
+        # Every asset the embedded index.html references must be synced, or the
         # offline fallback snapshot inside the APK loads a broken shell.
-        self.assertIn("models.js", result["copied"])
-        self.assertIn("hud.js", result["copied"])
-        self.assertTrue((dest / "www" / "models.js").is_file())
-        self.assertTrue((dest / "www" / "hud.js").is_file())
+        import re
+        refs = sorted(set(re.findall(
+            r"/assets/([A-Za-z0-9_.-]+\.(?:js|css))",
+            (dest / "www" / "index.html").read_text(encoding="utf-8"))))
+        self.assertTrue(refs, "index.html must reference its assets")
+        for name in refs:
+            self.assertIn(name, result["copied"])
+            self.assertTrue((dest / "www" / name).is_file(), f"{name} must sync into the APK")
         self.assertTrue((dest / "LICENSE").is_file())
         self.assertIn("MIT", (dest / "LICENSE").read_text(encoding="utf-8"))
         self.assertEqual((dest / "sidecar.txt").read_text(encoding="utf-8").strip(), "http://127.0.0.1:8765/")

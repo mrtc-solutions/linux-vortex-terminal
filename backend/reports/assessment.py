@@ -16,7 +16,7 @@ def build(engagement: dict[str, Any], findings: list[dict[str, Any]], operations
             "classes": engagement.get("classes"),
             "status": engagement.get("status"),
         },
-        "methodology": "Reviewed VORTEX adapters only. No fabricated scanner output.",
+        "methodology": "Reviewed Vortex Terminal adapters only. No fabricated scanner output.",
         "operations": len(operations),
         "findings": findings,
         "conclusion": "Findings are observed evidence, not confirmed vulnerabilities." if findings else "No observed findings were recorded for this engagement.",

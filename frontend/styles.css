@@ -1,5 +1,5 @@
 /* ============================================================
-   ARENA AI // VORTEX — tactical AI operations HUD
+   Vortex Terminal — tactical AI operations HUD
    Static terminal-inspired visual system: black substrate, amber/teal
    hierarchy, and crisp framed work surfaces. This palette switches the
    heavy phosphor green for tactical amber and teal accents which read
@@ -95,5 +95,78 @@ body::before {
 .ai-ops-popup { background: linear-gradient(180deg, var(--surface), var(--surface-2)); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 6px; padding: 12px; }
 .ai-ops-stream { height: 220px; overflow: auto; background: rgba(0,0,0,.18); padding: 8px; border-radius: 4px; }
 .stream-line { color: var(--text); font-family: var(--mono); font-size: 13px; padding: 2px 0; border-bottom: 1px dashed rgba(255,255,255,.02); }
+
+/* Plain theme and reduced motion must never render decorative backgrounds. */
+body.plain-mode::before, body.plain-mode::after { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  body::before, body::after { display: none; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* Narrow viewports: collapse the rail to icons and let grids shrink. */
+@media (max-width: 800px) {
+  .nav-item { font-size: 0; overflow: hidden; white-space: nowrap; }
+  .nav-icon { width: 100%; font-size: 18px; text-align: center; }
+  .grid-row { grid-template-columns: minmax(0, 1fr); }
+  .model-actions { flex-direction: column; align-items: stretch; }
+}
+
+/* Phones: single-column cards, stacked terminals, usable modal padding. */
+@media (max-width: 600px) {
+  .quick-actions { grid-template-columns: minmax(0, 1fr); }
+  .setting-card { grid-template-columns: auto minmax(0, 1fr); }
+  .dep-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .terminal-panes { grid-template-columns: minmax(0, 1fr) !important; }
+  .surface-window { padding: 8px; }
+}
+
+/* Very narrow rails keep a bounded matching width and basis. */
+@media (max-width: 380px) {
+  .sidebar { width: 52px; flex-basis: 52px; }
+}
+
+/* Topbar controls wrap instead of clipping or overflowing. */
+.topbar { display: flex; flex-wrap:wrap; align-items: center; gap: 8px; }
+.top-actions { display: flex; flex-wrap:wrap; align-items: center; gap: 8px; }
+
+/* PTY ANSI palette emitted by terminal.js (SGR 0-15, 256-color folded mod 16).
+   Defined here so live shell colors and the block cursor actually render. */
+.ansi-color-0 { color: #6b6b6b; }
+.ansi-color-1 { color: #cd0000; }
+.ansi-color-2 { color: #00cd00; }
+.ansi-color-3 { color: #cdcd00; }
+.ansi-color-4 { color: #5c5cff; }
+.ansi-color-5 { color: #cd00cd; }
+.ansi-color-6 { color: #00cdcd; }
+.ansi-color-7 { color: #e5e5e5; }
+.ansi-color-8 { color: #7f7f7f; }
+.ansi-color-9 { color: #ff0000; }
+.ansi-color-10 { color: #00ff00; }
+.ansi-color-11 { color: #ffff00; }
+.ansi-color-12 { color: #8c8cff; }
+.ansi-color-13 { color: #ff00ff; }
+.ansi-color-14 { color: #00ffff; }
+.ansi-color-15 { color: #ffffff; }
+.ansi-bg-0 { background-color: #000000; }
+.ansi-bg-1 { background-color: #cd0000; }
+.ansi-bg-2 { background-color: #00cd00; }
+.ansi-bg-3 { background-color: #cdcd00; }
+.ansi-bg-4 { background-color: #0000ee; }
+.ansi-bg-5 { background-color: #cd00cd; }
+.ansi-bg-6 { background-color: #00cdcd; }
+.ansi-bg-7 { background-color: #e5e5e5; }
+.ansi-bg-8 { background-color: #7f7f7f; }
+.ansi-bg-9 { background-color: #ff0000; }
+.ansi-bg-10 { background-color: #00ff00; }
+.ansi-bg-11 { background-color: #ffff00; }
+.ansi-bg-12 { background-color: #5c5cff; }
+.ansi-bg-13 { background-color: #ff00ff; }
+.ansi-bg-14 { background-color: #00ffff; }
+.ansi-bg-15 { background-color: #ffffff; }
+.ansi-bold { font-weight: 700; }
+.ansi-inverse { filter: invert(100%); }
+/* Block cursor for the live PTY cell (static: no blink, motion-safe). */
+.term-cursor { background-color: var(--accent-amber); color: #000000; }
 
 /* Keep the rest of styles intact by falling back to existing rules */

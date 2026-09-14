@@ -74,7 +74,7 @@ def parse_apt_policy(text: str, exit_code: int | None = 0) -> dict[str, Any]:
         line = line.strip()
         if line.startswith("http://") or line.startswith("https://"):
             result["sources"].append(line.split()[0])
-    if re.search(r"Candidate:\s*\(none\)", safe, re.I): result["state"] = "inconclusive"
+    if exit_code in (None, 0) and re.search(r"Candidate:\s*\(none\)", safe, re.I): result["state"] = "inconclusive"
     if exit_code not in (None, 0): result["raw_error"] = next((line.strip() for line in safe.splitlines() if line.strip()), "apt-cache policy failed")
     result["sources"] = list(dict.fromkeys(result["sources"]))[:20]
     return result
@@ -88,7 +88,7 @@ def parse_apt_show(text: str, exit_code: int | None = 0) -> dict[str, Any]:
     if fields["Version"]: result["version"] = fields["Version"].group(1).strip()
     if fields["Architecture"]: result["architecture"] = fields["Architecture"].group(1).strip()
     if fields["Source"]: result["source"] = fields["Source"].group(1).strip()
-    if fields["Depends"]: result["depends"] = [part.strip().split()[0] for part in fields["Depends"].group(1).split(",")][:100]
+    if fields["Depends"]: result["depends"] = [tokens[0] for part in fields["Depends"].group(1).split(",") if (tokens := part.strip().split())][:100]
     return result
 
 

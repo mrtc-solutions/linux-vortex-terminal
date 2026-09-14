@@ -2,10 +2,11 @@
 
 Decision chain (highest priority first):
 
-1. local GGUF files (``Llama-3.2-3B`` fast, ``Qwen2.5-3B`` planner) — primary
-2. Ollama loopback pool — secondary when GGUF is slow, missing, or failing
-3. agent council — deterministic secondary when no model responds
-4. deterministic VORTEX core — always available, never fabricated
+1. llamafile loopback server (single-binary local LLM) — primary when running
+2. local GGUF files (``Llama-3.2-3B`` fast, ``Qwen2.5-3B`` planner)
+3. Ollama loopback pool — secondary when llamafile/GGUF is slow, missing, or failing
+4. agent council — deterministic secondary when no model responds
+5. deterministic Vortex Terminal core — always available, never fabricated
 
 The fuzzy engine blends four signals per provider into a 0..1 score:
 
@@ -30,7 +31,7 @@ _LATENCY: dict[str, dict[str, Any]] = {}
 _LATENCY_TTL_SECONDS = 600.0
 _EWMA_ALPHA = 0.35
 
-PROVIDER_ORDER = ("gguf", "ollama", "council", "deterministic")
+PROVIDER_ORDER = ("llamafile", "gguf", "ollama", "council", "deterministic")
 
 
 def _clamp01(value: float) -> float:
@@ -120,6 +121,11 @@ def reset_latency() -> None:
 def _phase_fit(provider: str, phase: str) -> float:
     provider, phase = str(provider), str(phase)
     table = {
+        ("llamafile", "conversation"): 1.0,
+        ("llamafile", "plan"): 1.0,
+        ("llamafile", "interpret"): 1.0,
+        ("llamafile", "report"): 0.9,
+        ("llamafile", "verify"): 0.9,
         ("gguf", "conversation"): 1.0,
         ("gguf", "plan"): 1.0,
         ("gguf", "interpret"): 1.0,
@@ -194,14 +200,16 @@ def decide(providers: list[dict[str, Any]], phase: str = "conversation") -> dict
     order = {name: index for index, name in enumerate(PROVIDER_ORDER)}
     scored.sort(key=lambda entry: (-entry["score"], order.get(entry["provider"], 99)))
     winner = scored[0]
-    if winner["provider"] == "gguf":
+    if winner["provider"] == "llamafile":
+        reason = "llamafile loopback server is healthy; the single-binary local model answers first."
+    elif winner["provider"] == "gguf":
         reason = "Primary local GGUF model is healthy and fits this host; it answers first."
     elif winner["provider"] == "ollama":
         reason = "Ollama loopback pool answers (GGUF primary unavailable, slow, or failing)."
     elif winner["provider"] == "council":
         reason = "No local model is answering; the deterministic agent council advises without generating text."
     else:
-        reason = "No advisory layer is available; deterministic VORTEX core continues alone."
+        reason = "No advisory layer is available; deterministic Vortex Terminal core continues alone."
     confidence = "high" if winner["score"] >= 0.7 else (
         "moderate" if winner["score"] >= 0.4 else (
             "low" if winner["score"] > 0.0 else "unavailable"))
@@ -221,6 +229,6 @@ def provider_confidence(decision: dict[str, Any], responded: bool) -> dict[str, 
         return {"confidence": "unavailable", "agreement": "none",
                 "note": "The selected provider did not respond; secondary layers take over."}
     return {"confidence": decision.get("confidence", "moderate"),
-            "agreement": "single-provider" if decision.get("winner") in {"gguf", "ollama"} else "deterministic",
+            "agreement": "single-provider" if decision.get("winner") in {"llamafile", "gguf", "ollama"} else "deterministic",
             "provider": decision.get("winner"),
             "note": str(decision.get("reason") or "")}

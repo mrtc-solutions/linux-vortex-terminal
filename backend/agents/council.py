@@ -72,7 +72,7 @@ def critic(plan: dict[str, Any], consultations: list[dict[str, Any]]) -> dict[st
         summary = "No command was proposed; the critic will not invent an outcome."
     elif not healthy:
         verdict = "uncertain"
-        summary = "No external agent produced evidence. VORTEX continues with the deterministic plan and Guardian only."
+        summary = "No external agent produced evidence. Vortex Terminal continues with the deterministic plan and Guardian only."
     else:
         verdict = "advisory_only"
         summary = "Agent output is untrusted recommendation data, not authorization."
@@ -98,8 +98,6 @@ def consult(plan: dict[str, Any], task: dict[str, Any] | None = None, observatio
     for agent_id in selected:
         result = ADAPTERS[agent_id].submit_task(payload)
         consultations.append(result)
-        if budget["mode"] == "sequential":
-            continue
     for agent_id in selected:
         ADAPTERS[agent_id].cleanup()
     review = critic(plan, consultations)

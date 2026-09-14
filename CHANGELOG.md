@@ -1,5 +1,117 @@
 # Changelog
 
+## Unreleased
+
+- **Agent Mode (v1).** Goal-directed runs with a visible transcript:
+  think → plan → Guardian → execute → observe, looping until the goal is
+  verified or a budget stops the run. Thinking rides the local stack
+  llamafile-first with GGUF/Ollama fallback; every proposal is grounded
+  through deterministic planning (model text never becomes shell);
+  Guardian-`auto` steps run while anything else pauses for exact-step
+  approval; one run at a time with step/time budgets, a stable
+  repeat-guard, stop/resume, SSE transcript streaming, and an honest
+  `needs_model` refusal pointing at the Models view when no local model
+  is healthy. New sidecar routes `/api/agent/*`, Agent Mode surface
+  window, `docs/AGENT_MODE.md`, and 13 tests including real-execution
+  achieve/approve/stop/loop-guard and live-HTTP coverage.
+
+
+- **Installable Android APK.** The hand-written `AndroidManifest.xml`
+  encoder described every start-tag with a short `ResXMLTree_attrExt`
+  (attribute count read back as zero), so no device could parse the
+  manifest; it now emits the full six-field header per the AOSP layout.
+  The DEX writer also indexed `MainActivity.onCreate` as a diff of 1
+  instead of its absolute method id 11, which fails ART verification;
+  both are pinned by independent structural decoders written against
+  the platform specs, stash-proven to fail pre-fix.
+- **Packaged builds ship the whole frontend.** `aiops.js` is referenced
+  by `index.html` but was missing from the `.deb` file list and the APK
+  payload, so the AI OPS window 404'd outside a checkout; both shippers
+  now carry it, and the packaging tests assert every `/assets/` reference
+  ships instead of pinning two files.
+- **GGUF engine honesty.** The optional Python inference path no longer
+  converts engine errors into timeouts, bounds its wait with a real
+  timeout that detaches orphans, and serializes single-slot inference
+  under a lock with a handle-identity recheck.
+- **llamafile loopback hardening.** Advisory `probe`/`chat` bypass an
+  inherited proxy for loopback servers, and concurrent `start` calls
+  share one in-flight launch instead of racing.
+- **Smaller pass-7 fixes.** Host scan rejects unbalanced quotes with a
+  clarification instead of raising; dependency guidance points at the
+  verified Models-view install/pull routes; the Ollama guide pulls the
+  curated catalog tags; `target_endpoint` never raises on malformed
+  input; the lint gate syntax-checks `aiops.js`.
+- **llamafile advisory that always reaches the server.** An operator-configured
+  loopback llamafile server now serves advisory through the model it actually
+  serves even when no model file is registered locally, and `server_state`,
+  `server_start`, and `chat` resolve saved settings from partial call-site
+  dicts. Proven end-to-end against a live loopback server (`responded` via
+  `llamafile`) with two new regression tests.
+- **About popup (app + downloads + license).** New `about` command, Launcher
+  tile, and Help row opening live version/sidecar state, the full MIT license
+  text, Android APK sync/download with size and SHA-256, Linux DEB
+  build/download, and an honest no-iOS note (Apple signing cannot be produced
+  or verified on Linux).
+- **Honest timeouts.** The React API client now reports `timeout` (with the
+  elapsed budget and a retry hint) instead of mislabeling slow answers as
+  `network` / "Sidecar unreachable".
+- **Models download progress.** llamafile installs show MB received/total,
+  percent, and a progress bar while the existing 3s poll runs.
+- **Electron allowlist.** Desktop `security.js` now permits the real GET
+  routes the shell calls (`artifacts`, `capabilities`, `license`,
+  `reports/system`, `mobile/apk`, `desktop/deb`, `tasks/:id`,
+  `tasks/:id/events`) plus the system-report download; `test_windows.js`
+  asserts each, including method-mismatch denials.
+- **Product naming.** User-visible surfaces now say "Vortex Terminal"
+  (all-caps VORTEX TERMINAL only for the header wordmark and window titles);
+  the APK label, report titles, agent name, and backend messages match.
+- **Desktop + token auth for the React shell.** API calls ride Electron IPC
+  (`window.vortexApi`) when hosted in the desktop app, with an IPC timeout
+  race; token-protected sidecars get a one-shot `#vortex-token=PASTE`
+  cookie bootstrap, and 401s explain exactly how to authenticate. Closed
+  four IPC allowlist gaps the shell needs (`plan`, operation
+  cancel/complete-task, artifact analysis, assessment reads).
+- **Mutation preflight review.** Operations that pause in
+  `awaiting_confirmation` now open a second explicit CONFIRM MUTATION step
+  (preflight digest + next command shown); leaving it paused is honest too.
+- **Task ledger cancel.** Tasks bound to a live operation offer Cancel op;
+  removed the dead `approveOperation`/`completeOperationTask` client exports.
+- **Reconnect prefers your shell.** The Host Shell popup re-attaches to its
+  own PTY session instead of grabbing whichever session lists first.
+- **Dev ergonomics.** Vite dev/preview listen on all interfaces, accept
+  preview hosts, and proxy `/api` to a local sidecar on 8765.
+
+## 0.3.0 — 2026-09-13
+
+New default UI shell (React terminal, served at `/`), free local LLM via
+llamafile, and the full popup workspace. No simulation: every surface reads
+the loopback sidecar and degrades to an honest empty/unavailable state.
+
+- **React terminal shell.** Six tabs (Terminal, Tactical Map, /out, Reports,
+  Fuzzy, Agent Reach) plus pop-up windows (plan approvals, tasks, scope,
+  tools, models, system, conversations, memory, settings, AI Ops, help,
+  raw host PTY, start-menu launcher). Terminal turns run plan → Guardian →
+  execute → observe with live SSE output; WAITING plans open a real
+  approve/reject review. Served automatically once `npm run build` produces
+  `dist/`; `VORTEX_UI=legacy` forces the vanilla workbench.
+- **llamafile provider.** Pinned single-binary local LLM (v0.10.5,
+  SHA-256 verified), operator-confirmed install, loopback-only server,
+  GGUF/fused-model import, start/stop/activate/remove. Router order is now
+  llamafile → GGUF-direct → Ollama → agent council → deterministic core,
+  with per-call latency feedback and honest unavailable states.
+- **Real tabs.** Tactical Map renders the observed asset graph; /out shows
+  stored artifacts with observations and re-analysis; Reports browses,
+  downloads (md/html/json/pdf), and deletes sidecar reports plus live system
+  and per-engagement assessments; Fuzzy shows the live router ranking with
+  membership traces; Agent Reach shows the real roster and capabilities.
+- **Policy settings UI.** Profile selector (safe/standard/expert) with the
+  derived `auto_low_risk` flag shown honestly; `auto_medium_risk` stays a
+  Guardian invariant (always off).
+- **Dropped from the UI** (backend/CLI unchanged): the React demo's staged
+  network map, fake model cluster, in-memory filesystem, and canned
+  deliberations. The vanilla `frontend/` workbench remains as the legacy
+  fallback and is still covered by the JS suites.
+
 ## 0.2.23 — 2026-09-12
 
 Windowed workspace, global REFRESH ALL, visible local-AI trace, the
@@ -108,7 +220,7 @@ review findings are closed so the tree is consistent at every layer.
 - PTY live ring is 400 events / 4 MiB (persisted replay 800 events) so typical
   small terminal chunks have usable scrollback without unbounded memory.
 - Privilege handoff documents the OS `sudo -v` timestamp window (~15 minutes)
-  in the CLI prompt, SECURITY.md, and USER_GUIDE. VORTEX still never sees the
+  in the CLI prompt, SECURITY.md, and USER_GUIDE. Vortex Terminal still never sees the
   password.
 - Version identity is 0.2.22 / APK code 222 across sidecar, CLI, frontend,
   APK, and `.deb`.
@@ -154,7 +266,7 @@ the decorative rain background.
   REMOVE** buttons (a `MODELS →` link opens the full installer). Model
   downloads are gated until Ollama is installed and the service is running.
   Agent install proposals are clarified: the source repository is a clickable
-  link and the window states plainly that VORTEX will not download or run
+  link and the window states plainly that Vortex Terminal will not download or run
   third-party agent code (operator-installed, license-verified by the user).
 - `backend/health.py` reports an actionable `diagnostics` step for Ollama
   (`install` / `start` / `pull` / `ok`).
@@ -245,7 +357,7 @@ before the fix and are covered by frontend regression tests.
 
 ## 0.2.19 — 2026-08-28
 
-- Host PATH scanner discovers Kali/Linux tools that were installed after VORTEX
+- Host PATH scanner discovers Kali/Linux tools that were installed after Vortex Terminal
   started, including binaries outside the builtin catalog. Newly seen names are
   marked `new_since_last_scan`. `GET /api/tools/host`, `POST /api/tools/host/rescan`,
   and `./vortex host-tools` expose the live inventory.
@@ -286,7 +398,7 @@ before it was fixed and covered by a regression test. Test suite 141 → 153.
 
 ## 0.2.17 — 2026-08-27
 
-- Electron now uses a VORTEX-owned Linux title bar with working minimize,
+- Electron now uses a Vortex Terminal-owned Linux title bar with working minimize,
   maximize/restore, close, drag, and double-click-to-maximize behavior. First-run,
   dependency, and terminal windows expose the same visible controls; closing the
   terminal panel preserves live PTY sessions.
@@ -392,7 +504,7 @@ before it was fixed and covered by a regression test. Test suite 141 → 153.
 
 - HTTP `/api/execute` never accepts `allow_root`. Offline policy cannot be
   cleared by the renderer. GET `/api/plans/{id}` omits the approval token.
-- HTTP backups must land inside the VORTEX data directory.
+- HTTP backups must land inside the Vortex Terminal data directory.
 - Safe profile always confirms: settings cannot enable auto-run, medium auto,
   root, or a non-loopback Ollama endpoint.
 
@@ -401,7 +513,7 @@ before it was fixed and covered by a regression test. Test suite 141 → 153.
 - Unknown, closed, or expired engagement IDs cannot plan outbound work and
   are not bound onto local diagnostics.
 - Guardian matches `mkfs.ext4`-style destructive stems. HTTP artifact analyze
-  stays inside the VORTEX data directory. Wordlists must live under `/usr/share`
+  stays inside the Vortex Terminal data directory. Wordlists must live under `/usr/share`
   or the data directory; `/etc/passwd` is never accepted.
 - sqlmap/msfconsole requests stay UNAVAILABLE with no fabricated command.
 

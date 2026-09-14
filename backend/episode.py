@@ -1,7 +1,7 @@
 """Observation → action → evaluation loop.
 
 Inspired by the Windows Agent Arena POMDP framing (observe, act, evaluate
-from environment state). VORTEX applies that on Linux with reviewed argv
+from environment state). Vortex Terminal applies that on Linux with reviewed argv
 only. Agents never receive process control; reward comes from observed
 command outcomes, not model text.
 

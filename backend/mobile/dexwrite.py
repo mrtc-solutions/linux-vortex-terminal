@@ -114,8 +114,8 @@ class _Pool:
 
 def build_webview_dex(sidecar_url: str) -> bytes:
     """Return a complete ``classes.dex`` that loads ``sidecar_url`` in a WebView."""
-    if not sidecar_url or len(sidecar_url) > 400 or "\x00" in sidecar_url:
-        raise ValueError("sidecar URL is invalid")
+    if not sidecar_url or len(sidecar_url) > 400 or "\x00" in sidecar_url or not sidecar_url.isascii():
+        raise ValueError("sidecar URL must be short ASCII text without NULs")
     strings = _Pool()
 
     def S(value: str) -> int:
@@ -328,8 +328,9 @@ def build_webview_dex(sidecar_url: str) -> bytes:
         uleb128(0) + uleb128(0) + uleb128(1) + uleb128(1)
         # direct: MainActivity.<init> method idx 10, diff 10 from 0
         + uleb128(10) + uleb128(ACC_PUBLIC | ACC_CONSTRUCTOR) + uleb128(init_code_off)
-        # virtual: MainActivity.onCreate method idx 11, diff 1
-        + uleb128(1) + uleb128(ACC_PROTECTED) + uleb128(oncreate_code_off)
+        # First index of each method list is absolute: the virtual list
+        # carries MainActivity.onCreate (method 11), not a diff of 1.
+        + uleb128(11) + uleb128(ACC_PROTECTED) + uleb128(oncreate_code_off)
     )
     data.extend(class_data)
 

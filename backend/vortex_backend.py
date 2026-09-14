@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linux Vortex local sidecar.
+"""Linux Vortex Terminal local sidecar.
 
 The sidecar is deliberately dependency-light: the checked-in implementation uses
 Python's standard library so a fresh Linux installation can boot the product
@@ -73,7 +73,7 @@ except ImportError:  # direct `python backend/vortex_backend.py`
     from probe_cache import TTLCache
 
 SCHEMA_VERSION = 1
-APP_VERSION = "0.2.23"
+APP_VERSION = "0.3.0"
 REDACTION_RE = re.compile(
     r"(?i)(bearer\s+|password\s*[=:]\s*|token\s*[=:]\s*|api[_-]?key\s*[=:]\s*|secret\s*[=:]\s*)([^\s,;]+)"
 )
@@ -123,6 +123,7 @@ EXECUTION_OUTPUT_QUEUE_CHUNKS = 8
 # facts returned for a single execution-time integrity probe.
 _SAFE_DIRS_CACHE: TTLCache = TTLCache(10.0)
 _EXECUTABLE_LOOKUP_CACHE: TTLCache = TTLCache(10.0)
+_EXECUTABLE_IDENTITY_CACHE: TTLCache = TTLCache(10.0)
 _CAPABILITIES_CACHE: TTLCache = TTLCache(10.0)
 _DEPENDENCIES_CACHE: TTLCache = TTLCache(10.0)
 _TOOLS_REGISTRY_CACHE: TTLCache = TTLCache(10.0)
@@ -133,7 +134,7 @@ _HOST_TOOLS_CACHE: TTLCache = TTLCache(10.0)
 
 def clear_probe_caches() -> None:
     """Force a fresh probe pass. Used by tests, refresh actions, and fresh listings."""
-    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _DOCTOR_CACHE, _HOST_TOOLS_CACHE):
+    for cache in (_SAFE_DIRS_CACHE, _EXECUTABLE_LOOKUP_CACHE, _EXECUTABLE_IDENTITY_CACHE, _CAPABILITIES_CACHE, _DEPENDENCIES_CACHE, _TOOLS_REGISTRY_CACHE, _TOOLS_CACHE, _DOCTOR_CACHE, _HOST_TOOLS_CACHE):
         cache.clear()
     try:
         _load("tools.hostscan").invalidate_host_scan_cache()
@@ -336,7 +337,7 @@ def data_root() -> Path:
         # Never infer an invoking sudo user's state directory. Opening that
         # user's WAL database as UID 0 can leave root-owned sidecars and lock
         # the application out. Privileged mutations use the narrow sudo broker
-        # while VORTEX itself remains the invoking user.
+        # while Vortex Terminal itself remains the invoking user.
         root = Path(pwd.getpwuid(0).pw_dir) / ".local" / "share" / "vortex"
     else:
         root = xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share") / "vortex"
@@ -453,6 +454,15 @@ def _resolve_executable_lookup(name: str) -> dict[str, str]:
     return {"status": "absent"}
 
 
+def _copy_identity(item: dict[str, Any]) -> dict[str, Any]:
+    """Copy a cached aggregate identity so callers never share mutable state."""
+    copied = dict(item)
+    flags = copied.get("security_flags")
+    if isinstance(flags, list):
+        copied["security_flags"] = list(flags)
+    return copied
+
+
 def probe_executable(name: str, *, include_version: bool = True) -> dict[str, Any]:
     """Return the executable's factual identity and optionally invoke its version probe.
 
@@ -474,6 +484,12 @@ def probe_executable(name: str, *, include_version: bool = True) -> dict[str, An
     try:
         real = path.resolve(strict=True)
         st = real.stat()
+        identity_key = None
+        if not include_version:
+            identity_key = ("identity", name, st.st_dev, st.st_ino, st.st_size, getattr(st, "st_mtime_ns", st.st_mtime))
+            hit, cached_identity = _EXECUTABLE_IDENTITY_CACHE.peek(identity_key)
+            if hit and isinstance(cached_identity, dict):
+                return _copy_identity(cached_identity)
         mode = stat.S_IMODE(st.st_mode)
         security_flags: list[str] = []
         parent = real.parent
@@ -504,6 +520,8 @@ def probe_executable(name: str, *, include_version: bool = True) -> dict[str, An
             "security_flags": security_flags,
             "version": None,
         }
+        if identity_key is not None:
+            _EXECUTABLE_IDENTITY_CACHE.put(identity_key, _copy_identity(item))
         spec = TOOL_CATALOG.get(name)
         if spec and include_version:
             try:
@@ -1261,7 +1279,7 @@ class SessionManager:
                     os.chdir(str(cwd))
                     os.execve(argv[0], argv, env)
                 except BaseException as exc:
-                    try: os.write(2, (f"Vortex session exec failed: {exc}\n").encode("utf-8", "replace"))
+                    try: os.write(2, (f"Vortex Terminal session exec failed: {exc}\n").encode("utf-8", "replace"))
                     except OSError: pass
                     os._exit(127)
             try:
@@ -2052,21 +2070,21 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         risk = "high"
         authorization = "operator-controlled system mutation"
         status = "rejected"
-        notes.append("Vortex has no reviewed adapter for this host-mutation intent and will not fabricate an equivalent read-only command.")
-        notes.append("No command was created. Approve only the reviewed, typed plans shown by Vortex for supported operations.")
+        notes.append("Vortex Terminal has no reviewed adapter for this host-mutation intent and will not fabricate an equivalent read-only command.")
+        notes.append("No command was created. Approve only the reviewed, typed plans shown by Vortex Terminal for supported operations.")
     elif _shell_syntax:
         kind = "unsupported_shell_syntax"
         risk = "high"
         authorization = "operator-controlled command interpretation"
         status = "rejected"
-        notes.append("Vortex executes reviewed argv only and does not interpret shell pipelines, redirection, command substitution, or compound operators.")
+        notes.append("Vortex Terminal executes reviewed argv only and does not interpret shell pipelines, redirection, command substitution, or compound operators.")
         notes.append("Use a PTY session for a real interactive shell, or ask for a narrower single reviewed command.")
     elif re.search(r"\b(?:show|read|open|view|cat)\s+(?:config\s+)?file\s+(/[^\s;]+)", lower):
         kind = "filesystem_read"
         raw_match = re.search(r"(?:show|read|open|view|cat)\s+(?:config\s+)?file\s+(/[^\s;]+)", lower)
         candidate = safe_file_target(raw_match.group(1)) if raw_match else None
         if candidate is None:
-            status = "clarified"; notes.append("Vortex only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
+            status = "clarified"; notes.append("Vortex Terminal only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
         elif probe_executable("cat")["state"] != "installed":
             status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cat; the requested file was not read.")
         else:
@@ -2081,14 +2099,14 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         except ValueError:
             argv = []
         if not argv or any(x in command for x in (";", "&&", "||", "|", ">", "<")):
-            notes.append("This request contains shell syntax or is incomplete; Vortex will explain concepts without executing it.")
+            notes.append("This request contains shell syntax or is incomplete; Vortex Terminal will explain concepts without executing it.")
         else:
             notes.append(f"{argv[0]} would be invoked with {len(argv) - 1} argument(s). No command will be executed by ask or plan.")
         status = "clarified"
     elif re.search(r"(?<!-)\b(?:help|capabilities|what can you do)\b", lower) or lower.strip() in {"hello", "hi", "hey"}:
         kind = "help"
         status = "clarified"
-        notes.append("VORTEX reads only reviewed local adapters before any typed plan is approved. Common areas include identity, system health, memory/CPU, files and directories, processes, Git, services/journal, listening ports, network interfaces/routes, disk usage, and installed packages.")
+        notes.append("Vortex Terminal reads only reviewed local adapters before any typed plan is approved. Common areas include identity, system health, memory/CPU, files and directories, processes, Git, services/journal, listening ports, network interfaces/routes, disk usage, and installed packages.")
         notes.append("Active cybersecurity work (nmap, nuclei, gobuster, curl, ping, DNS/WHOIS, SSH) requires an authorized engagement with an owner, target scope, limits, and expiry.")
     elif re.search(r"\bssh\b", lower) and (any(word in lower for word in ("diagnos", "config", "connection", "connect")) or re.search(r"\bssh\s+(?:to|for|towards)\s+", lower)):
         kind = "ssh_diagnostics"
@@ -2101,7 +2119,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         target = target_match.group(1) if target_match else None
         if not target:
             status = "clarified"
-            notes.append("Provide one SSH host alias or hostname. Vortex will not read key contents or guess a target.")
+            notes.append("Provide one SSH host alias or hostname. Vortex Terminal will not read key contents or guess a target.")
         elif probe_executable("ssh")["state"] != "installed":
             status = "unavailable"; missing.append("ssh"); notes.append("TOOL MISSING: ssh; no SSH facts were observed.")
         elif active_connection:
@@ -2114,7 +2132,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 elif unknown_engagement:
                     status = "rejected"; notes.append("Engagement not found; no SSH connection was planned.")
                 else:
-                    status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex never bypasses host verification."]
+                    status = "clarified"; notes += ["An active SSH connection diagnostic requires an engagement with the exact authorized host.", "Create an engagement before connecting; Vortex Terminal never bypasses host verification."]
             elif not target_in_engagement(target, engagement):
                 status = "rejected"; notes.append("SSH target is outside the active engagement scope: " + target)
             elif _load("security.scope").excluded(target, engagement):
@@ -2137,7 +2155,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         authorization = "operator-controlled container mutation"
         status = "clarified"
         notes.append("Container lifecycle changes are not supported by the reviewed container adapter; no container was started, stopped, removed, pruned, or composed.")
-        notes.append("Create an explicit operator plan through the packaged tooling; Vortex will not guess a container mutation.")
+        notes.append("Create an explicit operator plan through the packaged tooling; Vortex Terminal will not guess a container mutation.")
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")) and any(word in lower for word in ("log", "logs")):
         kind = "container_logs"
         runtime_info = local_container_runtime()
@@ -2164,7 +2182,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.containers.diagnose", runtime, [*runtime_argv, "info"], cwd, required=runtime, explanation=f"Inspect the local {runtime} daemon/user context without changing containers."))
             specs.append(adapter_command("linux.containers.diagnose", runtime, [*runtime_argv, "ps", "--all", "--no-trunc"], cwd, required=runtime, explanation=f"List local {runtime} containers after daemon facts are observed."))
             status = "planned"
-            notes += [f"Multi-step read-only diagnosis using {runtime}.", "VORTEX stops when daemon facts and container lists are observed; it does not apply a fix unless a separate approved plan is created."]
+            notes += [f"Multi-step read-only diagnosis using {runtime}.", "Vortex Terminal stops when daemon facts and container lists are observed; it does not apply a fix unless a separate approved plan is created."]
     elif not parse_package_request(lower)[0] and not parse_service(lower) and any(word in lower for word in ("docker", "podman", "container")):
         kind = "container_inspection"
         runtime_info = local_container_runtime()
@@ -2201,7 +2219,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             notes.append(json.dumps(locks, sort_keys=True))
         elif package_operation in ("install", "remove") and not package_name:
             status = "clarified"
-            notes.append(f"Tell Vortex the exact package to {package_operation}; package names are parsed, not concatenated shell text.")
+            notes.append(f"Tell Vortex Terminal the exact package to {package_operation}; package names are parsed, not concatenated shell text.")
         else:
             specs.append(adapter_command("linux.packages.apt", "dpkg", ["dpkg", "--audit"], cwd, required="dpkg", explanation="Check for incomplete dpkg state before any package operation.", privilege="user"))
             if package_name:
@@ -2224,7 +2242,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.packages.apt", "apt-get", preflight, cwd, required="apt-get", explanation="Run a fresh apt preflight immediately before mutation; dependency changes and removals are observed, not assumed.", privilege="user", timeout=900))
             specs.append(adapter_command("linux.packages.apt", "apt-get", mutation, cwd, required="apt-get", explanation="Apply only the exact package operation after the preceding preflight and explicit approval. No repository trust bypass or auto-update is included.", privilege="root-required", timeout=900))
             if package_name:
-                verification = adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Verify the exact post-operation package state for {package_name}; VORTEX reports success only when this observation matches the requested action.", privilege="user")
+                verification = adapter_command("linux.packages.apt", "dpkg-query", ["dpkg-query", "-W", "-f=${Status} ${Version} ${Architecture}\n", package_name], cwd, required="dpkg-query", explanation=f"Verify the exact post-operation package state for {package_name}; Vortex Terminal reports success only when this observation matches the requested action.", privilege="user")
                 verification["success_exit_codes"] = [0] if package_operation == "install" else [1]
                 verification["package_observation"] = "after"
                 verification["expected_package_state"] = "installed" if package_operation == "install" else "absent"
@@ -2235,7 +2253,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 verification["expected_dpkg_state"] = "consistent"
                 specs.append(verification)
             status = "planned"
-            notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
+            notes += ["Package source, candidate/installed version, dependency impact, held state, and preflight output must be reviewed before execution.", json.dumps(locks, sort_keys=True) if locks["unknown"] else "apt/dpkg locks were available during planning and are rechecked by apt at execution.", f"Reboot required marker: {reboot['required']}" + (f" ({', '.join(reboot['packages'])})" if reboot['packages'] else ""), "The final apt command requires root; Vortex Terminal never invokes sudo or captures a password.", "No apt update, PPA, third-party repository, unauthenticated package, curl-piped installer, or arbitrary .deb is allowed."]
     elif not parse_package_request(lower)[0] and any(phrase in lower for phrase in ("installed packages", "packages installed", "package inventory", "list all packages", "what packages are installed", "list installed packages", "dpkg-query")):
         kind = "plan"
         if probe_executable("dpkg-query")["state"] != "installed":
@@ -2333,7 +2351,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "show", unit, "--property=Id,Description,LoadState,ActiveState,SubState,UnitFileState", "--no-pager"], cwd, required="systemctl", explanation=f"Freshly verify the {('user ' if user_mode else '')}description, active state, and persistence state of {unit} before mutation.", privilege="user"))
             specs.append(adapter_command("linux.systemd.mutate", "systemctl", [*prefix, "--no-pager", "--no-ask-password", action, unit], cwd, required="systemctl", explanation=f"Perform the explicitly approved {('user ' if user_mode else '')}{action} operation on {unit}; no sudo escalation is inferred.", privilege=privilege))
             status = "planned"
-            notes += [f"Fresh systemd {('user-bus ' if user_mode else '')}state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
+            notes += [f"Fresh systemd {('user-bus ' if user_mode else '')}state for {unit} is required immediately before {action}.", "This is a service mutation and may interrupt workloads; Vortex Terminal will not run it without explicit approval.", "enable/disable are persistent changes. daemon-reload, mask, vacuum, and default-target changes are not supported."]
     elif any(word in lower for word in ("sqlmap", "msfconsole", "metasploit")):
         kind = "authorized_engagement"
         risk = "high"
@@ -2372,7 +2390,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 notes += ["Active cybersecurity work requires an engagement before a target or network tool can run.", "Create an engagement with an owner/authorization reference, canonical targets, limits, and an expiry."]
         elif not targets:
             status = "clarified"
-            notes.append("Tell Vortex the exact authorized hostname, URL, IP, or CIDR target.")
+            notes.append("Tell Vortex Terminal the exact authorized hostname, URL, IP, or CIDR target.")
         else:
             try:
                 normalized = [normalize_target(t.rstrip(".,")) for t in targets]
@@ -2606,12 +2624,12 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         kind = "filesystem_read"
         raw_match = re.search(r"(?:show|read|open|view|cat)\s+(?:file\s+)?(/[^\s;]+)", lower)
         if not raw_match:
-            status = "clarified"; notes.append("Tell Vortex the absolute path of the text file to read.")
+            status = "clarified"; notes.append("Tell Vortex Terminal the absolute path of the text file to read.")
         else:
             candidate = safe_file_target(raw_match.group(1))
             directory = safe_directory_target(raw_match.group(1)) if candidate is None else None
             if candidate is None and directory is None:
-                status = "clarified"; notes.append("Vortex only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
+                status = "clarified"; notes.append("Vortex Terminal only reads safe, non-secret files by absolute path; provide a path under /etc, /var/log, /home, /root, /usr, or /opt.")
             elif candidate is not None and probe_executable("cat")["state"] != "installed":
                 status = "unavailable"; missing.append("cat"); notes.append("TOOL MISSING: cat; the requested file was not read.")
             elif candidate is not None:
@@ -2803,7 +2821,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 specs.append(adapter_command("linux.systemd.journal", "journalctl", ["journalctl", "-n", "200", "--no-pager", "--output=short-iso"], cwd, required="journalctl", explanation="Read the last bounded 200 systemd journal lines; this is the observed local log store on this host."))
                 status = "planned"; notes.append("No /var/log text file matched, so the bounded systemd journal was selected. Log content is untrusted evidence; no vulnerability finding is inferred.")
         elif log_path is None:
-            status = "unavailable"; notes.append("No supported log file was found; Vortex does not read arbitrary files as logs.")
+            status = "unavailable"; notes.append("No supported log file was found; Vortex Terminal does not read arbitrary files as logs.")
         elif probe_executable("tail")["state"] != "installed":
             status = "unavailable"; missing.append("tail"); notes.append("TOOL MISSING: tail; the log was not read.")
         else:
@@ -2887,18 +2905,18 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         risk = "medium"
         authorization = "operator-controlled filesystem operation"
         status = "rejected"
-        notes.append("Vortex does not create, delete, move, copy, or search the host filesystem from a natural-language ask; the reviewed plan engine only issues bounded read-only adapters.")
+        notes.append("Vortex Terminal does not create, delete, move, copy, or search the host filesystem from a natural-language ask; the reviewed plan engine only issues bounded read-only adapters.")
         notes.append("Use the PTY terminal session for an interactive shell, or create an explicit operator-controlled plan with the exact path and operation scope.")
     elif re.search(r"\b(?:show|view|display)\s+[A-Za-z0-9_-]+(?:https?)?\s+config\b", lower) or re.search(r"\b(?:show|read|view)\s+config(?:uration)?\s+(?:for|of|in)?\s*[A-Za-z0-9_-]+\b", lower):
         kind = "config_file_request"
         status = "clarified"
-        notes.append("Vortex reads configuration files only when given an exact safe absolute path. Provide e.g. /etc/nginx/nginx.conf.")
+        notes.append("Vortex Terminal reads configuration files only when given an exact safe absolute path. Provide e.g. /etc/nginx/nginx.conf.")
     elif re.search(r"\b(?:apt-get\s+update|update\s+apt|apt\s+update)\b", lower):
         kind = "package_index_update"
         risk = "medium"
         authorization = "operator-controlled package index refresh"
         status = "rejected"
-        notes.append("Vortex does not refresh the apt package index from a natural-language ask; it refuses silent third-party repository or network trust changes.")
+        notes.append("Vortex Terminal does not refresh the apt package index from a natural-language ask; it refuses silent third-party repository or network trust changes.")
         notes.append("Use the PTY terminal session for an operator-controlled apt-get update, or create an explicit reviewed plan.")
     elif sigit_slug is not None:
         kind = "osint_tool"
@@ -2924,9 +2942,9 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
             else:
                 status = "clarified"
                 if service is not None:
-                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) is a reviewed, engagement-gated OSINT capability; VORTEX never fabricates its output.")
+                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) is a reviewed, engagement-gated OSINT capability; Vortex Terminal never fabricates its output.")
                 else:
-                    notes.append("SIGIT (Simple Information Gathering Toolkit) is reviewed as 14 engagement-gated OSINT services; VORTEX never fabricates their output.")
+                    notes.append("SIGIT (Simple Information Gathering Toolkit) is reviewed as 14 engagement-gated OSINT services; Vortex Terminal never fabricates their output.")
                 notes.append("Create an authorized engagement with an owner, authorization reference, canonical targets, limits, and an expiry before outbound OSINT work.")
         else:
             out_of_scope: list[str] = []
@@ -2953,13 +2971,13 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                 status = "clarified"
                 adapter = str(service["safe_adapter"])
                 notes.append(f"SIGIT {service['number']} {service['name']} has a reviewed equivalent adapter ({adapter}); ask for it with the exact scoped target to get a typed, approved command.")
-                notes.append("VORTEX will not auto-run SIGIT for this capability; the equivalent adapter is engagement-scoped and Guardian-authorized.")
+                notes.append("Vortex Terminal will not auto-run SIGIT for this capability; the equivalent adapter is engagement-scoped and Guardian-authorized.")
             else:
                 status = "clarified"
-                notes.append("SIGIT is an interactive TUI; VORTEX will not run it with a fabricated argv or fake its output.")
+                notes.append("SIGIT is an interactive TUI; Vortex Terminal will not run it with a fabricated argv or fake its output.")
                 notes.append("Open a PTY terminal session and run `sigit`, then select the reviewed service by number.")
                 if service is not None:
-                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) runs inside the operator TUI; its output is produced there, not by VORTEX.")
+                    notes.append(f"SIGIT {service['number']} {service['name']} ({service['title']}) runs inside the operator TUI; its output is produced there, not by Vortex Terminal.")
     else:
         host_match = None
         try:
@@ -3021,7 +3039,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
                     excluded_hits = [] if out_scope else (list(normalized) if scope_mod is None else [target for target in normalized if scope_mod.excluded(target, engagement)])
                     if not normalized:
                         status = "clarified"
-                        notes.append("Tell VORTEX the exact authorized hostname, URL, IP, or CIDR target for this host tool.")
+                        notes.append("Tell Vortex Terminal the exact authorized hostname, URL, IP, or CIDR target for this host tool.")
                     elif out_scope:
                         status = "rejected"
                         notes.append("Target is outside the active engagement scope: " + ", ".join(out_scope))
@@ -3056,7 +3074,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         else:
             kind = "abstain"
             status = "clarified"
-            notes += ["Vortex does not have a reviewed adapter for this request yet.", "Try system health, disk usage, listening ports, Git status, a service status query, enable host-tool access for newly installed Kali tools, or create an authorized engagement for supported reconnaissance."]
+            notes += ["Vortex Terminal does not have a reviewed adapter for this request yet.", "Try system health, disk usage, listening ports, Git status, a service status query, enable host-tool access for newly installed Kali tools, or create an authorized engagement for supported reconnaissance."]
 
     created = now_iso()
     expires = datetime.fromtimestamp(time.time() + 15 * 60, tz=timezone.utc).isoformat(timespec="milliseconds")
@@ -3746,7 +3764,7 @@ def build_undo_plan(store: Store, operation_id: str) -> dict[str, Any]:
 
 def report_markdown(operation: dict[str, Any]) -> str:
     analysis = operation.get("analysis") or {}
-    lines = ["# Linux Vortex operation report", "", f"- Status: **{operation.get('status', 'unknown')}**", f"- Operation: `{operation.get('id', '')}`", f"- Plan: `{operation.get('plan_id', '')}`", f"- Started: `{operation.get('started_at', '')}`", f"- Ended: `{operation.get('ended_at', '')}`", "", "## Observed analysis", "", str(analysis.get("fact", "No analysis was recorded.")), "", "## Command timeline", ""]
+    lines = ["# Linux Vortex Terminal operation report", "", f"- Status: **{operation.get('status', 'unknown')}**", f"- Operation: `{operation.get('id', '')}`", f"- Plan: `{operation.get('plan_id', '')}`", f"- Started: `{operation.get('started_at', '')}`", f"- Ended: `{operation.get('ended_at', '')}`", "", "## Observed analysis", "", str(analysis.get("fact", "No analysis was recorded.")), "", "## Command timeline", ""]
     for index, command in enumerate(operation.get("commands", []), 1):
         lines += [f"### {index}. `{command.get('display', '')}`", "", f"- Status: `{command.get('status')}`", f"- Exit code: `{command.get('exit_code')}`", f"- Signal: `{command.get('signal')}`", f"- Evidence digest: `{command.get('evidence_digest')}`", ""]
         if command.get("stdout"): lines += ["```text", command["stdout"], "```", ""]
@@ -3879,7 +3897,7 @@ def analysis_next_steps(plan: dict[str, Any], op: dict[str, Any]) -> list[dict[s
     if op.get("status") in {"failed", "timed_out", "cancelled", "interrupted"}:
         steps.append({"label": "diagnose", "text": "Review the failing command's output and exit status before creating any replacement plan."})
         if op.get("status") in {"failed", "timed_out"}:
-            steps.append({"label": "fresh plan", "text": "Ask for a narrower, reviewed follow-up; Vortex never silently retries a failed mutation."})
+            steps.append({"label": "fresh plan", "text": "Ask for a narrower, reviewed follow-up; Vortex Terminal never silently retries a failed mutation."})
     if not steps:
         steps.append({"label": "explain", "text": "Review the observed command timeline and evidence digests."})
     steps.append({"label": "plan only", "text": "Ask a new question for a narrower, reviewed follow-up."})
@@ -3925,7 +3943,7 @@ def capabilities_document() -> dict[str, Any]:
     except Exception:
         sigit_services = []
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "version": APP_VERSION,
         "implemented": [
             "typed-plan-execution", "pty-sessions", "guardian", "engagements",
@@ -3950,7 +3968,7 @@ def capabilities_document() -> dict[str, Any]:
             "toolkit": "SIGIT — Simple Information Gathering Toolkit (MIT)",
             "cli": "sigit (operator-installed, interactive TUI)",
             "source": "reviewed-capability-catalog",
-            "policy": "engagement-gated; never auto-run; runs only in a PTY TUI; VORTEX never fabricates OSINT output.",
+            "policy": "engagement-gated; never auto-run; runs only in a PTY TUI; Vortex Terminal never fabricates OSINT output.",
             "services": sigit_services,
         },
         "unavailable_unless_installed": [
@@ -3999,6 +4017,17 @@ def cancel_task_operation(executor: ExecutionManager, task: dict[str, Any] | Non
 BROWSER_SESSION_LIMIT = 32
 BROWSER_SESSION_TTL_SECONDS = 8 * 3600
 MAX_STATIC_ASSET_BYTES = 8 * 1024 * 1024
+
+
+def _safe_download_filename(filename: str) -> str:
+    """Reduce an operator-visible filename to header-safe ASCII.
+
+    Package filenames can originate from filesystem globs, so quotes,
+    whitespace, and non-ASCII bytes are stripped (never escaped) to keep the
+    Content-Disposition header injectable by nothing.
+    """
+    safe_name = "".join(c for c in str(filename or "") if c.isascii() and (c.isalnum() or c in "._-+"))[:128]
+    return safe_name or "download.bin"
 
 
 class VortexHandler(BaseHTTPRequestHandler):
@@ -4342,6 +4371,23 @@ class VortexHandler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         self.send_response(HTTPStatus.NO_CONTENT); self._headers(); self.send_header("Content-Length", "0"); self.end_headers()
 
+    def _ui_index(self) -> Path:
+        """Resolve the UI shell: built React app when present, else legacy vanilla UI.
+
+        The React shell (`dist/index.html`, single-file Vite build) is served
+        automatically once `npm run build` has produced it; `VORTEX_UI=legacy`
+        forces the legacy `frontend/index.html`. Missing build output falls
+        back honestly instead of 404ing the whole app.
+        """
+        try:
+            if os.environ.get("VORTEX_UI", "").strip().lower() != "legacy":
+                candidate = self.frontend.parent / "dist" / "index.html"
+                if candidate.is_file():
+                    return candidate
+        except (OSError, ValueError):
+            pass
+        return self.frontend / "index.html"
+
     def _asset_candidate(self) -> tuple[Path | None, str]:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -4371,7 +4417,7 @@ class VortexHandler(BaseHTTPRequestHandler):
         if not public_asset and not self._authorized():
             return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         if path == "/" or path == "/index.html":
-            asset = self.frontend / "index.html"
+            asset = self._ui_index()
         else:
             asset, mime = self._asset_candidate()
             if asset is None:
@@ -4454,6 +4500,10 @@ class VortexHandler(BaseHTTPRequestHandler):
                 gguf = _load("models.gguf")
                 settings = _load("config").load_settings()
                 return self._json(200, {"gguf": gguf.status(settings)})
+            if path == "/api/llamafile":
+                llamafile = _load("models.llamafile")
+                settings = _load("config").load_settings()
+                return self._json(200, {"llamafile": llamafile.status(settings)})
             if path == "/api/agents/upstream":
                 upstream = _load("agents.upstream")
                 return self._json(200, {"upstream": upstream.table()})
@@ -4488,6 +4538,31 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/secrets":
                 secret_status = _load("secretstore").status
                 return self._json(200, {"secrets": secret_status()})
+            if path == "/api/aiops/stream":
+                self.send_response(200)
+                self._headers("text/event-stream")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                manager = _load("models.manager")
+                for _ in range(36):
+                    settings = _load("config").load_settings()
+                    try:
+                        runtime = manager.runtime_status()
+                        payload = {"schema_version": SCHEMA_VERSION, "routing": None, "models": manager.catalog(runtime, settings)}
+                        try:
+                            from models.router import live_routing
+                            payload["routing"] = live_routing(settings)
+                        except Exception as exc:
+                            payload["routing"] = {"winner": "deterministic", "reason": f"routing snapshot failed: {redact(str(exc))[:160]}", "ranking": []}
+                    except Exception as exc:
+                        payload = {"schema_version": SCHEMA_VERSION, "routing": {"winner": "deterministic", "reason": f"aiops snapshot failed: {redact(str(exc))[:160]}", "ranking": []}, "models": {}}
+                    try:
+                        self._write(f"event: routing\ndata: {json.dumps(payload)}\n\n".encode())
+                        self.wfile.flush()
+                    except OSError:
+                        break
+                    time.sleep(10.0)
+                return
             if path.startswith("/api/operations/") and path.endswith("/stream"):
                 op_id = path.split("/")[-2]
                 self.send_response(200)
@@ -4592,6 +4667,51 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/tasks/") and path.count("/") == 3:
                 item = self.workspace.get_task(path.rsplit("/", 1)[-1])
                 return self._json(200 if item else 404, {"task": item} if item else {"error": {"code": "not_found", "message": "task not found"}})
+            if path == "/api/agent/runs":
+                agent = _load("agent_mode")
+                return self._json(200, {"runs": agent.list_runs(self.store)})
+            if path.startswith("/api/agent/runs/") and path.endswith("/stream"):
+                agent = _load("agent_mode")
+                run_id = path.split("/")[-2]
+                if not agent.RUN_ID_RE.match(run_id or ""):
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                query = urllib.parse.parse_qs(parsed.query)
+                try:
+                    since = int(self._query_text(query, "since", "0", limit=16))
+                except (TypeError, ValueError) as exc:
+                    raise PolicyError("since must be an integer") from exc
+                if since < 0:
+                    raise PolicyError("since must be >= 0")
+                if not agent.get_run(self.store, run_id):
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                self.send_response(200)
+                self._headers("text/event-stream")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                for _ in range(300):
+                    payload = agent.events_since(self.store, run_id, since)
+                    try:
+                        self._write(f"data: {json.dumps({'schema_version': SCHEMA_VERSION, **payload})}\n\n".encode())
+                        self.wfile.flush()
+                    except OSError:
+                        break
+                    events = payload.get("events") or []
+                    if events:
+                        since = events[-1]["seq"]
+                    status = (payload.get("run") or {}).get("status")
+                    if not payload.get("run") or status == "finished":
+                        break
+                    time.sleep(0.4)
+                return
+            if path.startswith("/api/agent/runs/") and path.count("/") == 4:
+                agent = _load("agent_mode")
+                run_id = path.rsplit("/", 1)[-1]
+                if not agent.RUN_ID_RE.match(run_id or ""):
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                payload = agent.events_since(self.store, run_id, 0)
+                if not payload.get("run"):
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                return self._json(200, payload)
             if path == "/api/memory":
                 return self._json(200, {"memories": self.workspace.list_memories()})
             if path == "/api/learning":
@@ -4617,6 +4737,18 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self._write(data)
                 return
+            if path.startswith("/api/reports/") and len(path.split("/")) == 4:
+                # JSON single-report read for inline preview. Downloads stay on
+                # the /download branch (which also serves the desktop shell).
+                report_id = path.split("/")[-1]
+                report = self.workspace.get_report(report_id)
+                if not report:
+                    return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
+                operation = self.store.get_operation(report.get("operation_id") or "") or {"status": report.get("body", {}).get("status"), "commands": [], "id": report.get("operation_id"), "plan_id": "", "analysis": {"fact": report.get("body", {}).get("markdown", "")}}
+                plan = self.store.get_plan(operation.get("plan_id") or "") if operation.get("plan_id") else {}
+                task = self.workspace.get_task(report.get("task_id") or "") if report.get("task_id") else None
+                data, _content_type, _ext = _load("reports.engine").render("md", operation, plan or {}, task)
+                return self._json(200, {"report": report, "markdown": data.decode("utf-8", "replace")})
             if path == "/api/doctor":
                 query = urllib.parse.parse_qs(parsed.query)
                 if _query_flag(query, "fresh"):
@@ -4777,7 +4909,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/operations/"):
                 op = self.store.get_operation(path.rsplit("/", 1)[-1]); return self._json(200 if op else 404, {"operation": op} if op else {"error": {"code": "not_found", "message": "operation not found"}})
             if path == "/" or path == "/index.html":
-                return self._static(self.frontend / "index.html", "text/html; charset=utf-8")
+                return self._static(self._ui_index(), "text/html; charset=utf-8")
             if path.startswith("/assets/"):
                 relative = Path(path.removeprefix("/assets/")).as_posix()
                 # Renderer code lives beside index.html; licensed artwork lives
@@ -4811,6 +4943,7 @@ class VortexHandler(BaseHTTPRequestHandler):
         expected_sha256: str,
     ) -> None:
         """Verify and stream a package without following links or buffering it."""
+        safe_name = _safe_download_filename(filename)
         try:
             with open_owner_binary(path, max_bytes=max_bytes) as (handle, details):
                 digest_state = hashlib.sha256()
@@ -4821,7 +4954,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 handle.seek(0)
                 self.send_response(200)
                 self._headers(content_type)
-                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
                 self.send_header("Content-Length", str(details.st_size))
                 self.end_headers()
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -4941,6 +5074,56 @@ class VortexHandler(BaseHTTPRequestHandler):
                 except ValueError as exc:
                     return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
                 return self._json(200, {"import": imported})
+            if path == "/api/llamafile/install":
+                llamafile = _load("models.llamafile")
+                settings = _load("config").load_settings()
+                return self._json(200, {"install": llamafile.install(self._flag(body, "confirm"), settings)})
+            if path == "/api/llamafile/install/cancel":
+                llamafile = _load("models.llamafile")
+                return self._json(200, {"install": llamafile.cancel_install()})
+            if path == "/api/llamafile/import":
+                llamafile = _load("models.llamafile")
+                source = self._text(body, "path") or self._text(body, "source") or ""
+                try:
+                    imported = llamafile.import_model(source)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"import": imported})
+            if path == "/api/llamafile/server/start":
+                llamafile = _load("models.llamafile")
+                settings = _load("config").load_settings()
+                try:
+                    started = llamafile.server_start(self._optional_str(body, "model"), settings)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"server": started})
+            if path == "/api/llamafile/server/stop":
+                llamafile = _load("models.llamafile")
+                return self._json(200, {"server": llamafile.server_stop()})
+            if path == "/api/llamafile/models/activate":
+                llamafile = _load("models.llamafile")
+                name = self._text(body, "model") or self._text(body, "name") or ""
+                try:
+                    preference = llamafile.activate_model(name)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"preference": preference})
+            if path == "/api/llamafile/models/remove":
+                llamafile = _load("models.llamafile")
+                name = self._text(body, "model") or self._text(body, "name") or ""
+                try:
+                    removed = llamafile.remove_model(name)
+                except ValueError as exc:
+                    return self._json(400, {"error": {"code": "invalid_request", "message": str(exc)[:240]}})
+                except PolicyError as exc:
+                    return self._json(409, {"error": {"code": "unavailable", "message": str(exc)[:240]}})
+                return self._json(200, {"removed": removed})
             if path == "/api/agents/upstream/refresh":
                 upstream = _load("agents.upstream")
                 settings = _load("config").load_settings()
@@ -5013,6 +5196,38 @@ class VortexHandler(BaseHTTPRequestHandler):
                     settings["offline"] = True
                 result = run_turn(self.store, self.workspace, self.executor, request.strip(), cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), conversation_id=self._optional_str(body, "conversation_id"), settings=settings, confirm=self._flag(body, "confirm"), approval_token=self._text(body, "approval_token"))
                 return self._json(200, result)
+            if path == "/api/agent/runs":
+                agent = _load("agent_mode")
+                load_settings = _load("config").load_settings
+                goal = body.get("goal")
+                if not isinstance(goal, str) or not goal.strip():
+                    raise ValueError("goal must be a string")
+                settings = load_settings()
+                if self._flag(body, "offline"):
+                    settings["offline"] = True
+                try:
+                    result = agent.start_run(self.store, self.workspace, self.executor, goal.strip(), max_steps=body.get("max_steps", agent.DEFAULT_MAX_STEPS), cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), conversation_id=self._optional_str(body, "conversation_id"), settings=settings)
+                except RuntimeError as exc:
+                    return self._json(409, {"error": {"code": "run_active", "message": str(exc)}})
+                return self._json(202, result)
+            if path.startswith("/api/agent/runs/") and path.endswith("/approve"):
+                agent = _load("agent_mode")
+                run_id = path.split("/")[-2]
+                try:
+                    result = agent.approve_run(self.store, self.workspace, self.executor, run_id, self._optional_str(body, "plan_id"), self._flag(body, "confirm"))
+                except LookupError:
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                except RuntimeError as exc:
+                    return self._json(409, {"error": {"code": "not_resumable", "message": str(exc)}})
+                return self._json(200, result)
+            if path.startswith("/api/agent/runs/") and path.endswith("/stop"):
+                agent = _load("agent_mode")
+                run_id = path.split("/")[-2]
+                try:
+                    result = agent.stop_run(self.store, self.executor, run_id)
+                except LookupError:
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                return self._json(200, result)
             if path == "/api/conversations":
                 title = self._optional_str(body, "title") or "New conversation"
                 return self._json(201, {"conversation": self.workspace.create_conversation(title)})
@@ -5059,6 +5274,17 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not slot:
                     raise ValueError("slot is required")
                 return self._json(200, {"secrets": put(slot, value or "")})
+            if path == "/api/memory":
+                title = (self._text(body, "title") or "").strip()
+                content = (self._text(body, "body") or self._text(body, "content") or "").strip()
+                kind = (self._text(body, "kind") or "knowledge").strip().lower()[:32] or "knowledge"
+                if not title or not content:
+                    raise ValueError("memory title and body are required")
+                if len(title) > 200 or len(content) > 8000:
+                    raise ValueError("memory title or body is too long")
+                if kind not in {"conversation", "task", "knowledge", "tool", "agent", "experience", "procedure"}:
+                    raise ValueError("memory kind must be conversation, task, knowledge, tool, agent, experience, or procedure")
+                return self._json(201, {"memory": self.workspace.add_memory(kind, title[:200], content[:8000])})
             if path == "/api/refresh":
                 started = time.monotonic()
                 clear_probe_caches()
@@ -5172,7 +5398,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                     or stat.S_IMODE(cli_details.st_mode) & 0o022
                     or cli_path.resolve(strict=True).parent != (app_root / "cli").resolve(strict=True)
                 ):
-                    raise PermissionError("the reviewed VORTEX CLI entry point is unavailable or unsafe")
+                    raise PermissionError("the reviewed Vortex Terminal CLI entry point is unavailable or unsafe")
                 python = probe_executable(sys.executable, include_version=False)
                 if python.get("state") != "installed" or not python.get("realpath"):
                     raise PermissionError("the trusted Python runtime is unavailable")
@@ -5391,7 +5617,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None, f
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Vortex local Linux sidecar")
+    parser = argparse.ArgumentParser(description="Vortex Terminal local Linux sidecar")
     parser.add_argument("--host", default=os.environ.get("VORTEX_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("VORTEX_PORT", "8765")))
     parser.add_argument("--token", default=os.environ.get("VORTEX_SIDECAR_TOKEN"))

@@ -40,19 +40,19 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
         from adapter_registry import TOOL_CATALOG
         from agents.council import discover
         from models.router import MODEL_CATALOG, model_status
-        from vortex_backend import detect_context, probe_executable
+        from vortex_backend import APP_VERSION, detect_context, probe_executable
     except ImportError:
         from backend.adapter_registry import TOOL_CATALOG
         from backend.agents.council import discover
         from backend.models.router import MODEL_CATALOG, model_status
-        from backend.vortex_backend import detect_context, probe_executable
+        from backend.vortex_backend import APP_VERSION, detect_context, probe_executable
 
     doctor = detect_context()
     integrity = store.integrity_check()
     tools = []
     for name, meta in TOOL_CATALOG.items():
         item = probe_executable(name, include_version=False)
-        item.update({"family": meta["family"], "role": meta["role"]})
+        item.update({"family": meta.get("family", "unknown"), "role": meta.get("role", "tool")})
         tools.append(item)
     installed = sum(1 for item in tools if item.get("state") == "installed")
     agents = discover()
@@ -103,7 +103,7 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     core = "healthy"
     db_state = "healthy" if integrity.get("valid") else "degraded"
     components = {
-        "core": {"state": core, "version": "0.2.0"},
+        "core": {"state": core, "version": APP_VERSION},
         "database": {"state": db_state, "detail": integrity},
         "terminal_engine": {"state": "healthy" if session_ok else "degraded"},
         "nodejs": _binary_component(node, "desktop frontend and build scripts"),
@@ -155,7 +155,7 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     except Exception:
         ai_hint = {"function": "health", "available": False, "hint": ""}
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "offline": settings.get("offline") is True,
         "privacy_mode": settings.get("privacy_mode") or "local",
         "host": doctor,
@@ -218,7 +218,7 @@ def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str
     ]
     blocking = [step for step in steps if step["required"] and not step["ok"]]
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "first_run_complete": settings.get("first_run_complete") is True,
         "ready": not blocking,
         "blocking": [step["id"] for step in blocking],

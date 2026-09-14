@@ -12,13 +12,23 @@ from typing import Any
 
 
 def target_endpoint(target: str) -> tuple[str | None, int | None]:
-    parsed = urllib.parse.urlparse(target)
+    """Split a target into (host, port). Never raises; unusable input yields (None, None)."""
+    try:
+        parsed = urllib.parse.urlparse(target)
+    except ValueError:
+        return None, None
     if parsed.scheme:
-        return parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            port = parsed.port
+        except ValueError:
+            return None, None
+        return parsed.hostname, port or (443 if parsed.scheme == "https" else 80)
     if "/" in target:
         try:
-            network = ipaddress.ip_network(target, strict=False)
-            return None, None if network.num_addresses > 1 else None
+            ipaddress.ip_network(target, strict=False)
+            # Ranges (including /32) are never resolved to addresses here;
+            # only operator-declared single hosts reach the resolver.
+            return None, None
         except ValueError:
             pass
     try:

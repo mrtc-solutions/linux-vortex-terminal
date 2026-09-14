@@ -25,5 +25,5 @@ def isolation_status() -> dict[str, Any]:
         "state": "installed",
         "version": runtime.get("version"),
         "path": runtime.get("path"),
-        "message": "A container runtime is installed. VORTEX does not start unreviewed images or grant host privileges to sandboxes.",
+        "message": "A container runtime is installed. Vortex Terminal does not start unreviewed images or grant host privileges to sandboxes.",
     }

@@ -1,7 +1,7 @@
 """Live Kali/Linux host-tool discovery.
 
-VORTEX's builtin catalog is reviewed and finite. Operators on Kali (and other
-Linux hosts) install additional tools after VORTEX starts. This module:
+Vortex Terminal's builtin catalog is reviewed and finite. Operators on Kali (and other
+Linux hosts) install additional tools after Vortex Terminal starts. This module:
 
 - walks only PATH directories that are safe for managed execution;
 - classifies well-known Kali/Linux security tools;
@@ -141,7 +141,10 @@ INTERPRETERS = {
 
 INTERPRETER_CODE_FLAGS = {"-c", "-e", "--eval", "-m", "--command"}
 
-HELP_FLAGS = {"-h", "--help", "-V", "--version", "-v", "version", "help"}
+# Bare "help"/"version" are deliberately excluded: most tools treat them as an
+# operand (nmap would resolve "help" as a target), so only dashed flags earn
+# the help-only local label.
+HELP_FLAGS = {"-h", "--help", "-V", "--version", "-v"}
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,80}$")
 _CACHE: dict[str, Any] = {"at": 0.0, "result": None}
@@ -203,7 +206,11 @@ def _is_executable_file(entry: os.DirEntry[str]) -> bool:
         if not entry.is_file(follow_symlinks=True):
             return False
         st = entry.stat(follow_symlinks=True)
-        return bool(st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+        if not (st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)):
+            return False
+        # Mode bits alone can lie (e.g. an owner-only root binary the app
+        # user cannot execute); confirm effective access before reporting it.
+        return os.access(entry.path, os.X_OK)
     except OSError:
         return False
 
@@ -360,7 +367,12 @@ def match_request(request: str, installed: dict[str, str] | None = None) -> dict
     # Require an explicit run/use/invoke cue or the tool as the first token so
     # "check my nmap notes file" does not become an nmap scan. Bare tool names
     # ("wpscan", "lynis") are accepted.
-    first = shlex.split(text)[0] if text else ""
+    try:
+        first = shlex.split(text)[0]
+    except (ValueError, IndexError):
+        # Unbalanced quotes (or other unparseable shell text) must degrade to
+        # the clarified verdict below, never raise out of request matching.
+        first = ""
     explicit = bool(re.search(rf"\b(?:run|use|launch|invoke|exec(?:ute)?)\s+{re.escape(tool)}\b", lower))
     if first.lower() != tool.lower() and not explicit and tool.lower() not in {t.lower() for t in KALI_CATALOG}:
         # Discovered (non-catalog) tools need an explicit run cue or exact name.
@@ -386,7 +398,7 @@ def match_request(request: str, installed: dict[str, str] | None = None) -> dict
         return {
             "name": tool,
             "status": "clarified",
-            "reason": "VORTEX could not parse a typed argv without shell metacharacters. Ask for a single tool with literal arguments, or use the PTY.",
+            "reason": "Vortex Terminal could not parse a typed argv without shell metacharacters. Ask for a single tool with literal arguments, or use the PTY.",
         }
     info = classify(tool)
     extra = argv[1:]
@@ -395,7 +407,7 @@ def match_request(request: str, installed: dict[str, str] | None = None) -> dict
         return {
             "name": tool,
             "status": "clarified",
-            "reason": "VORTEX will not pass arbitrary code to interpreters from a natural-language plan. Use the PTY terminal for interactive interpreters.",
+            "reason": "Vortex Terminal will not pass arbitrary code to interpreters from a natural-language plan. Use the PTY terminal for interactive interpreters.",
         }
     if tool in INTERPRETERS and extra and not help_only:
         return {

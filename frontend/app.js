@@ -1,4 +1,4 @@
-/* VORTEX renderer. In Electron all requests go through the typed preload bridge;
+/* Vortex Terminal renderer. In Electron all requests go through the typed preload bridge;
    the relative fetch fallback keeps the local preview useful without Electron. */
 const state = { currentView: 'overview', plan: null, doctor: null, tools: [], history: [], engagements: [], activeEngagementId: null, sessions: [], activeSessionId: null, paneIds: [], sessionSeqs: {}, sessionStreams: {}, sessionStreamRetryAt: {}, sessionTimer: null, plain: false };
 const $ = (id) => document.getElementById(id);
@@ -62,17 +62,17 @@ async function establishBrowserSession() {
 const api = async (path, options = {}) => {
   if (window.vortexApi?.request) return window.vortexApi.request(path, options);
   if (browserCapability) await establishBrowserSession();
-  const response = await fetch(path, { headers: {'Content-Type':'application/json', ...(browserCapability ? {'X-Vortex-Token': browserCapability} : {}), ...(options.headers || {})}, ...options, body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body });
+  const response = await fetch(path, { ...options, headers: {'Content-Type':'application/json', ...(browserCapability ? {'X-Vortex-Token': browserCapability} : {}), ...(options.headers || {})}, body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body });
   let payload;
   try { payload = await response.json(); } catch (_) { throw new Error(`Sidecar returned an invalid response (${response.status})`); }
   if (!response.ok) {
-    if (response.status === 401) showCapabilityDialog('Enter the capability printed by the remote VORTEX sidecar.');
+    if (response.status === 401) showCapabilityDialog('Enter the capability printed by the remote Vortex Terminal sidecar.');
     throw new Error(payload.error?.message || `Request failed (${response.status})`);
   }
   return payload;
 };
 function toast(message, bad = false) { const el = $('toast'); el.setAttribute('role', bad ? 'alert' : 'status'); el.setAttribute('aria-live', bad ? 'assertive' : 'polite'); el.textContent = message; el.style.borderColor = bad ? 'var(--red)' : 'var(--cyan)'; el.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 4200); }
-function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => { const active = el.id === `view-${view}`; el.classList.toggle('active', active); el.setAttribute('aria-hidden', String(!active)); }); document.querySelectorAll('.nav-item').forEach(el => { const active = el.dataset.view === view; el.classList.toggle('active', active); if (active) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); }); $('view-title').textContent = view.toUpperCase(); document.title = `${view.replace(/(^|-)([a-z])/g, (_, prefix, letter) => `${prefix ? ' ' : ''}${letter.toUpperCase()}`)} — VORTEX`; if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); if (view === 'models' && typeof window.loadModels === 'function') window.loadModels(true); }
+function setView(view) { state.currentView = view; document.querySelectorAll('.view').forEach(el => { const active = el.id === `view-${view}`; el.classList.toggle('active', active); el.setAttribute('aria-hidden', String(!active)); }); document.querySelectorAll('.nav-item').forEach(el => { const active = el.dataset.view === view; el.classList.toggle('active', active); if (active) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); }); $('view-title').textContent = view.toUpperCase(); document.title = `${view.replace(/(^|-)([a-z])/g, (_, prefix, letter) => `${prefix ? ' ' : ''}${letter.toUpperCase()}`)} — Vortex Terminal`; if (view === 'activity') loadHistory(); if (view === 'terminal') loadSessions().then(() => focusPtySurface()); if (view === 'tools') loadTools(); if (view === 'engagements') loadEngagements(); if (view === 'reports') loadHistory().then(renderReports); if (view === 'models' && typeof window.loadModels === 'function') window.loadModels(true); }
 function statusClass(status) { return ['succeeded','success'].includes(status) ? 'badge-green' : ['failed','timed_out','interrupted'].includes(status) ? 'badge-red' : status === 'planned' || status === 'awaiting_confirmation' ? 'badge-amber' : 'badge-muted'; }
 function statusLabel(status) { return ({succeeded:'VERIFIED OK',failed:'FAILED',timed_out:'TIMED OUT',interrupted:'INTERRUPTED',unavailable:'TOOL MISSING',running:'RUNNING',started:'STARTED',planned:'CONFIRM REQUIRED',awaiting_confirmation:'PREFLIGHT COMPLETE',clarified:'PLAN ONLY',rejected:'BLOCKED',unknown_after_crash:'UNKNOWN AFTER CRASH'}[status] || String(status || 'STANDBY').toUpperCase()); }
 
@@ -243,7 +243,7 @@ function renderPlan(plan) { state.plan = plan; const badge = $('plan-badge'); ba
  const rootRequired = (plan.commands || []).some(c => c.privilege === 'root-required');
  const aptDependency = plan.kind === 'package_operation' && (plan.commands || []).some(c => c.adapter_id === 'linux.packages.apt' && c.privilege === 'root-required');
  const installAction = aptDependency ? '<button class="approve-button" id="launch-dependency-install">OPEN INSTALL TERMINAL</button>' : '';
- const rootHint = rootRequired ? `<div class="approval root-approval"><small>OS AUTHENTICATION REQUIRED · VORTEX never reads your password. ${aptDependency ? 'Open the installation terminal here, type APPROVE after reviewing the plan, then respond directly to the operating system prompt.' : `In a terminal, run <code>vortex run ${esc(plan.id)}</code>.`} A fresh preflight and second approval protect the final mutation.</small>${installAction}</div>` : '';
+ const rootHint = rootRequired ? `<div class="approval root-approval"><small>OS AUTHENTICATION REQUIRED · Vortex Terminal never reads your password. ${aptDependency ? 'Open the installation terminal here, type APPROVE after reviewing the plan, then respond directly to the operating system prompt.' : `In a terminal, run <code>vortex run ${esc(plan.id)}</code>.`} A fresh preflight and second approval protect the final mutation.</small>${installAction}</div>` : '';
  $('plan-content').className = 'plan-card'; $('plan-content').innerHTML = `<div class="plan-summary"><div class="plan-objective"><span>OBJECTIVE / ${esc(plan.kind.replace('_',' '))}</span>${esc(plan.request)}</div><span class="badge ${statusClass(plan.status)}">${esc(statusLabel(plan.status))}</span></div><ul class="plan-notes">${notes}</ul>${suggestions ? `<div class="suggestion-row"><small>TRY ONE OF THESE</small>${suggestions}</div>` : ''}${knowledge ? `<div class="knowledge-row"><small>LOCAL CAPABILITIES</small>${knowledge}</div>` : ''}${commands}${rootHint}<div class="worker-row">WORKERS · ${worker}</div>${plan.approval_required && plan.status === 'planned' && !rootRequired ? `<div class="approval"><small>⌁ ${esc(plan.approval_phrase)}</small><button class="approve-button" id="approve-plan">APPROVE &amp; EXECUTE</button></div>` : ''}`;
  $('approve-plan')?.addEventListener('click', approvePlan);
  $('launch-dependency-install')?.addEventListener('click', () => launchDependencyInstall(plan));
@@ -393,7 +393,7 @@ function bindPtySurface(element) {
   element._ptyBound = true;
   element.tabIndex = 0;
   element.setAttribute('role', 'application');
-  element.setAttribute('aria-label', 'VORTEX Linux PTY');
+  element.setAttribute('aria-label', 'Vortex Terminal Linux PTY');
   element.addEventListener('click', () => {
     const session = activeSession();
     if (!session || session.status !== 'running') openSession();
@@ -650,6 +650,7 @@ function init() {
   $('save-engagement').addEventListener('click',createEngagement);
   $('verify-audit').addEventListener('click',verifyAudit);
   $('open-ai-ops')?.addEventListener('click', () => { openSurfaceWindow('ai-ops-window'); if (typeof window.loadAiOps === 'function') window.loadAiOps(); });
+  $('open-agent')?.addEventListener('click', () => { openSurfaceWindow('agent-window'); if (typeof window.loadAgent === 'function') window.loadAgent(); });
   $('open-system')?.addEventListener('click', () => { openSurfaceWindow('system-window'); if (typeof window.refreshHud === 'function') window.refreshHud(); loadDoctor(true); });
   $('open-task-state')?.addEventListener('click', () => openSurfaceWindow('task-window'));
   $('refresh-all')?.addEventListener('click', refreshAll);

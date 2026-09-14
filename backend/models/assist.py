@@ -1,6 +1,6 @@
 """Universal per-function AI assistance.
 
-Every user-facing VORTEX function can request a short advisory hint through
+Every user-facing Vortex Terminal function can request a short advisory hint through
 :func:`assist`. The hint is explanatory only — it never authorizes, never
 executes, and never invents evidence. When no model answers, the function
 continues deterministically with ``available == False``.
@@ -108,7 +108,8 @@ def assist(function: str, request: str = "", *,
         return {**base, "latency_ms": elapsed,
                 "provider": (result or {}).get("provider") if isinstance(result, dict) else None,
                 "reason": (reason or "no advisory model responded")[:240]}
-    synthesis = result.get("synthesis") or {}
+    synthesis = result.get("synthesis")
+    synthesis = synthesis if isinstance(synthesis, dict) else {}
     hint = str(synthesis.get("fact_summary") or result.get("message") or "").strip()
     meaning = str(synthesis.get("meaning") or "").strip()
     if meaning and len(hint) + len(meaning) + 2 <= _HINT_LIMIT:
@@ -122,14 +123,14 @@ def assist(function: str, request: str = "", *,
         "available": True,
         "hint": hint[:_HINT_LIMIT],
         "provider": result.get("provider"),
-        "model": (selected[0].get("model") if selected else None),
+        "model": (selected[0].get("model") if selected and isinstance(selected[0], dict) else None),
         "confidence": fuzzy.get("confidence", "moderate"),
         "latency_ms": elapsed,
     }
 
 
 def coverage() -> dict[str, Any]:
-    """Inspectable registry: every function VORTEX assists with AI."""
+    """Inspectable registry: every function Vortex Terminal assists with AI."""
     return {"assisted_functions": sorted(ASSISTED_FUNCTIONS),
             "count": len(ASSISTED_FUNCTIONS),
             "contract": ("Advisory hints only. Deterministic planning, Guardian, "

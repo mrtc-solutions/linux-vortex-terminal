@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VORTEX final audit: 10 real gates, 10/10 required.
+"""Vortex Terminal final audit: 10 real gates, 10/10 required.
 
 Every gate executes genuine checks against this tree (no simulation):
 unit suites, lint, JS suites, the GGUF provider chain, fuzzy routing,
@@ -52,7 +52,7 @@ def gate_unit_suite() -> None:
 def gate_lint() -> None:
     proc = run([sys.executable, "-m", "compileall", "-q", "backend", "cli"])
     files = ["frontend/app.js", "frontend/terminal.js", "frontend/windows.js", "frontend/workspace.js",
-             "frontend/models.js", "frontend/hud.js", "desktop/main.js", "desktop/preload.js",
+             "frontend/models.js", "frontend/aiops.js", "frontend/agent.js", "frontend/hud.js", "desktop/main.js", "desktop/preload.js",
              "desktop/security.js", "desktop/window-controls.js"]
     bad = []
     for name in files:
@@ -65,13 +65,14 @@ def gate_lint() -> None:
 
 def gate_js_suites() -> None:
     names = ["test_terminal", "test_windows", "test_frontend", "test_frontend_runtime",
-             "test_frontend_auth", "test_agents_local_ai", "test_hud", "test_responsive"]
+             "test_frontend_auth", "test_agents_local_ai", "test_hud", "test_responsive",
+             "test_agent"]
     failed = []
     for name in names:
         proc = run(["node", f"tests/{name}.js"], timeout=120)
         if proc.returncode != 0:
             failed.append(name)
-    gate("3/10 js suites (8 files)", not failed, f"failed={failed or 'none'}")
+    gate("3/10 js suites (9 files)", not failed, f"failed={failed or 'none'}")
 
 
 def gate_gguf_chain() -> None:
@@ -191,6 +192,16 @@ def gate_upstream() -> None:
          f"advisors={sorted(council.ADAPTERS)} table={sorted(data)} offline_safe={offline}")
 
 
+def _http_status(url: str, timeout: int = 30) -> int:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return int(getattr(response, "status", 0) or 0)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code or 0)
+    except OSError:
+        return 0
+
+
 def _http_json(url: str, method: str = "GET", body: dict | None = None, timeout: int = 30) -> tuple[int, dict]:
     data = json.dumps(body or {}).encode() if method == "POST" else None
     request = urllib.request.Request(url, data=data, method=method,
@@ -240,8 +251,15 @@ def gate_live_http() -> None:
                 checks["traversal_blocked"] = code == 400
                 code, payload = _http_json(base + "/api/dashboard")
                 checks["dashboard_hint"] = code == 200 and "ai_hint" in payload.get("dashboard", {})
+                code, payload = _http_json(base + "/api/llamafile")
+                checks["llamafile"] = code == 200 and payload.get("llamafile", {}).get("provider") == "llamafile"
+                code, _ = _http_json(base + "/api/llamafile/import", "POST", {"path": "../x.gguf"})
+                checks["llamafile_traversal_blocked"] = code in {400, 409}
+                code, payload = _http_json(base + "/api/memory", "POST", {"title": "gate", "body": "gate note", "kind": "knowledge"})
+                checks["memory_save"] = code == 201 and payload.get("memory", {}).get("title") == "gate"
+                checks["ui_shell"] = _http_status(base + "/") == 200
             ok = all(checks.values())
-            gate("8/10 live http smoke (7 endpoints)", ok, f"checks={checks}")
+            gate("8/10 live http smoke (11 endpoints)", ok, f"checks={checks}")
         finally:
             proc.terminate()
             try:
@@ -328,7 +346,7 @@ def gate_security() -> None:
 
 
 def main() -> int:
-    print("VORTEX final audit — 10 gates, real execution, no simulation.", flush=True)
+    print("Vortex Terminal final audit — 10 gates, real execution, no simulation.", flush=True)
     gate_unit_suite()
     gate_lint()
     gate_js_suites()

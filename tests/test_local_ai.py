@@ -397,6 +397,39 @@ class LocalAiRouterTests(unittest.TestCase):
         self.assertEqual(route["primary"], "acme/custom-model:7b")
         self.assertEqual(route["selected"][0]["model"], "acme/custom-model:7b")
 
+    def test_benchmark_accepts_healthy_llamafile_without_ollama(self):
+        snapshot = {
+            "enabled": True,
+            "local": {"state": "unavailable", "reason": "ollama down", "installed_candidates": []},
+            "gguf": {"state": "unavailable", "reason": "no gguf engine"},
+            "llamafile": {"state": "healthy", "active_model": "Llama-3.2-3B-test.gguf",
+                          "models": [{"name": "Llama-3.2-3B-test.gguf", "valid": True}]},
+        }
+        canned = {"state": "responded", "synthesis": {"fact_summary": "ok"},
+                  "message": "ok", "route": {}, "fuzzy": {"confidence": "high"}}
+        with patch.object(router, "model_status", return_value=snapshot), \
+             patch.object(router, "advise", return_value=canned):
+            result = router.benchmark_local_ai({})
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(result["providers"], ["llamafile"])
+        self.assertEqual(result["models"], ["Llama-3.2-3B-test.gguf"])
+        self.assertEqual(result["passed"], 3)
+        self.assertEqual(result["total"], 3)
+
+    def test_benchmark_reports_combined_reason_when_all_providers_down(self):
+        snapshot = {
+            "enabled": True,
+            "local": {"state": "unavailable", "reason": "ollama down"},
+            "gguf": {"state": "unavailable", "reason": "no gguf engine"},
+            "llamafile": {"state": "unavailable", "reason": "no llamafile binary"},
+        }
+        with patch.object(router, "model_status", return_value=snapshot):
+            result = router.benchmark_local_ai({})
+        self.assertEqual(result["state"], "unavailable")
+        self.assertIn("llamafile", result["reason"])
+        self.assertEqual(result["models"], [])
+        self.assertEqual(result["cases"], [])
+
 
 class LocalAiIntegrationTests(unittest.TestCase):
     def setUp(self):
@@ -539,7 +572,7 @@ class SecondaryAdvisorFallbackTests(unittest.TestCase):
             "state": "unavailable",
             "provider": "ollama",
             "endpoint": "http://127.0.0.1:11434",
-            "message": "Local AI unavailable: connection refused. Deterministic VORTEX planning remains authoritative.",
+            "message": "Local AI unavailable: connection refused. Deterministic Vortex Terminal planning remains authoritative.",
             "responses": [],
             "route": {"selected": []},
             "fuzzy": {"confidence": "unavailable", "agreement": "none", "models_responded": 0},

@@ -2,7 +2,7 @@
 
 Aggregates the verified upstream commands for each layer that is actually
 missing on this host (Ollama runtime, GGUF engine, GGUF model files, and the
-individual AI assistants). VORTEX never executes any of it: the operator
+individual AI assistants). Vortex Terminal never executes any of it: the operator
 copies the block into their main Linux terminal, pastes it, and returns to
 click REFRESH ALL. Sections that are already present are omitted, so the
 block always reflects live state. Assistants without a uniquely verified
@@ -38,10 +38,13 @@ def _import(name: str):
 
 
 def _section_commands_ollama(runtime: dict[str, Any]) -> list[str]:
+    # Starter pulls match the curated MODEL_CATALOG exactly, so following the
+    # guide satisfies the app's own "missing core models" check.
     return [
         "curl -fsSL https://ollama.com/install.sh | sh",
-        "ollama pull llama3.2:3b        # fast/primary advisory model",
-        "ollama pull qwen2.5:3b         # planner/specialist model",
+        "ollama pull llama3.2:3b        # fast conversation + fallback",
+        "ollama pull qwen3:4b            # planning + tool selection",
+        "ollama pull phi4-mini:3.8b     # analysis + reporting",
     ]
 
 
@@ -57,7 +60,7 @@ def _section_commands_gguf_models() -> list[str]:
     return [
         "mkdir -p ~/linux-vortex-terminal/models",
         "# put Llama-3.2-3B-Instruct-Q4_K_M.gguf and Qwen2.5-3B-Instruct-Q4_K_M.gguf in that folder",
-        "# exact download links: VORTEX -> AI OPS window -> Step 1 box (or docs/LOCAL_GGUF.md)",
+        "# exact download links: Vortex Terminal -> AI OPS window -> Step 1 box (or docs/LOCAL_GGUF.md)",
     ]
 
 
@@ -88,14 +91,14 @@ def assemble(settings: dict[str, Any] | None = None) -> dict[str, Any]:
                 "id": "gguf-engine",
                 "title": "On-device GGUF engine (primary local-LLM layer)",
                 "commands": _section_commands_gguf_engine(),
-                "note": "Lets VORTEX run your own .gguf files directly, without Ollama.",
+                "note": "Lets Vortex Terminal run your own .gguf files directly, without Ollama.",
             })
         if not valid:
             sections.append({
                 "id": "gguf-models",
                 "title": "On-device GGUF model files",
                 "commands": _section_commands_gguf_models(),
-                "note": "Your own on-device models; VORTEX validates each file before it can be used.",
+                "note": "Your own on-device models; Vortex Terminal validates each file before it can be used.",
             })
     except Exception:
         pass
@@ -141,13 +144,13 @@ def _paste_safe_line(line: str) -> str:
 
 def render_combined(sections: list[dict[str, Any]]) -> str:
     if not sections:
-        return ("# VORTEX AI stack: nothing is missing on this host.\n"
-                "# Every layer (GGUF, Ollama, assistants) that VORTEX probes is present.")
+        return ("# Vortex Terminal AI stack: nothing is missing on this host.\n"
+                "# Every layer (GGUF, Ollama, assistants) that Vortex Terminal probes is present.")
     lines = [
         "# ============================================================",
-        "# VORTEX AI stack - paste into your MAIN Linux terminal",
+        "# Vortex Terminal AI stack - paste into your MAIN Linux terminal",
         "# Only what is actually missing on this host is listed below.",
-        "# VORTEX does not run any of this itself; no silent installs.",
+        "# Vortex Terminal does not run any of this itself; no silent installs.",
         "# ============================================================",
         "",
     ]
@@ -160,5 +163,5 @@ def render_combined(sections: list[dict[str, Any]]) -> str:
         if section.get("note"):
             lines.append(f"# {section['note']}")
         lines.append("")
-    lines.append("# Done? Click REFRESH ALL in VORTEX so the rescan sees the result.")
+    lines.append("# Done? Click REFRESH ALL in Vortex Terminal so the rescan sees the result.")
     return "\n".join(lines)

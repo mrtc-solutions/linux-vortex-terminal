@@ -1,10 +1,10 @@
-# VORTEX
+# Vortex Terminal
 
 **Verified Orchestration, Reasoning, Testing, Execution & eXperience**
 
 Linux-native, AI-assisted authorized cybersecurity and Linux operations workbench.
 
-VORTEX turns a natural-language objective into an inspectable plan, checks tools
+Vortex Terminal turns a natural-language objective into an inspectable plan, checks tools
 actually installed on the host, evaluates the plan with an independent Guardian,
 runs only typed argv through one local Python authority, and records observed
 evidence. Advisory routing is fuzzy local-first: your own on-device GGUF files
@@ -18,7 +18,7 @@ models are reported as unavailable, and tools found in unsafe/user-writable
 locations are shown as present-but-blocked for review rather than silently
 trusted. Nothing is fabricated to make the UI look complete.
 
-> **Authorized use only.** VORTEX is for systems, networks, and artifacts you
+> **Authorized use only.** Vortex Terminal is for systems, networks, and artifacts you
 > own or are explicitly authorized to assess.
 
 ## Quick start
@@ -61,7 +61,7 @@ Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 Install semantics are explicit:
 - `vortex install --user` and `scripts/install-user.sh` write only a user-local launcher.
 - The **Dependencies** text entry accepts one exact Debian package, `ollama`, or a validated `model:tag`. Debian packages become persisted, Guardian-gated apt plans; **OPEN INSTALL TERMINAL** runs the exact saved plan in a managed PTY.
-- VORTEX remains unprivileged, performs a fresh preflight, asks twice, and hands only the final typed root mutation to trusted OS `sudo` (`sudo -v` on the real TTY, then `sudo -n --`). The OS may cache that authentication for a short timestamp window (commonly ~15 minutes); that is sudo, not a VORTEX credential store. Never start VORTEX itself with `sudo`.
+- Vortex Terminal remains unprivileged, performs a fresh preflight, asks twice, and hands only the final typed root mutation to trusted OS `sudo` (`sudo -v` on the real TTY, then `sudo -n --`). The OS may cache that authentication for a short timestamp window (commonly ~15 minutes); that is sudo, not a Vortex Terminal credential store. Never start Vortex Terminal itself with `sudo`.
 - The in-app Ollama installer downloads the official user-space release only after confirmation, enforces the release size and published SHA-256, extracts privately, verifies the executable and loopback API, and supports cancellation/retry. Missing `zstd` produces its reviewed apt prerequisite plan before the large download.
 - Model pulls validate the exact tag, verify it through the loopback API, and activate the selected advisory role only after success. Offline mode blocks downloads but not owner-local loopback inference.
 
@@ -133,7 +133,7 @@ UNAVAILABLE), or **Not implemented**.
 
 These are either unimplemented, or implemented only as honest unavailable states:
 
-- Consulting any third-party AI agent (no third-party agent code ships with VORTEX; only the built-in deterministic advisor is rostered)
+- Consulting any third-party AI agent (no third-party agent code ships with Vortex Terminal; only the built-in deterministic advisor is rostered)
 - sqlmap / Metasploit **execution** adapters (catalog probes only)
 - Scanner tools when the binary or wordlist is not on the host (honest UNAVAILABLE)
 - FastAPI + PostgreSQL + pgvector (local SQLite modular monolith by design)
@@ -148,7 +148,7 @@ These are either unimplemented, or implemented only as honest unavailable states
 - MCP server or client (no MCP layer exists in this build)
 - Remote graphical sessions (VNC / RDP / noVNC / Guacamole). No `Xvfb`,
   `x11vnc`, `websockify`, or RDP client is present and no session code exists;
-  VORTEX shows no desktop rather than a fake one.
+  Vortex Terminal shows no desktop rather than a fake one.
 
 Verified absent on this host at the time of the last audit: `nmap`, `nuclei`,
 `ffuf`, `nikto`, `amass`, `gobuster`, `sqlmap`, `msfconsole`, `docker`,
@@ -156,7 +156,7 @@ Verified absent on this host at the time of the last audit: `nmap`, `nuclei`,
 reports UNAVAILABLE rather than a fabricated result. Present and exercised:
 `git`, `ss`, `ip`, `curl`, `ssh`, `ps`, `df`, `systemctl`, `journalctl`. On this
 host, `node`, `npm`, and `yarn` were additionally discovered under
-`/usr/local/bin` but flagged `blocked` by path-safety policy, so VORTEX reports
+`/usr/local/bin` but flagged `blocked` by path-safety policy, so Vortex Terminal reports
 them as present for review rather than as trusted installs.
 
 ## Trust model
@@ -205,7 +205,7 @@ sha256/device/inode at plan time and re-probed before execution, so a swapped
 binary invalidates the plan instead of running.
 
 **Recovery is honest.** If the sidecar dies mid-operation, the next start marks
-the abandoned operation `unknown_after_crash` and pauses its task. VORTEX
+the abandoned operation `unknown_after_crash` and pauses its task. Vortex Terminal
 records that it does not know the host outcome rather than inferring success.
 
 ## Documentation

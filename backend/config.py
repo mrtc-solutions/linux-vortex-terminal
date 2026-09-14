@@ -38,6 +38,10 @@ DEFAULTS = {
     "gguf_ctx": 2048,
     "gguf_threads": 4,
     "gguf_timeout_seconds": 20,
+    "llamafile_model": "",
+    "llamafile_endpoint": "",
+    "llamafile_gpu": False,
+    "llamafile_timeout_seconds": 20,
     "first_run_complete": False,
     "host_tool_access": False,
 }

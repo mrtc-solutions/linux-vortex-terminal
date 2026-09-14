@@ -1,4 +1,4 @@
-"""VORTEX Guardian — independent of any model or external agent.
+"""Vortex Terminal Guardian — independent of any model or external agent.
 
 The Guardian recomputes risk from typed command specs, policy, and scope.
 An LLM or agent cannot instruct it to approve itself.
@@ -63,12 +63,38 @@ DESTRUCTIVE_WORDS = {
     "rm", "mkfs", "dd", "wipefs", "shred", "chown",
     "iptables", "nft", "reboot", "poweroff", "halt", "kexec",
 }
-# World-writable chmod: 777, 0777, 2777/4777/6777, and a+rwx / a=rwx.
-CHMOD_WORLD_RE = re.compile(
-    r"(?:^|[\s;|&])chmod(?:\s+-[A-Za-z]+)*\s+(?:0*[0-7]?777\b|a\+rwx|a=rwx|ugo\+rwx|ugo=rwx)",
+# World-writable chmod is parsed, not pattern-matched: symbolic modes such as
+# o+w, a+w, go=rwx (and long flags like --recursive) must not evade the gate.
+CHMOD_MODE_RE = re.compile(
+    r"(?:^|[\s;|&])chmod(?:\s+--?[A-Za-z][A-Za-z-]*(?:=[^\s;|&]+)?)*\s+([0-7]{3,4}|[augo]*[+=][rwxXst,]+)",
     re.I,
 )
 TOKEN_RE = re.compile(r"[A-Za-z0-9._+/-]+")
+SEGMENT_RE = re.compile(r"[;|&]+")
+_FIREWALL_BINARIES = {"iptables", "ip6tables", "nft"}
+
+
+def _chmod_world_writable(text: str) -> bool:
+    """True when any chmod mode in the text grants world-write permission."""
+    for match in CHMOD_MODE_RE.finditer(text):
+        mode = match.group(1)
+        if mode[0].isdigit():
+            try:
+                if int(mode, 8) & 0o002:
+                    return True
+            except ValueError:
+                continue
+            continue
+        # Symbolic mode: empty "who" means "all"; flag only world-affecting
+        # clauses (u+rwx / g+w stay untouched).
+        for clause in mode.split(","):
+            who, _, perms = clause.partition("+") if "+" in clause else clause.partition("=")
+            if not perms or "w" not in perms.lower():
+                continue
+            who = who.lower()
+            if not who or "a" in who or "o" in who:
+                return True
+    return False
 
 
 _READONLY_FIREWALL_RE = re.compile(
@@ -80,21 +106,25 @@ _READONLY_FIREWALL_RE = re.compile(
 def looks_destructive(display: str) -> bool:
     """Match destructive command words, not accidental substrings like adduser/remove."""
     text = (display or "").lower()
-    if CHMOD_WORLD_RE.search(text):
+    if _chmod_world_writable(text):
         return True
-    read_only_firewall = bool(_READONLY_FIREWALL_RE.search(text))
-    for part in TOKEN_RE.findall(text):
-        base = part.rsplit("/", 1)[-1]
-        if base in DESTRUCTIVE_WORDS:
-            if base in {"iptables", "ip6tables", "nft"} and read_only_firewall:
-                continue
-            return True
-        # mkfs.ext4 / mkfs.xfs must match mkfs without treating adduser as dd.
-        stem = base.split(".", 1)[0]
-        if stem in DESTRUCTIVE_WORDS:
-            if stem in {"iptables", "ip6tables", "nft"} and read_only_firewall:
-                continue
-            return True
+    # Evaluate each shell segment on its own so a read-only firewall listing
+    # elsewhere in the plan cannot launder a mutating iptables/nft command.
+    segments = SEGMENT_RE.split(text) or [text]
+    for segment in segments:
+        read_only_firewall = bool(_READONLY_FIREWALL_RE.search(segment))
+        for part in TOKEN_RE.findall(segment):
+            base = part.rsplit("/", 1)[-1]
+            if base in DESTRUCTIVE_WORDS:
+                if base in _FIREWALL_BINARIES and read_only_firewall:
+                    continue
+                return True
+            # mkfs.ext4 / mkfs.xfs must match mkfs without treating adduser as dd.
+            stem = base.split(".", 1)[0]
+            if stem in DESTRUCTIVE_WORDS:
+                if stem in _FIREWALL_BINARIES and read_only_firewall:
+                    continue
+                return True
     return False
 
 

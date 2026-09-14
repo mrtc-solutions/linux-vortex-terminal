@@ -31,12 +31,15 @@ def run_suite(store: Any, workspace: Any, executor: Any, cwd: str | None = None)
         )
         operation = turn.get("operation")
         if operation:
-            for _ in range(200):
+            # The terminal status is persisted after post-execution
+            # interpretation (which may wait out model timeouts), so a short
+            # poll misreports slow hosts as failed. Stay bounded: 30s.
+            for _ in range(600):
                 current = store.get_operation(operation["id"])
                 if current and current.get("status") not in {"started", "running"}:
                     operation = current
                     break
-                time.sleep(0.02)
+                time.sleep(0.05)
         elapsed = int((time.monotonic() - started) * 1000)
         status = (operation or {}).get("status") or turn["plan"].get("status")
         results.append({
@@ -54,7 +57,7 @@ def run_suite(store: Any, workspace: Any, executor: Any, cwd: str | None = None)
     passed = sum(1 for item in results if item["success"])
     ai = benchmark_local_ai(load_settings())
     return {
-        "product": "VORTEX",
+        "product": "Vortex Terminal",
         "cases": results,
         "passed": passed,
         "total": len(results),

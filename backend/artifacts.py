@@ -121,12 +121,12 @@ def parse_nmap_xml(data: bytes, source: dict[str, Any]) -> dict[str, Any]:
     for host in elements("host")[:512]:
         status = next(iter([item for item in host if item.tag.rsplit("}", 1)[-1] == "status"]), None)
         addresses = [item.attrib.get("addr", "") for item in host if item.tag.rsplit("}", 1)[-1] == "address" and item.attrib.get("addr")]
-        names = [item.attrib.get("name", "") for item in elements("hostname") if item.attrib.get("name") and host in list(item.iterancestors())] if hasattr(host, "iterancestors") else [item.attrib.get("name", "") for item in host.iter() if item.tag.rsplit("}", 1)[-1] == "hostname" and item.attrib.get("name")]
+        names = [redact(item.attrib.get("name", "")) for item in host.iter() if item.tag.rsplit("}", 1)[-1] == "hostname" and item.attrib.get("name")]
         valid_addresses = []
         for address in addresses:
             try: ipaddress.ip_address(address); valid_addresses.append(address)
             except ValueError: parse_errors.append("invalid host address observed")
-        host_item: dict[str, Any] = {"addresses": valid_addresses[:8], "hostnames": [redact(name) for name in names[:8]], "status": status.attrib.get("state") if status is not None else "unknown", "ports": []}
+        host_item: dict[str, Any] = {"addresses": valid_addresses[:8], "hostnames": names[:8], "status": status.attrib.get("state") if status is not None else "unknown", "ports": []}
         for port in [item for item in host.iter() if item.tag.rsplit("}", 1)[-1] == "port"]:
             state = next(iter([item for item in port if item.tag.rsplit("}", 1)[-1] == "state"]), None)
             service = next(iter([item for item in port if item.tag.rsplit("}", 1)[-1] == "service"]), None)
@@ -220,7 +220,7 @@ def analyze_bytes(data: bytes, *, kind: str = "auto", source: dict[str, Any] | N
         raise ArtifactError(f"artifact exceeds {MAX_ARTIFACT_BYTES} byte limit")
     source = source or {"kind": "memory", "identity": "memory"}
     kind = kind.lower()
-    if kind in ("nmap", "nmap-xml", "xml") or (kind == "auto" and data.lstrip().startswith(b"<nmaprun")):
+    if kind in ("nmap", "nmap-xml", "xml") or (kind == "auto" and re.match(rb"\s*(?:<\?xml[^?]*\?>\s*)?<nmaprun[\s>/]", data)):
         return parse_nmap_xml(data, source)
     if kind in ("http", "http-headers", "headers") or (kind == "auto" and re.search(rb"^HTTP/\d(?:\.\d)?\s+\d{3}", data, re.MULTILINE)):
         return parse_http_headers(data.decode("utf-8", "replace"), source)

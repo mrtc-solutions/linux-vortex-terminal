@@ -1,9 +1,9 @@
 """Lightweight terminal dashboard.
 
-Collects live host facts plus VORTEX state (AI, sessions, tools, VPN) into a
+Collects live host facts plus Vortex Terminal state (AI, sessions, tools, VPN) into a
 single panel without interfering with the existing terminal.  Everything that
 cannot be observed on this host is reported as ``unavailable`` rather than
-fabricated; specifically VORTEX does not claim a VPN/Secure Network tunnel when
+fabricated; specifically Vortex Terminal does not claim a VPN/Secure Network tunnel when
 no such subsystem is implemented.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ def _count_interfaces() -> int | None:
     try:
         with open("/proc/net/dev", encoding="utf-8", errors="replace") as handle:
             lines = handle.read().splitlines()[2:]
-            return sum(1 for line in lines if ":" in line and not line.startswith("lo"))
+            return sum(1 for line in lines if ":" in line and line.split(":")[0].strip() not in {"lo", ""})
     except OSError:
         return None
 
@@ -96,7 +96,7 @@ def collect(store: Any, workspace: Any, settings: dict[str, Any] | None = None) 
         "vpn": {
             "available": False,
             "state": "unavailable",
-            "detail": "No reviewed VPN/Secure Network Mode is implemented in this build. VORTEX does not claim an active or secure tunnel.",
+            "detail": "No reviewed VPN/Secure Network Mode is implemented in this build. Vortex Terminal does not claim an active or secure tunnel.",
         },
     }
 

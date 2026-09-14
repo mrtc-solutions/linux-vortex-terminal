@@ -54,7 +54,7 @@
     } else if (provider === 'council') {
       var agents = detail.agents || {};
       detailText = agents.total != null
-        ? agents.available + '/' + agents.total + ' agent adapter(s) available'
+        ? (agents.available == null ? '?' : agents.available) + '/' + agents.total + ' agent adapter(s) available'
         : (detail.reason || 'not probed');
     } else {
       detailText = detail.reason || 'Planning, Guardian and execution run without a model.';
@@ -304,11 +304,12 @@
         aiops.streamOpen = false;
       };
     } else {
-      // fallback: poll partials once to give some motion if SSE unavailable
+      // fallback: the engine answers whole turns, not tokens, so there is no
+      // partials endpoint — refresh the real trace instead of polling a dead route.
       (async function pollOnce() {
         try {
-          var res = await api('/api/aiops/partials');
-          (res.partials || []).forEach(function (p) { if (p.text) appendStreamLine(p.text, 'ai-ops-stream'); });
+          await loadAiOps(true);
+          appendStreamLine('Live stream unavailable in this browser — showing the latest trace.', 'ai-ops-stream');
         } catch (e) { /* ignore */ }
       })();
     }
@@ -336,7 +337,7 @@
       section.hidden = false;
       var combined = payload.combined || '';
       host.innerHTML =
-        '<p class="form-note">' + esc(sections.length) + ' item(s) missing on this host. Copy the whole block and paste it into your main Linux terminal, then return and click REFRESH ALL. VORTEX will validate the installers before running anything.</p>' +
+        '<p class="form-note">' + esc(sections.length) + ' item(s) missing on this host. Copy the whole block and paste it into your main Linux terminal, then return and click REFRESH ALL. Vortex Terminal will validate the installers before running anything.</p>' +
         '<div class="command-actions"><button class="secondary-button" data-aiops-copy-all>COPY ALL COMMANDS</button>' +
         '<button class="secondary-button" data-aiops-terminal-all>OPEN IN TERMINAL</button></div>' +
         '<pre class="install-commands">' + esc(combined) + '</pre>';
