@@ -52,7 +52,7 @@ def gate_unit_suite() -> None:
 def gate_lint() -> None:
     proc = run([sys.executable, "-m", "compileall", "-q", "backend", "cli"])
     files = ["frontend/app.js", "frontend/terminal.js", "frontend/windows.js", "frontend/workspace.js",
-             "frontend/models.js", "frontend/aiops.js", "frontend/hud.js", "desktop/main.js", "desktop/preload.js",
+             "frontend/models.js", "frontend/aiops.js", "frontend/agent.js", "frontend/hud.js", "desktop/main.js", "desktop/preload.js",
              "desktop/security.js", "desktop/window-controls.js"]
     bad = []
     for name in files:

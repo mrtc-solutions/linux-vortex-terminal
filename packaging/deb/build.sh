@@ -39,7 +39,7 @@ mkdir -p "$out" "$stage/DEBIAN" "$stage/usr/share/vortex" "$stage/usr/share/man/
 while IFS= read -r -d '' source; do
   install -D -m 0644 "$source" "$stage/usr/share/vortex/$source"
 done < <(find backend cli -type f -name '*.py' -print0)
-for source in index.html app.js workspace.js terminal.js windows.js models.js aiops.js hud.js styles.css; do
+for source in index.html app.js workspace.js terminal.js windows.js models.js aiops.js agent.js hud.js styles.css; do
   install -D -m 0644 "$root/frontend/$source" "$stage/usr/share/vortex/frontend/$source"
 done
 for source in README.md hooded-researcher.svg; do

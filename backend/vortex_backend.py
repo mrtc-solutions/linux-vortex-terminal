@@ -4649,6 +4649,51 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/tasks/") and path.count("/") == 3:
                 item = self.workspace.get_task(path.rsplit("/", 1)[-1])
                 return self._json(200 if item else 404, {"task": item} if item else {"error": {"code": "not_found", "message": "task not found"}})
+            if path == "/api/agent/runs":
+                agent = _load("agent_mode")
+                return self._json(200, {"runs": agent.list_runs(self.store)})
+            if path.startswith("/api/agent/runs/") and path.endswith("/stream"):
+                agent = _load("agent_mode")
+                run_id = path.split("/")[-2]
+                if not agent.RUN_ID_RE.match(run_id or ""):
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                query = urllib.parse.parse_qs(parsed.query)
+                try:
+                    since = int(self._query_text(query, "since", "0", limit=16))
+                except (TypeError, ValueError) as exc:
+                    raise PolicyError("since must be an integer") from exc
+                if since < 0:
+                    raise PolicyError("since must be >= 0")
+                if not agent.get_run(self.store, run_id):
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                self.send_response(200)
+                self._headers("text/event-stream")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                for _ in range(300):
+                    payload = agent.events_since(self.store, run_id, since)
+                    try:
+                        self._write(f"data: {json.dumps({'schema_version': SCHEMA_VERSION, **payload})}\n\n".encode())
+                        self.wfile.flush()
+                    except OSError:
+                        break
+                    events = payload.get("events") or []
+                    if events:
+                        since = events[-1]["seq"]
+                    status = (payload.get("run") or {}).get("status")
+                    if not payload.get("run") or status == "finished":
+                        break
+                    time.sleep(0.4)
+                return
+            if path.startswith("/api/agent/runs/") and path.count("/") == 4:
+                agent = _load("agent_mode")
+                run_id = path.rsplit("/", 1)[-1]
+                if not agent.RUN_ID_RE.match(run_id or ""):
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                payload = agent.events_since(self.store, run_id, 0)
+                if not payload.get("run"):
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                return self._json(200, payload)
             if path == "/api/memory":
                 return self._json(200, {"memories": self.workspace.list_memories()})
             if path == "/api/learning":
@@ -5120,6 +5165,38 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if self._flag(body, "offline"):
                     settings["offline"] = True
                 result = run_turn(self.store, self.workspace, self.executor, request.strip(), cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), conversation_id=self._optional_str(body, "conversation_id"), settings=settings, confirm=self._flag(body, "confirm"), approval_token=self._text(body, "approval_token"))
+                return self._json(200, result)
+            if path == "/api/agent/runs":
+                agent = _load("agent_mode")
+                load_settings = _load("config").load_settings
+                goal = body.get("goal")
+                if not isinstance(goal, str) or not goal.strip():
+                    raise ValueError("goal must be a string")
+                settings = load_settings()
+                if self._flag(body, "offline"):
+                    settings["offline"] = True
+                try:
+                    result = agent.start_run(self.store, self.workspace, self.executor, goal.strip(), max_steps=body.get("max_steps", agent.DEFAULT_MAX_STEPS), cwd=self._optional_str(body, "cwd"), engagement_id=self._optional_str(body, "engagement_id"), conversation_id=self._optional_str(body, "conversation_id"), settings=settings)
+                except RuntimeError as exc:
+                    return self._json(409, {"error": {"code": "run_active", "message": str(exc)}})
+                return self._json(202, result)
+            if path.startswith("/api/agent/runs/") and path.endswith("/approve"):
+                agent = _load("agent_mode")
+                run_id = path.split("/")[-2]
+                try:
+                    result = agent.approve_run(self.store, self.workspace, self.executor, run_id, self._optional_str(body, "plan_id"), self._flag(body, "confirm"))
+                except LookupError:
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
+                except RuntimeError as exc:
+                    return self._json(409, {"error": {"code": "not_resumable", "message": str(exc)}})
+                return self._json(200, result)
+            if path.startswith("/api/agent/runs/") and path.endswith("/stop"):
+                agent = _load("agent_mode")
+                run_id = path.split("/")[-2]
+                try:
+                    result = agent.stop_run(self.store, self.executor, run_id)
+                except LookupError:
+                    return self._json(404, {"error": {"code": "not_found", "message": "agent run not found"}})
                 return self._json(200, result)
             if path == "/api/conversations":
                 title = self._optional_str(body, "title") or "New conversation"

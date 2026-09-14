@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Agent Mode (v1).** Goal-directed runs with a visible transcript:
+  think → plan → Guardian → execute → observe, looping until the goal is
+  verified or a budget stops the run. Thinking rides the local stack
+  llamafile-first with GGUF/Ollama fallback; every proposal is grounded
+  through deterministic planning (model text never becomes shell);
+  Guardian-`auto` steps run while anything else pauses for exact-step
+  approval; one run at a time with step/time budgets, a stable
+  repeat-guard, stop/resume, SSE transcript streaming, and an honest
+  `needs_model` refusal pointing at the Models view when no local model
+  is healthy. New sidecar routes `/api/agent/*`, Agent Mode surface
+  window, `docs/AGENT_MODE.md`, and 13 tests including real-execution
+  achieve/approve/stop/loop-guard and live-HTTP coverage.
+
+
 - **Installable Android APK.** The hand-written `AndroidManifest.xml`
   encoder described every start-tag with a short `ResXMLTree_attrExt`
   (attribute count read back as zero), so no device could parse the

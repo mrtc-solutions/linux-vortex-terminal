@@ -122,6 +122,7 @@
         <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Settings</button>
         <button class="nav-item" id="open-help" title="Vortex Terminal Help" aria-label="Open Help"><span class="nav-icon">?</span>Help</button>
         <button class="nav-item" id="open-about" title="About Vortex Terminal" aria-label="Open About"><span class="nav-icon">◇</span>About</button>
+        <button class="nav-item" id="open-agent" title="Agent Mode — goal-directed runs" aria-label="Open Agent Mode"><span class="nav-icon">◈</span>Agent Mode</button>
       </nav>
       <div class="version">VORTEX TERMINAL 0.3.0 <span>•</span> <span id="mode-label">OFFLINE-FIRST</span></div>
     </aside>
@@ -743,6 +744,40 @@
     </section>
   </div>
 
+  <!-- AGENT MODE SURFACE WINDOW -->
+  <div id="agent-window" class="agent-window surface-window" data-surface-window data-window-state="normal" hidden>
+    <section class="agent-card surface-card" role="dialog" aria-modal="true" aria-labelledby="agent-title">
+      <div class="surface-titlebar">
+        <div><span class="panel-kicker">GOAL → TRANSCRIPT</span><strong id="agent-title">Agent Mode — think, plan, Guardian, execute, observe</strong></div>
+        <div class="window-controls">
+          <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
+          <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
+          <button type="button" class="window-control window-control-close" data-surface-action="close" aria-label="Close Agent Mode window" title="Close"><span aria-hidden="true">×</span></button>
+        </div>
+      </div>
+      <div class="surface-body agent-body">
+        <div class="context-row"><label>STATUS</label><span class="badge badge-muted" id="agent-run-status">IDLE</span></div>
+        <div class="context-row"><label>PROGRESS</label><span id="agent-run-step">—</span></div>
+        <div class="context-row"><label>THINKING MODEL</label><span id="agent-run-model">—</span></div>
+        <p class="form-note">Describe a goal. A local model thinks (llamafile first), every proposal is grounded through deterministic planning, the Guardian auto-runs only low-risk steps, and anything else pauses here for your exact approval. One run at a time.</p>
+        <label class="form-label" for="agent-goal">GOAL</label>
+        <textarea id="agent-goal" rows="2" maxlength="2000" placeholder="e.g. Show my username, then show disk usage"></textarea>
+        <div class="worker-row">
+          <label class="form-label" for="agent-max-steps">MAX STEPS</label>
+          <select id="agent-max-steps"><option>3</option><option selected>5</option><option>8</option><option>10</option></select>
+          <button class="primary-button" id="agent-start" type="button">START RUN</button>
+          <button class="text-button danger" id="agent-stop" type="button" disabled>STOP</button>
+          <button class="text-button" id="agent-refresh" type="button">REFRESH</button>
+        </div>
+        <div id="agent-approve" hidden></div>
+        <h3 class="pipeline-title">VISIBLE TRANSCRIPT</h3>
+        <div id="agent-transcript" class="ai-ops-turn"><div class="empty-inline">No run selected.</div></div>
+        <h3 class="pipeline-title">RECENT RUNS</h3>
+        <div id="agent-runs"><div class="empty-inline">No agent runs yet.</div></div>
+      </div>
+    </section>
+  </div>
+
   <!-- ABOUT SURFACE WINDOW -->
   <div id="about-window" class="about-window surface-window" data-surface-window data-window-state="normal" hidden>
     <section class="about-card surface-card" role="dialog" aria-modal="true" aria-labelledby="about-title">
@@ -877,6 +912,7 @@
   <script src="/assets/workspace.js"></script>
   <script src="/assets/models.js"></script>
   <script src="/assets/aiops.js"></script>
+  <script src="/assets/agent.js"></script>
   <script src="/assets/hud.js"></script>
 </body>
 </html>

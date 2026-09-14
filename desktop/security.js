@@ -24,7 +24,10 @@ const GET_ROUTES = [
   new RegExp(`^/api/conversations/${SAFE_ID}$`),
   new RegExp(`^/api/tasks/${SAFE_ID}$`),
   new RegExp(`^/api/tasks/${SAFE_ID}/events$`),
-  new RegExp(`^/api/reports/assessment/${SAFE_ID}$`)
+  new RegExp(`^/api/reports/assessment/${SAFE_ID}$`),
+  new RegExp('^/api/agent/runs$'),
+  new RegExp(`^/api/agent/runs/${SAFE_ID}$`),
+  new RegExp(`^/api/agent/runs/${SAFE_ID}/stream$`)
 ];
 
 const POST_ROUTES = [
@@ -42,7 +45,9 @@ const POST_ROUTES = [
   new RegExp(`^/api/conversations/${SAFE_ID}/messages/${SAFE_ID}/edit$`),
   new RegExp(`^/api/tasks/${SAFE_ID}/(?:restart|resume|delete|pause)$`),
   new RegExp(`^/api/reports/${SAFE_ID}/delete$`),
-  new RegExp(`^/api/plans/${SAFE_ID}/reject$`)
+  new RegExp(`^/api/plans/${SAFE_ID}/reject$`),
+  new RegExp('^/api/agent/runs$'),
+  new RegExp(`^/api/agent/runs/${SAFE_ID}/(?:approve|stop)$`)
 ];
 
 function parseRelativeRoute(route) {

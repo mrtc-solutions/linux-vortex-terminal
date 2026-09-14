@@ -650,6 +650,7 @@ function init() {
   $('save-engagement').addEventListener('click',createEngagement);
   $('verify-audit').addEventListener('click',verifyAudit);
   $('open-ai-ops')?.addEventListener('click', () => { openSurfaceWindow('ai-ops-window'); if (typeof window.loadAiOps === 'function') window.loadAiOps(); });
+  $('open-agent')?.addEventListener('click', () => { openSurfaceWindow('agent-window'); if (typeof window.loadAgent === 'function') window.loadAgent(); });
   $('open-system')?.addEventListener('click', () => { openSurfaceWindow('system-window'); if (typeof window.refreshHud === 'function') window.refreshHud(); loadDoctor(true); });
   $('open-task-state')?.addEventListener('click', () => openSurfaceWindow('task-window'));
   $('refresh-all')?.addEventListener('click', refreshAll);

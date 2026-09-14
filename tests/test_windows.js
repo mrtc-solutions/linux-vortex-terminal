@@ -144,6 +144,14 @@ assert.strictEqual(isAllowedApiRequest('/api/models/gguf/activate', 'GET'), fals
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream', 'GET'), true);
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream/refresh', 'POST'), true);
 assert.strictEqual(isAllowedApiRequest('/api/agents/upstream/refresh', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123/stream', 'GET'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123/approve', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123/stop', 'POST'), true);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs/abc123/approve', 'GET'), false);
+assert.strictEqual(isAllowedApiRequest('/api/agent/runs', 'DELETE'), false);
 assert.strictEqual(isAllowedApiRequest('/api/assist', 'POST'), true);
 assert.strictEqual(isAllowedApiRequest('/api/assist/coverage', 'GET'), true);
 assert.strictEqual(isAllowedApiRequest('/api/artifacts', 'GET'), true);
