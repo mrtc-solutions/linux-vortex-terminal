@@ -54,6 +54,11 @@ class HostScanUnitTests(unittest.TestCase):
         self.assertEqual(help_ok["status"], "ok")
         self.assertTrue(help_ok["help_only"])
 
+    def test_match_unbalanced_quote_is_clarified_not_raised(self):
+        found = {"nmap": "/usr/bin/nmap"}
+        match = hostscan.match_request('run nmap "oops', found)
+        self.assertEqual(match["status"], "clarified")
+
     def test_discovered_tools_need_explicit_run(self):
         found = {"unusual-tool": "/usr/bin/unusual-tool"}
         self.assertIsNone(hostscan.match_request("check unusual-tool notes", found))

@@ -38,10 +38,13 @@ def _import(name: str):
 
 
 def _section_commands_ollama(runtime: dict[str, Any]) -> list[str]:
+    # Starter pulls match the curated MODEL_CATALOG exactly, so following the
+    # guide satisfies the app's own "missing core models" check.
     return [
         "curl -fsSL https://ollama.com/install.sh | sh",
-        "ollama pull llama3.2:3b        # fast/primary advisory model",
-        "ollama pull qwen2.5:3b         # planner/specialist model",
+        "ollama pull llama3.2:3b        # fast conversation + fallback",
+        "ollama pull qwen3:4b            # planning + tool selection",
+        "ollama pull phi4-mini:3.8b     # analysis + reporting",
     ]
 
 

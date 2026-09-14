@@ -63,8 +63,12 @@ class DesktopDebTests(unittest.TestCase):
         app_js = (extract / "usr" / "share" / "vortex" / "frontend" / "app.js").read_text(encoding="utf-8")
         self.assertIn("triggerDownload", app_js)
         self.assertIn("downloadDeb", app_js)
-        # Every script the bundled index.html references ships in the package.
-        for name in ("models.js", "hud.js"):
+        # Every asset the bundled index.html references ships in the package.
+        import re
+        shipped_index = (extract / "usr" / "share" / "vortex" / "frontend" / "index.html").read_text(encoding="utf-8")
+        refs = sorted(set(re.findall(r"/assets/([A-Za-z0-9_.-]+\.(?:js|css))", shipped_index)))
+        self.assertTrue(refs, "index.html must reference its assets")
+        for name in refs:
             self.assertTrue((extract / "usr" / "share" / "vortex" / "frontend" / name).is_file(), f"{name} must ship in the .deb")
         # Desktop integration: menu entry + icon, operator-started only.
         desktop_entry = (extract / "usr" / "share" / "applications" / "vortex.desktop").read_text(encoding="utf-8")

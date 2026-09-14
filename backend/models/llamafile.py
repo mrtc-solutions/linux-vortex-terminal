@@ -643,6 +643,12 @@ def _free_loopback_port() -> int:
         sock.close()
 
 
+def _loopback_open(request: urllib.request.Request, timeout: float):
+    # Loopback advisory traffic must never be diverted through inherited
+    # proxy settings (privacy + correctness on proxied enterprise hosts).
+    return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout)
+
+
 def probe(endpoint: str) -> dict[str, Any]:
     """Health-probe a llamafile server. Never raises; degrades honestly."""
     try:
@@ -651,7 +657,7 @@ def probe(endpoint: str) -> dict[str, Any]:
         return {"ok": False, "reason": str(exc)}
     request = urllib.request.Request(url + "/v1/models", headers={"User-Agent": _USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=_PROBE_TIMEOUT_SECONDS) as response:  # noqa: S310 - loopback only
+        with _loopback_open(request, _PROBE_TIMEOUT_SECONDS) as response:
             raw = response.read(64 * 1024)
     except Exception as exc:
         return {"ok": False, "reason": f"llamafile server not answering: {str(exc)[:140]}"}
@@ -730,6 +736,24 @@ def server_start(model: str | None = None, settings: dict[str, Any] | None = Non
     if current.get("state") == "running":
         return {"state": "running", "endpoint": current["endpoint"], "model": current.get("model"),
                 "pid": current.get("pid"), "served_models": current.get("served_models") or []}
+    if current.get("state") == "starting" and _process_alive(current.get("pid")) and current.get("endpoint"):
+        # A previous start is still loading the model. Wait on it instead of
+        # spawning a second server that would orphan the first process.
+        endpoint = str(current["endpoint"])
+        deadline = time.monotonic() + max(5.0, min(float(timeout or _START_TIMEOUT_SECONDS), 600.0))
+        last_reason = "server is loading the model"
+        while time.monotonic() < deadline:
+            if not _process_alive(current.get("pid")):
+                break
+            health = probe(endpoint)
+            if health.get("ok"):
+                return {"state": "running", "endpoint": endpoint, "model": current.get("model"),
+                        "pid": current.get("pid"), "served_models": health.get("models") or []}
+            last_reason = str(health.get("reason") or last_reason)
+            time.sleep(1.0)
+        else:
+            raise PolicyError(f"llamafile server did not answer within the startup window: {last_reason}")
+        # The in-flight process died while we waited; fall through to a fresh start.
     wanted = str(model or settings.get("llamafile_model") or "").strip()
     if not wanted:
         raise PolicyError("No llamafile model selected. Import a model and activate it first.")
@@ -860,7 +884,7 @@ def chat(messages: list[dict[str, str]], model: str, settings: dict[str, Any] | 
     )
     started = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=max(2.0, min(float(timeout), 180.0))) as response:  # noqa: S310 - loopback only
+        with _loopback_open(request, max(2.0, min(float(timeout), 180.0))) as response:
             raw = response.read(_MAX_CHAT_BYTES + 1)
     except Exception as exc:
         raise PolicyError(f"llamafile chat failed: {str(exc)[:160]}")

@@ -639,7 +639,7 @@ def _terminate(proc: subprocess.Popen) -> None:
 
 
 def _complete_python(handle: Any, prompt: str, tuning: dict[str, Any], timeout: float) -> str:
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
     def _call() -> str:
         out = handle(
@@ -653,14 +653,21 @@ def _complete_python(handle: Any, prompt: str, tuning: dict[str, Any], timeout: 
             raise ValueError("empty completion from local model")
         return str((choices[0].get("text") or ""))
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_call)
-        try:
-            return future.result(timeout=timeout)
-        except Exception as exc:
-            # llama-cpp-python has no cooperative cancel; the worker thread is
-            # daemon-adjacent via the pool shutdown, and the next call unloads.
-            raise TimeoutError(f"local model timed out after {timeout}s") from exc
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vortex-gguf-infer")
+    detached = False
+    try:
+        return pool.submit(_call).result(timeout=timeout)
+    except (TimeoutError, FuturesTimeoutError) as exc:
+        # llama-cpp-python has no cooperative cancel: stop waiting and let the
+        # orphaned worker finish detached, so the advisory timeout stays honest
+        # (a `with` pool would block shutdown until the stuck call returned).
+        # Worker-raised errors (e.g. empty completion) propagate unchanged.
+        detached = True
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise TimeoutError(f"local model timed out after {timeout}s") from exc
+    finally:
+        if not detached:
+            pool.shutdown(wait=True)
 
 
 def _complete_cli(binary: str, model_path: str, prompt: str, tuning: dict[str, Any], timeout: float) -> str:
@@ -718,7 +725,13 @@ def complete(entry: dict[str, Any], system: str, user_json: str,
         handle = loaded.get("handle")
         engine_name = str(loaded.get("engine"))
     if engine_name == "python":
-        text = _complete_python(handle, prompt, tuning, float(timeout))
+        # llama-cpp-python handles are not safe for concurrent calls: run
+        # inference inside the single-slot lock so load/use/unload stay
+        # atomic. CLI engines are per-process and stay outside the lock.
+        with _LOCK:
+            if _LOADED.get("handle") is not handle or _LOADED.get("engine") != "python":
+                raise RuntimeError("loaded model changed during advisory call")
+            text = _complete_python(handle, prompt, tuning, float(timeout))
     elif engine_name == "cli":
         binary = str(engine_status().get("cli") or "")
         if not binary:

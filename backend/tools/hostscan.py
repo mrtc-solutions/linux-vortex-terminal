@@ -360,7 +360,12 @@ def match_request(request: str, installed: dict[str, str] | None = None) -> dict
     # Require an explicit run/use/invoke cue or the tool as the first token so
     # "check my nmap notes file" does not become an nmap scan. Bare tool names
     # ("wpscan", "lynis") are accepted.
-    first = shlex.split(text)[0] if text else ""
+    try:
+        first = shlex.split(text)[0]
+    except (ValueError, IndexError):
+        # Unbalanced quotes (or other unparseable shell text) must degrade to
+        # the clarified verdict below, never raise out of request matching.
+        first = ""
     explicit = bool(re.search(rf"\b(?:run|use|launch|invoke|exec(?:ute)?)\s+{re.escape(tool)}\b", lower))
     if first.lower() != tool.lower() and not explicit and tool.lower() not in {t.lower() for t in KALI_CATALOG}:
         # Discovered (non-catalog) tools need an explicit run cue or exact name.

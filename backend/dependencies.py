@@ -432,13 +432,14 @@ def _ollama_runtime_proposal(item: dict[str, Any]) -> dict[str, Any]:
         message = "Ollama is installed, but the loopback API is not healthy. Start the runtime and then verify the API before using local AI."
     else:
         commands.extend([
-            f"# Review the official installer and license: {OLLAMA_SOURCE}",
-            "# Install Ollama manually on this host. Vortex Terminal will not run an unreviewed internet installer for you.",
+            "# Preferred: install from the Models view (operator-confirmed, digest-verified user-space runtime).",
+            f"# Manual alternative - review the official installer and license: {OLLAMA_SOURCE}",
+            "# Vortex Terminal will not run an unreviewed internet installer for you.",
             "# After installation, start the loopback runtime and verify it:",
             "ollama serve",
             f"curl {endpoint}/api/version",
         ])
-        message = "Ollama is not installed on this host. Install it manually, keep it bound to loopback, and then verify the local API."
+        message = "Ollama is not installed on this host. Install it from the Models view (verified, operator-confirmed) or manually, keep it bound to loopback, and then verify the local API."
     if missing:
         commands.extend([
             "# Then pull the recommended local models:",
@@ -483,7 +484,7 @@ def _ollama_model_pool_proposal(item: dict[str, Any]) -> dict[str, Any]:
     ])
     if missing_required:
         message = (
-            "The core local model pool is incomplete. Pull the missing recommended models before relying on local-AI-first routing."
+            "The core local model pool is incomplete. Pull the missing recommended models from the Models view (or `ollama pull` locally) before relying on local-AI-first routing."
         )
     elif missing_optional:
         message = (

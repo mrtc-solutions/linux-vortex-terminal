@@ -1060,6 +1060,13 @@ The following packages will be upgraded:
             self.assertEqual(fact['state'], 'not_applicable', target)
             self.assertEqual(fact['addresses'], [])
 
+    def test_malformed_target_endpoints_never_raise(self):
+        from backend.network import target_endpoint
+        for target in ('http://x:abc/', 'https://[::1', 'http://[::1]:99999/'):
+            self.assertEqual(target_endpoint(target), (None, None), target)
+            fact = resolve_target(target)
+            self.assertEqual(fact['state'], 'not_applicable', target)
+
     def test_dns_change_invalidates_active_plan_before_connection(self):
         import backend.vortex_backend as backend_module
         if not shutil.which('curl'):

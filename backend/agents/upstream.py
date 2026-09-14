@@ -92,7 +92,7 @@ def install_guide(agent_id: str) -> list[str]:
 def _fetch_head(api_url: str, timeout: float) -> dict[str, Any]:
     request = urllib.request.Request(
         api_url,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "Vortex/0.2 (operator-triggered upstream check)"},
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "Vortex/0.3 (operator-triggered upstream check)"},
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - reviewed github API URL
         final = str(response.geturl()) if callable(getattr(response, "geturl", None)) else api_url
@@ -153,4 +153,4 @@ def refresh(agent_id: str | None = None, *, timeout: float = 8.0, offline: bool 
         checked.append({"agent": target, **record})
     return {"state": "checked" if checked else "nothing_tracked",
             "checked": checked,
-            "message": f"Checked {len(checked)} upstream repositorie(s)." if checked else "No GitHub-backed agents to check."}
+            "message": f"Checked {len(checked)} upstream repositories." if checked else "No GitHub-backed agents to check."}

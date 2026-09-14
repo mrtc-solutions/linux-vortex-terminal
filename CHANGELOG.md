@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Installable Android APK.** The hand-written `AndroidManifest.xml`
+  encoder described every start-tag with a short `ResXMLTree_attrExt`
+  (attribute count read back as zero), so no device could parse the
+  manifest; it now emits the full six-field header per the AOSP layout.
+  The DEX writer also indexed `MainActivity.onCreate` as a diff of 1
+  instead of its absolute method id 11, which fails ART verification;
+  both are pinned by independent structural decoders written against
+  the platform specs, stash-proven to fail pre-fix.
+- **Packaged builds ship the whole frontend.** `aiops.js` is referenced
+  by `index.html` but was missing from the `.deb` file list and the APK
+  payload, so the AI OPS window 404'd outside a checkout; both shippers
+  now carry it, and the packaging tests assert every `/assets/` reference
+  ships instead of pinning two files.
+- **GGUF engine honesty.** The optional Python inference path no longer
+  converts engine errors into timeouts, bounds its wait with a real
+  timeout that detaches orphans, and serializes single-slot inference
+  under a lock with a handle-identity recheck.
+- **llamafile loopback hardening.** Advisory `probe`/`chat` bypass an
+  inherited proxy for loopback servers, and concurrent `start` calls
+  share one in-flight launch instead of racing.
+- **Smaller pass-7 fixes.** Host scan rejects unbalanced quotes with a
+  clarification instead of raising; dependency guidance points at the
+  verified Models-view install/pull routes; the Ollama guide pulls the
+  curated catalog tags; `target_endpoint` never raises on malformed
+  input; the lint gate syntax-checks `aiops.js`.
 - **llamafile advisory that always reaches the server.** An operator-configured
   loopback llamafile server now serves advisory through the model it actually
   serves even when no model file is registered locally, and `server_state`,

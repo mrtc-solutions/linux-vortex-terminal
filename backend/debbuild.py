@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - top-level backend import
     from fileio import exclusive_file_lock, open_owner_binary  # type: ignore
 
 PACKAGE = "linux-vortex-terminal"
-FRONTEND_FILES = ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "models.js", "hud.js", "styles.css")
+FRONTEND_FILES = ("index.html", "app.js", "workspace.js", "terminal.js", "windows.js", "models.js", "aiops.js", "hud.js", "styles.css")
 _BUILD_LOCK = threading.Lock()
 _MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 

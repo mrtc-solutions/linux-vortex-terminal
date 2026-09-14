@@ -40,12 +40,12 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
         from adapter_registry import TOOL_CATALOG
         from agents.council import discover
         from models.router import MODEL_CATALOG, model_status
-        from vortex_backend import detect_context, probe_executable
+        from vortex_backend import APP_VERSION, detect_context, probe_executable
     except ImportError:
         from backend.adapter_registry import TOOL_CATALOG
         from backend.agents.council import discover
         from backend.models.router import MODEL_CATALOG, model_status
-        from backend.vortex_backend import detect_context, probe_executable
+        from backend.vortex_backend import APP_VERSION, detect_context, probe_executable
 
     doctor = detect_context()
     integrity = store.integrity_check()
@@ -103,7 +103,7 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     core = "healthy"
     db_state = "healthy" if integrity.get("valid") else "degraded"
     components = {
-        "core": {"state": core, "version": "0.2.0"},
+        "core": {"state": core, "version": APP_VERSION},
         "database": {"state": db_state, "detail": integrity},
         "terminal_engine": {"state": "healthy" if session_ok else "degraded"},
         "nodejs": _binary_component(node, "desktop frontend and build scripts"),

@@ -64,6 +64,13 @@ class AssembleTests(unittest.TestCase):
     def test_render_combined_empty(self):
         self.assertIn("nothing is missing", render_combined([]))
 
+    def test_ollama_pulls_match_curated_catalog(self):
+        from backend.install_commands import _section_commands_ollama
+        from backend.models.router import MODEL_CATALOG
+        required = {name for name, meta in MODEL_CATALOG.items() if not meta.get("optional")}
+        pulls = {line.split()[2] for line in _section_commands_ollama({}) if line.startswith("ollama pull ")}
+        self.assertEqual(pulls, required)
+
 
 if __name__ == "__main__":
     unittest.main()

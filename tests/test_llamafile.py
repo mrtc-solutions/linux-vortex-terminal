@@ -172,6 +172,25 @@ class LlamafileTests(unittest.TestCase):
         self.assertEqual(llamafile._loopback_endpoint("http://127.0.0.1:8080"), "http://127.0.0.1:8080")
         self.assertEqual(llamafile._loopback_endpoint("http://localhost:9000"), "http://127.0.0.1:9000")
 
+    def test_loopback_probe_and_chat_ignore_proxy_env(self):
+        _, endpoint = self._start_fake()
+        poison = {
+            "http_proxy": "http://127.0.0.1:9/", "https_proxy": "http://127.0.0.1:9/",
+            "HTTP_PROXY": "http://127.0.0.1:9/", "HTTPS_PROXY": "http://127.0.0.1:9/",
+        }
+        with patch.dict(os.environ, poison):
+            os.environ.pop("no_proxy", None)
+            os.environ.pop("NO_PROXY", None)
+            health = llamafile.probe(endpoint)
+            self.assertTrue(health.get("ok"), health)
+            reply = llamafile.chat(
+                [{"role": "user", "content": "hi"}],
+                "test-model.gguf",
+                {"llamafile_endpoint": endpoint},
+                timeout=10.0,
+            )
+        self.assertIn("stub summary", reply["text"])
+
     # -- install gating ----------------------------------------------------
 
     def test_install_requires_confirmation(self):
@@ -309,6 +328,18 @@ class LlamafileTests(unittest.TestCase):
         llamafile.import_model(str(source))
         with self.assertRaises(PolicyError):
             llamafile.server_start(source.name, {"ai_enabled": True}, timeout=5)
+
+    def test_server_start_waits_for_inflight_start(self):
+        llamafile._write_json(llamafile._pid_path(), {
+            "pid": os.getpid(), "endpoint": "http://127.0.0.1:9",
+            "model": "slow.gguf", "kind": "gguf",
+        })
+        state = llamafile.server_state({"ai_enabled": True})
+        self.assertEqual(state["state"], "starting")
+        started = time.monotonic()
+        with self.assertRaisesRegex(PolicyError, "did not answer within the startup window"):
+            llamafile.server_start(None, {"ai_enabled": True}, timeout=5)
+        self.assertGreaterEqual(time.monotonic() - started, 4.0)
 
     # -- activation -----------------------------------------------------------
 

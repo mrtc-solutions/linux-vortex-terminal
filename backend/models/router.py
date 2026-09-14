@@ -1307,11 +1307,19 @@ def benchmark_local_ai(settings: dict[str, Any] | None = None) -> dict[str, Any]
     settings = settings or {}
     status = model_status(settings)
     local = status.get("local") or {}
-    if local.get("state") != "healthy":
+    gguf = status.get("gguf") or {}
+    llamafile = status.get("llamafile") or {}
+    # The benchmark cases consult via advise(), which already routes across
+    # providers — so the gate must accept any healthy local provider, not
+    # just Ollama. Otherwise a working llamafile/GGUF setup would report
+    # "local AI unavailable" here while serving advisories everywhere else.
+    healthy = [name for name, snap in (("llamafile", llamafile), ("gguf", gguf), ("ollama", local))
+               if snap.get("state") == "healthy"]
+    if not healthy:
         return {
-            "state": local.get("state") or "unavailable",
-            "reason": local.get("reason") or "ollama unavailable",
-            "models": local.get("installed_candidates") or [],
+            "state": llamafile.get("state") or local.get("state") or gguf.get("state") or "unavailable",
+            "reason": str(llamafile.get("reason") or local.get("reason") or gguf.get("reason") or "local model runtime unavailable"),
+            "models": [],
             "cases": [],
             "passed": 0,
             "total": 0,
@@ -1334,9 +1342,17 @@ def benchmark_local_ai(settings: dict[str, Any] | None = None) -> dict[str, Any]
             "success": ok,
         })
     passed = sum(1 for item in results if item["success"])
+    names: list[str] = []
+    if "llamafile" in healthy and llamafile.get("active_model"):
+        names.append(str(llamafile["active_model"]))
+    if "gguf" in healthy:
+        names.extend(str(item.get("name")) for item in (gguf.get("files") or [])
+                     if item.get("valid") and item.get("name"))
+    names.extend(str(name) for name in (local.get("installed_candidates") or []))
     return {
         "state": "healthy",
-        "models": local.get("installed_candidates") or [],
+        "providers": healthy,
+        "models": list(dict.fromkeys(names))[:8],
         "cases": results,
         "passed": passed,
         "total": len(results),

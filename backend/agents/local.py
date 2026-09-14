@@ -12,7 +12,7 @@ class LocalAdvisor(AgentAdapter):
             "status": "installed",
             "availability": "builtin",
             "healthy": True,
-            "version": "0.2.0",
+            "version": "0.3.0",
             "path": "builtin",
             "message": "Built-in deterministic advisor. Advisory only; Guardian still authorizes every action.",
         }

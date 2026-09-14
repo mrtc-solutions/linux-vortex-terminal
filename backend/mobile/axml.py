@@ -104,8 +104,15 @@ def _attr(ns: int, name: int, raw: int, typed: tuple[int, int]) -> bytes:
 
 def _start_element(ns: int, name: int, attrs: list[bytes], line: int = 3) -> bytes:
     header_size = 16
-    # id/class/style indices: 0x00100000 means "none" in the attribute index field.
-    ext = _s32(ns) + _u32(name) + _u16(0x0014) + _u16(len(attrs)) + _u16(0) + _u16(0) + _u16(0)
+    # ResXMLTree_attrExt: ns, name, then attributeStart, attributeSize,
+    # attributeCount, idIndex, classIndex, styleIndex. attributeSize is the
+    # size of one attribute (20), not the attribute count; the indices are 0
+    # when the element has no id/class/style attribute.
+    ext = (
+        _s32(ns) + _u32(name)
+        + _u16(0x0014) + _u16(ATTR_SIZE) + _u16(len(attrs))
+        + _u16(0) + _u16(0) + _u16(0)
+    )
     payload = ext + b"".join(attrs)
     total = header_size + len(payload)
     return _u16(RES_XML_START_ELEMENT_TYPE) + _u16(header_size) + _u32(total) + _u32(line) + _u32(0xFFFFFFFF) + payload

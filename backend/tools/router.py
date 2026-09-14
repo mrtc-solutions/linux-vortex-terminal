@@ -18,7 +18,7 @@ def route(intent: str) -> dict[str, Any]:
         (("whoami", "hostname", "pwd", "username", "user name"), "linux.system.identity"),
         (("listen", "port", "socket"), "linux.network.sockets"),
         (("process", "pids", "process tree"), "linux.system.processes"),
-        (("git log", "history"), "linux.development.git-log"),
+        (("git log", "commit history", "commits"), "linux.development.git-log"),
         (("git branch",), "linux.development.git-branches"),
         (("git diff", "repository diff"), "linux.development.git-diff"),
         (("git",), "linux.development.git-status"),
