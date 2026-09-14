@@ -115,6 +115,19 @@ assert.ok(main.includes('setWindowOpenHandler'), 'unexpected popup creation must
 assert.ok(main.includes("on('will-navigate'"), 'unexpected navigation must be denied');
 assert.ok(main.includes('setPermissionRequestHandler'), 'renderer permissions must fail closed');
 assert.ok(main.includes('isDirectRendererRequest'), 'token injection must be route-scoped');
+assert.ok(main.includes('contextIsolation: true'), 'renderer must be context-isolated');
+assert.ok(main.includes('nodeIntegration: false'), 'renderer must not have node integration');
+assert.ok(main.includes('sandbox: true'), 'renderer must be sandboxed');
+assert.ok(main.includes('webSecurity: true'), 'renderer web security must stay enabled');
+assert.ok(main.includes('allowRunningInsecureContent: false'), 'renderer must block insecure content');
+assert.ok(main.includes('webviewTag: false'), 'renderer must not allow webview tags');
+assert.ok(main.includes("on('will-redirect'"), 'unexpected redirects must be denied');
+assert.ok(main.includes("action: 'deny'"), 'unexpected popup creation must be denied');
+assert.ok(preload.includes('Object.freeze'), 'preload bridge must be frozen');
+assert.strictEqual(
+  (preload.match(/exposeInMainWorld/g) || []).length, 2,
+  'preload must expose exactly the vortexApi + vortexWindow bridges'
+);
 
 const sidecar = 'http://127.0.0.1:8765';
 assert.strictEqual(isAllowedApiRequest('/api/health', 'GET'), true);

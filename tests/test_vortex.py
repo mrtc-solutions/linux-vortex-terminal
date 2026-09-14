@@ -1175,5 +1175,29 @@ The following packages will be upgraded:
         self.assertIn("No command was run", analysis["fact"])
 
 
+class DownloadFilenameTests(unittest.TestCase):
+    def test_header_injection_is_stripped(self):
+        hostile = 'vortex.apk";\r\nX-Injected: 1\r\nContent-Length: 0\r\n\r\n'
+        safe = vtx_backend._safe_download_filename(hostile)
+        self.assertNotIn('"', safe)
+        self.assertNotIn("\r", safe)
+        self.assertNotIn("\n", safe)
+        self.assertNotIn(";", safe)
+        self.assertNotIn(" ", safe)
+        self.assertTrue(safe.startswith("vortex.apk"))
+
+    def test_traversal_and_unicode_are_stripped(self):
+        self.assertEqual(vtx_backend._safe_download_filename("../../etc/passwd"), "....etcpasswd")
+        self.assertEqual(vtx_backend._safe_download_filename("vörtex✓.apk"), "vrtex.apk")
+
+    def test_empty_and_long_names_fall_back_safely(self):
+        self.assertEqual(vtx_backend._safe_download_filename(""), "download.bin")
+        self.assertEqual(vtx_backend._safe_download_filename("...///..."), "......")
+        long_name = "a" * 200 + ".apk"
+        safe = vtx_backend._safe_download_filename(long_name)
+        self.assertEqual(len(safe), 128)
+        self.assertEqual(vtx_backend._safe_download_filename("vortex-terminal_0.3.0_amd64.deb"), "vortex-terminal_0.3.0_amd64.deb")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -28,6 +28,12 @@ class ApkBuildTests(unittest.TestCase):
         self.assertIn("io.vortex.mobile".encode("utf-16le"), raw)
         self.assertIn("Vortex Terminal".encode("utf-16le"), raw)
 
+    def test_axml_config_changes_survives_rotation(self):
+        raw = encode_manifest()
+        # orientation|keyboardHidden|screenSize so API 13+ rotation does not
+        # destroy the WebView activity.
+        self.assertIn(b"\xa0\x04\x00\x00", raw)
+
     def test_dex_header_checksum(self):
         dex = build_webview_dex("http://192.0.2.10:8765/")
         self.assertTrue(dex.startswith(b"dex\n035\x00"))

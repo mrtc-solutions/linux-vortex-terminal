@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from backend.agents.council import critic, discover, consult
-from backend.reports.engine import render, to_pdf
+from backend.reports.engine import render, render_system, to_pdf
 from backend.security.guardian import evaluate, recompute_risk
 from backend.vortex_backend import ExecutionManager, Store, analysis_next_steps, build_plan, cancel_task_operation, command_spec, make_analysis, plan_digest, safe_file_target, suggestion_hints
 from backend.workspace import Workspace
@@ -849,6 +849,16 @@ class WorkspaceTests(unittest.TestCase):
         pdf = to_pdf(operation)
         self.assertTrue(pdf.startswith(b"%PDF-1.4"))
         self.assertIn(b"hello", pdf)
+
+    def test_system_report_never_prints_cwd_as_started(self):
+        doctor = {"distribution": {"pretty_name": "Test Linux"}, "cwd": "/tmp/fake-cwd"}
+        tools = [{"name": "ls", "state": "installed", "version": "1"}]
+        md, _, _ = render_system("md", doctor, tools)
+        text = md.decode("utf-8")
+        for line in text.splitlines():
+            if line.startswith("Started:"):
+                self.assertNotIn("/", line, "a path must never masquerade as a timestamp")
+        self.assertIn("sidecar cwd /tmp/fake-cwd", text)
 
     def test_procedure_learning_from_validated_success(self):
         task = self.workspace.create_task("system health")

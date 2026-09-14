@@ -4001,6 +4001,17 @@ BROWSER_SESSION_TTL_SECONDS = 8 * 3600
 MAX_STATIC_ASSET_BYTES = 8 * 1024 * 1024
 
 
+def _safe_download_filename(filename: str) -> str:
+    """Reduce an operator-visible filename to header-safe ASCII.
+
+    Package filenames can originate from filesystem globs, so quotes,
+    whitespace, and non-ASCII bytes are stripped (never escaped) to keep the
+    Content-Disposition header injectable by nothing.
+    """
+    safe_name = "".join(c for c in str(filename or "") if c.isascii() and (c.isalnum() or c in "._-+"))[:128]
+    return safe_name or "download.bin"
+
+
 class VortexHandler(BaseHTTPRequestHandler):
     store: Store
     executor: ExecutionManager
@@ -4832,9 +4843,7 @@ class VortexHandler(BaseHTTPRequestHandler):
         expected_sha256: str,
     ) -> None:
         """Verify and stream a package without following links or buffering it."""
-        safe_name = "".join(c for c in str(filename or "") if c.isascii() and (c.isalnum() or c in "._-+"))[:128]
-        if not safe_name:
-            safe_name = "download.bin"
+        safe_name = _safe_download_filename(filename)
         try:
             with open_owner_binary(path, max_bytes=max_bytes) as (handle, details):
                 digest_state = hashlib.sha256()

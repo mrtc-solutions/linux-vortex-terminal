@@ -55,11 +55,6 @@ def _s32(n: int) -> bytes:
     return struct.pack("<i", n)
 
 
-def _pad4(data: bytes) -> bytes:
-    pad = (4 - (len(data) % 4)) % 4
-    return data + (b"\x00" * pad)
-
-
 def _utf16_string(value: str) -> bytes:
     encoded = value.encode("utf-16le")
     # uint16 char count, then data, then 0x0000 terminator.
@@ -223,12 +218,13 @@ def encode_manifest(
         bool_attr("hardwareAccelerated", True),
     ], line))
     line += 1
-    # configChanges: orientation|keyboardHidden|screenSize = 0x00A0
+    # configChanges: orientation|keyboardHidden|screenSize = 0x04A0, so rotation
+    # does not destroy and recreate the WebView activity (API 13+).
     chunks.append(_start_element(-1, activity_el, [
         str_attr("name", activity_val),
         str_attr("label", label_val),
         bool_attr("exported", True),
-        int_attr("configChanges", 0x00A0),
+        int_attr("configChanges", 0x04A0),
     ], line))
     line += 1
     chunks.append(_start_element(-1, intent_filter, [], line))
