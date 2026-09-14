@@ -54,7 +54,7 @@
     } else if (provider === 'council') {
       var agents = detail.agents || {};
       detailText = agents.total != null
-        ? agents.available + '/' + agents.total + ' agent adapter(s) available'
+        ? (agents.available == null ? '?' : agents.available) + '/' + agents.total + ' agent adapter(s) available'
         : (detail.reason || 'not probed');
     } else {
       detailText = detail.reason || 'Planning, Guardian and execution run without a model.';

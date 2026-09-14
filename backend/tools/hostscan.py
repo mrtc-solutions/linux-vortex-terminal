@@ -141,7 +141,10 @@ INTERPRETERS = {
 
 INTERPRETER_CODE_FLAGS = {"-c", "-e", "--eval", "-m", "--command"}
 
-HELP_FLAGS = {"-h", "--help", "-V", "--version", "-v", "version", "help"}
+# Bare "help"/"version" are deliberately excluded: most tools treat them as an
+# operand (nmap would resolve "help" as a target), so only dashed flags earn
+# the help-only local label.
+HELP_FLAGS = {"-h", "--help", "-V", "--version", "-v"}
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,80}$")
 _CACHE: dict[str, Any] = {"at": 0.0, "result": None}
@@ -203,7 +206,11 @@ def _is_executable_file(entry: os.DirEntry[str]) -> bool:
         if not entry.is_file(follow_symlinks=True):
             return False
         st = entry.stat(follow_symlinks=True)
-        return bool(st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+        if not (st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)):
+            return False
+        # Mode bits alone can lie (e.g. an owner-only root binary the app
+        # user cannot execute); confirm effective access before reporting it.
+        return os.access(entry.path, os.X_OK)
     except OSError:
         return False
 

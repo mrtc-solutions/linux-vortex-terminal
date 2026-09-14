@@ -90,7 +90,7 @@ def inventory() -> list[dict[str, Any]]:
             "binary": probe.get("path"),
             "version": probe.get("version"),
             "category": reverse_cat.get(name) or meta.get("family"),
-            "capabilities": [meta.get("role")],
+            "capabilities": [meta.get("role") or "tool"],
             "state": probe.get("state"),
             "risk_level": extra.get("risk") or ("high" if meta.get("family", "").startswith("authorized") else "low"),
             "requires_network": extra.get("network") not in (None, "no-network", "loopback-only"),

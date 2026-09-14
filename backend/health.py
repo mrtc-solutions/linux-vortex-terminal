@@ -52,7 +52,7 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     tools = []
     for name, meta in TOOL_CATALOG.items():
         item = probe_executable(name, include_version=False)
-        item.update({"family": meta["family"], "role": meta["role"]})
+        item.update({"family": meta.get("family", "unknown"), "role": meta.get("role", "tool")})
         tools.append(item)
     installed = sum(1 for item in tools if item.get("state") == "installed")
     agents = discover()

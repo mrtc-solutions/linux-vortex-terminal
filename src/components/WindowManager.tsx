@@ -168,7 +168,7 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
 
       {/* Restore tray for minimized windows */}
       {minimized.length > 0 && (
-        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-black/80 border border-[var(--theme-border)] box-glow font-mono">
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-black/80 border border-[var(--theme-border)] box-glow font-mono">
           {minimized.map((popup) => (
             <button
               key={popup.id}

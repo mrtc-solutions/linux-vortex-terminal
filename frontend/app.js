@@ -62,7 +62,7 @@ async function establishBrowserSession() {
 const api = async (path, options = {}) => {
   if (window.vortexApi?.request) return window.vortexApi.request(path, options);
   if (browserCapability) await establishBrowserSession();
-  const response = await fetch(path, { headers: {'Content-Type':'application/json', ...(browserCapability ? {'X-Vortex-Token': browserCapability} : {}), ...(options.headers || {})}, ...options, body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body });
+  const response = await fetch(path, { ...options, headers: {'Content-Type':'application/json', ...(browserCapability ? {'X-Vortex-Token': browserCapability} : {}), ...(options.headers || {})}, body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body });
   let payload;
   try { payload = await response.json(); } catch (_) { throw new Error(`Sidecar returned an invalid response (${response.status})`); }
   if (!response.ok) {

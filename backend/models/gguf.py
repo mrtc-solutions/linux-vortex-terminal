@@ -25,6 +25,7 @@ authority never consume model text as instructions.
 """
 from __future__ import annotations
 
+import copy
 import gc
 import json
 import os
@@ -92,6 +93,10 @@ BALANCED_TUNING = {
 _CLI_CANDIDATES = ("llama-cli", "llama.cpp", "llamacpp", "llama")
 
 _LOCK = threading.RLock()
+# Serializes in-process inference. A timed-out call keeps running detached
+# (llama-cpp-python has no cooperative cancel), so a new call refuses with a
+# busy error instead of sharing the non-thread-safe handle concurrently.
+_PYTHON_BUSY = threading.Lock()
 _LOADED: dict[str, Any] = {"path": None, "handle": None, "family": None, "engine": None}
 _SCAN_CACHE: dict[str, Any] = {"at": 0.0, "key": None, "value": None}
 _SCAN_TTL_SECONDS = 5.0
@@ -304,7 +309,7 @@ def scan(models_dir: str | None = None, *, use_cache: bool = True) -> dict[str, 
         if (now - float(_SCAN_CACHE.get("at") or 0.0)) < _SCAN_TTL_SECONDS:
             cached = _SCAN_CACHE.get("value")
             if isinstance(cached, dict):
-                return cached
+                return copy.deepcopy(cached)
     files: list[dict[str, Any]] = []
     searched: list[str] = []
     for root in roots:
@@ -376,7 +381,7 @@ def scan(models_dir: str | None = None, *, use_cache: bool = True) -> dict[str, 
             if not any(item.get("valid") and (item.get("name") == name or (detect_family(name) == "qwen" and item.get("family") == "qwen")) for item in files)
         ],
     }
-    _SCAN_CACHE.update({"at": now, "key": cache_key, "value": value})
+    _SCAN_CACHE.update({"at": now, "key": cache_key, "value": copy.deepcopy(value)})
     return value
 
 
@@ -410,6 +415,9 @@ def configure_local_source(paths: list[str]) -> dict[str, Any]:
         if not path.name.lower().endswith(".gguf"):
             raise ValueError("selected file is not a supported GGUF model")
         resolved.append(path)
+    parents = {str(path.parent) for path in resolved}
+    if len(parents) != 1:
+        raise ValueError("select model files from a single folder")
     root = Path(os.path.commonpath([str(path.parent) for path in resolved]))
     inspected = scan(str(root), use_cache=False)
     selected = {str(path) for path in resolved}
@@ -642,6 +650,14 @@ def _complete_python(handle: Any, prompt: str, tuning: dict[str, Any], timeout: 
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
     def _call() -> str:
+        if not _PYTHON_BUSY.acquire(blocking=False):
+            raise RuntimeError("local model is still finishing a previous advisory call")
+        try:
+            return _call_locked()
+        finally:
+            _PYTHON_BUSY.release()
+
+    def _call_locked() -> str:
         out = handle(
             prompt,
             max_tokens=int(tuning.get("n_predict", 320)),

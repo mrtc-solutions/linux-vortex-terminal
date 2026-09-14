@@ -132,6 +132,13 @@ def _verify_deb(path: Path, version: str, dpkg_deb: str, env: dict[str, str]) ->
     info = subprocess.run([dpkg_deb, "--info", str(path)], capture_output=True, text=True, timeout=20, env=env)
     if info.returncode != 0:
         raise RuntimeError("dpkg-deb could not verify the built package")
+    # Probe each control member explicitly: dpkg-deb exits 0 only when the
+    # member exists, so a present maintainer script cannot hide behind output
+    # formatting, and a Description that merely mentions one cannot trip us.
+    for script in ("preinst", "postinst", "prerm", "postrm", "triggers"):
+        probe = subprocess.run([dpkg_deb, "--info", str(path), script], capture_output=True, text=True, timeout=20, env=env)
+        if probe.returncode == 0:
+            raise RuntimeError(f"deb package unexpectedly contains a maintainer script ({script})")
     if any(marker in info.stdout.lower() for marker in (" preinst", " postinst", " prerm", " postrm", " triggers")):
         raise RuntimeError("deb package unexpectedly contains a maintainer script")
 

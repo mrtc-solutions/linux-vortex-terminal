@@ -10,7 +10,8 @@ interface FuzzyTabProps {
 }
 
 function MembershipBar({ label, value }: { label: string; value: number }) {
-  const pct = Math.max(0, Math.min(1, value)) * 100;
+  const safe = Number.isFinite(value) ? value : 0;
+  const pct = Math.max(0, Math.min(1, safe)) * 100;
   return (
     <div className="flex items-center gap-2 text-[10px]">
       <span className="text-stone-500 w-14 shrink-0">{label}</span>

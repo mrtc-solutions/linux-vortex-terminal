@@ -8,6 +8,12 @@ import {
 import { sound } from '../../services/soundEffects';
 
 const MAX_BUFFER = 200 * 1024;
+/* eslint-disable-next-line no-control-regex */
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]|\x1b[>=M78]|\r/g;
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, '');
+}
 
 export const Shell: React.FC = () => {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -16,14 +22,18 @@ export const Shell: React.FC = () => {
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
   const streamRef = useRef<StreamHandle | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const startedRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const seqRef = useRef(0);
 
   const appendData = (data: string) => {
     if (!data) return;
+    const clean = stripAnsi(data);
+    if (!clean) return;
     setBuffer((prev) => {
-      const next = prev + data;
+      const next = prev + clean;
       return next.length > MAX_BUFFER ? next.slice(next.length - MAX_BUFFER) : next;
     });
   };
@@ -61,6 +71,7 @@ export const Shell: React.FC = () => {
       const mine = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
       const target = mine || sessions[0];
       if (target && typeof target.id === 'string') {
+        sessionIdRef.current = target.id as string;
         setSessionId(target.id as string);
         setStatus('running');
         attach(target.id as string);
@@ -70,6 +81,7 @@ export const Shell: React.FC = () => {
       const session = (created.session || {}) as JsonRecord;
       const id = String(session.id || '');
       if (!id) throw new Error('Sidecar did not return a session.');
+      sessionIdRef.current = id;
       setSessionId(id);
       setStatus('running');
       attach(id);
@@ -96,10 +108,16 @@ export const Shell: React.FC = () => {
   };
 
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
     void connect();
     return () => {
       streamRef.current?.close();
       streamRef.current = null;
+      /* Popup closed: kill the sidecar session so no orphan shell survives. */
+      const id = sessionIdRef.current;
+      sessionIdRef.current = null;
+      if (id) void killSession(id).catch(() => undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

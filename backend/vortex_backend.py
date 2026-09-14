@@ -4737,6 +4737,18 @@ class VortexHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self._write(data)
                 return
+            if path.startswith("/api/reports/") and len(path.split("/")) == 4:
+                # JSON single-report read for inline preview. Downloads stay on
+                # the /download branch (which also serves the desktop shell).
+                report_id = path.split("/")[-1]
+                report = self.workspace.get_report(report_id)
+                if not report:
+                    return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
+                operation = self.store.get_operation(report.get("operation_id") or "") or {"status": report.get("body", {}).get("status"), "commands": [], "id": report.get("operation_id"), "plan_id": "", "analysis": {"fact": report.get("body", {}).get("markdown", "")}}
+                plan = self.store.get_plan(operation.get("plan_id") or "") if operation.get("plan_id") else {}
+                task = self.workspace.get_task(report.get("task_id") or "") if report.get("task_id") else None
+                data, _content_type, _ext = _load("reports.engine").render("md", operation, plan or {}, task)
+                return self._json(200, {"report": report, "markdown": data.decode("utf-8", "replace")})
             if path == "/api/doctor":
                 query = urllib.parse.parse_qs(parsed.query)
                 if _query_flag(query, "fresh"):

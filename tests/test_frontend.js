@@ -42,6 +42,7 @@ for (const view of ['overview', 'terminal', 'tasks', 'engagements', 'conversatio
   assert.ok(viewButtons.includes(view), `${view} remains reachable from the reorganized navigation`);
 }
 assert.ok(styles.includes('body.plain-mode::before, body.plain-mode::after { display: none; }'), 'plain theme disables decorative backgrounds');
+assert.ok(styles.includes('.ansi-color-10') && styles.includes('.ansi-bg-10') && styles.includes('.term-cursor'), 'PTY ANSI palette and block cursor are styled');
 assert.ok(styles.includes('body::before, body::after { display: none; }'), 'reduced motion disables decorative backgrounds');
 const hexLuminance = value => {
   const channels = value.match(/[0-9a-f]{2}/gi).map(channel => parseInt(channel, 16) / 255)
@@ -75,7 +76,8 @@ assert.ok(app.includes('Vortex Terminal never reads your password'), 'root packa
 // canvas failure can never kill app wiring.
 assert.ok(workspace.includes('data-report-preview') && workspace.includes('data-report-delete'), 'report cards carry PREVIEW and DELETE actions');
 assert.ok(workspace.includes("api(`/api/reports/${encodeURIComponent(btn.dataset.reportDelete)}/delete`"), 'report DELETE posts to the real route');
-assert.ok(workspace.includes('async function previewReport') && workspace.includes("download?format=md"), 'report preview loads the real markdown');
+assert.ok(workspace.includes('async function previewReport') && workspace.includes('api(`/api/reports/${encodeURIComponent(reportId)}`)') && workspace.includes('data.markdown'), 'report preview loads the real markdown through the authenticated JSON route');
+assert.ok(backend.includes('len(path.split("/")) == 4') && backend.includes('"markdown": data.decode'), 'single-report JSON route serves the preview markdown');
 assert.ok(backend.includes('delete_report'), 'report delete route is served');
 const workspacePy = read('backend/workspace.py');
 assert.ok(workspacePy.includes('UPDATE reports SET title=? WHERE task_id IN (SELECT id FROM tasks WHERE conversation_id=?)'), 'renaming a conversation renames its reports');

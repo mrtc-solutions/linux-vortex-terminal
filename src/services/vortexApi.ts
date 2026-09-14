@@ -406,12 +406,12 @@ export const activateGguf = (file: string, role: string) =>
   apiPost<JsonRecord>('/api/models/gguf/activate', { file, role });
 export const importGguf = (path: string) =>
   apiPost<JsonRecord>('/api/models/gguf/import', { paths: [path] });
-export const pullOllamaModel = (model: string) =>
-  apiPost<JsonRecord>('/api/ollama/models/pull', { model });
-export const activateOllamaModel = (model: string, role?: string) =>
-  apiPost<JsonRecord>('/api/ollama/models/activate', role ? { model, role } : { model });
+export const pullOllamaModel = (model: string, role = 'none') =>
+  apiPost<JsonRecord>('/api/ollama/models/pull', { name: model, role });
+export const activateOllamaModel = (model: string, role: string) =>
+  apiPost<JsonRecord>('/api/ollama/models/activate', { name: model, role });
 export const removeOllamaModel = (model: string) =>
-  apiPost<JsonRecord>('/api/ollama/models/remove', { model });
+  apiPost<JsonRecord>('/api/ollama/models/remove', { name: model });
 export const startOllamaServer = () => apiPost<JsonRecord>('/api/ollama/server/start');
 export const stopOllamaServer = () => apiPost<JsonRecord>('/api/ollama/server/stop');
 

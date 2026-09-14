@@ -339,7 +339,9 @@ def inventory() -> dict[str, Any]:
     items.extend(_extra_runtime_items())
 
     for agent in discover():
-        healthy = bool(agent.get("health", {}).get("healthy"))
+        if not isinstance(agent, dict) or not agent.get("id"):
+            continue
+        healthy = bool((agent.get("health") or {}).get("healthy"))
         items.append({
             "id": f"agent:{agent['id']}",
             "kind": "agent",

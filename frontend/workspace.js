@@ -260,7 +260,8 @@
     try {
       const data = await api('/api/tasks');
       const interrupted = data.interrupted || [];
-      $('interrupted-tasks').textContent = interrupted.length ? `Resume available: ${interrupted.map(t => t.id).join(', ')}` : 'No interrupted tasks.';
+      const interruptedEl = $('interrupted-tasks');
+      if (interruptedEl) interruptedEl.textContent = interrupted.length ? `Resume available: ${interrupted.map(t => t.id).join(', ')}` : 'No interrupted tasks.';
       renderList('task-list', data.tasks || [], 'No tasks recorded.', t => `<article class="activity-item"><span class="activity-icon ${t.state === 'COMPLETED' ? '' : t.state === 'FAILED' ? 'failed' : 'running'}"></span><div><div class="activity-title">${esc(t.id)} · ${esc(t.state)}</div><div class="activity-command">${esc(t.request)}</div></div><div class="activity-meta"><div>${esc(t.risk || '—')}</div><div>${esc(fmtDate(t.updated_at))}</div><div><button class="text-button" data-task-restart="${esc(t.id)}">RESTART</button> <button class="text-button" data-task-resume="${esc(t.id)}">RESUME</button> <button class="text-button" data-task-delete="${esc(t.id)}">DELETE</button></div></div></article>`);
       document.querySelectorAll('[data-task-restart]').forEach(btn => btn.addEventListener('click', async () => {
         try { await api(`/api/tasks/${encodeURIComponent(btn.dataset.taskRestart)}/restart`, { method: 'POST', body: { cwd: state.doctor?.cwd } }); toast('Task restarted with a fresh plan.'); loadTasks(); }
@@ -375,9 +376,10 @@
     body.textContent = 'Loading report…';
     if (window.VortexWindows?.showSurface) window.VortexWindows.showSurface(host);
     else host.hidden = false;
-    const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}/download?format=md`);
-    if (!response.ok) throw new Error(`Preview failed (${response.status})`);
-    body.textContent = await response.text();
+    // JSON read through api() so the desktop bridge authenticates the call;
+    // a raw fetch has no capability header and 401s inside Electron.
+    const data = await api(`/api/reports/${encodeURIComponent(reportId)}`);
+    body.textContent = data.markdown || 'Report has no rendered content.';
   }
   $('close-report-preview')?.addEventListener('click', () => {
     const host = $('report-window');

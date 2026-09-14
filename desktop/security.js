@@ -25,6 +25,7 @@ const GET_ROUTES = [
   new RegExp(`^/api/tasks/${SAFE_ID}$`),
   new RegExp(`^/api/tasks/${SAFE_ID}/events$`),
   new RegExp(`^/api/reports/assessment/${SAFE_ID}$`),
+  new RegExp(`^/api/reports/${SAFE_ID}$`),
   new RegExp('^/api/agent/runs$'),
   new RegExp(`^/api/agent/runs/${SAFE_ID}$`),
   new RegExp(`^/api/agent/runs/${SAFE_ID}/stream$`)

@@ -1,7 +1,15 @@
 """Stable internal tool router. Not MCP-dependent."""
 from __future__ import annotations
 
+import re
 from typing import Any
+
+
+def _key_matches(key: str, intent: str) -> bool:
+    # Leading word-boundary matching: "report"/"support" must not route
+    # to the sockets adapter via "port", but plurals ("ports") and
+    # gerunds ("listening") still match their key prefix.
+    return re.search(rf"\b{re.escape(key)}", intent) is not None
 
 
 def route(intent: str) -> dict[str, Any]:
@@ -15,7 +23,7 @@ def route(intent: str) -> dict[str, Any]:
         (("memory", "free", "vmstat", "swap"), "linux.system.health"),
         (("cpu", "processor"), "linux.system.health"),
         (("uptime", "load"), "linux.system.health"),
-        (("whoami", "hostname", "pwd", "username", "user name"), "linux.system.identity"),
+        (("whoami", "hostname", "pwd", "username", "user name", "user"), "linux.system.identity"),
         (("listen", "port", "socket"), "linux.network.sockets"),
         (("process", "pids", "process tree"), "linux.system.processes"),
         (("git log", "commit history", "commits"), "linux.development.git-log"),
@@ -42,6 +50,6 @@ def route(intent: str) -> dict[str, Any]:
         (("service", "unit", "systemd"), "linux.systemd.inspect"),
     )
     for keys, adapter in mapping:
-        if any(key in intent for key in keys):
+        if any(_key_matches(key, intent) for key in keys):
             return {"protocol": "vortex-adapter", "adapter_id": adapter, "mcp": False}
     return {"protocol": "vortex-adapter", "adapter_id": None, "mcp": False, "message": "No reviewed adapter for this intent."}

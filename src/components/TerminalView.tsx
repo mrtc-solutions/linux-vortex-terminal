@@ -108,6 +108,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const busyRef = useRef(false);
   const mountedRef = useRef(true);
+  const bootedRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -137,6 +138,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         const cwd = String(host.cwd || '');
         setPromptUser(user);
         if (cwd) setPromptCwd(shortCwd(cwd));
+        const core = asRecord(asRecord(health.components).core);
+        const version = String(core.version || '0.3.0');
         const model = asRecord(modelsPayload.model);
         const fuzzy = asRecord(model.fuzzy);
         const providers = asRecord(model.providers);
@@ -147,7 +150,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         appendLines([
           {
             id: `greet-1-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), type: 'system',
-            content: `Vortex Terminal v0.3.0 — live sidecar connected.\nHost: ${String(distro || 'this machine')} · ${String(host.architecture || '')}\nLocal AI routing: ${states} · winner: ${String(fuzzy.winner || 'deterministic')}\nGuardian: ARMED · Audit chain: ON · PTY: available via 'shell'.`,
+            content: `Vortex Terminal v${version} — live sidecar connected.\nHost: ${String(distro || 'this machine')} · ${String(host.architecture || '')}\nLocal AI routing: ${states} · winner: ${String(fuzzy.winner || 'deterministic')}\nGuardian: ARMED · Audit chain: ON · PTY: available via 'shell'.`,
           },
           {
             id: `greet-2-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), type: 'output',
@@ -164,6 +167,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   };
 
   useEffect(() => {
+    if (bootedRef.current) return;
+    bootedRef.current = true;
     void boot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

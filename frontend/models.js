@@ -55,7 +55,7 @@
     if (measurable(job)) {
       var pct = Math.max(2, Math.min(100, Math.round(Number(job.percent) || 0)));
       return '<div class="progress' + cls + '"><i style="width:' + pct + '%"></i></div>' +
-        '<div class="model-meta">' + fmtBytes(job.downloaded_bytes) + ' / ' + fmtBytes(job.total_bytes) +
+        '<div class="model-meta">' + (fmtBytes(job.downloaded_bytes) || '?') + ' / ' + fmtBytes(job.total_bytes) +
         (fmtSpeed(job.speed_bps) ? ' · ' + fmtSpeed(job.speed_bps) : '') +
         (fmtEta(job.eta_seconds) ? ' · ' + fmtEta(job.eta_seconds) : '') + '</div>';
     }
@@ -100,7 +100,7 @@
       statusRow('SERVICE', apiState + (runtime.api_reason ? ' · ' + runtime.api_reason : ''), stateClass(apiState)),
       statusRow('ENDPOINT', runtime.endpoint || '—', ''),
       statusRow('SERVER', server.managed ? 'vortex-managed · ' + (server.state || 'stopped') : (serviceReady ? 'external service · running' : 'not managed by Vortex Terminal'), serviceReady || server.state === 'running' ? 'ok' : stateClass(server.state)),
-      statusRow('ARCH', platform.arch + (platform.supported_arch === false ? ' (no user-space build)' : ''), platform.supported_arch === false ? 'bad' : ''),
+      statusRow('ARCH', (platform.arch || 'unknown') + (platform.supported_arch === false ? ' (no user-space build)' : ''), platform.supported_arch === false ? 'bad' : ''),
       statusRow('ARCHIVE HELPER', platform.zstd_available ? 'zstd available' : 'zstd missing — install it in Dependencies', platform.zstd_available ? 'ok' : 'warn'),
       statusRow('OFFLINE', platform.offline ? 'yes — install/download disabled' : 'no', platform.offline ? 'warn' : 'ok'),
       statusRow('DISK FREE', runtime.disk_free_gb != null ? runtime.disk_free_gb + ' GB' : 'unknown', ''),

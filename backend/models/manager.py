@@ -863,7 +863,10 @@ def _publish_managed_root(staged: Path, managed: Path) -> None:
             os.replace(backup, managed)
         raise
     if had_previous:
-        shutil.rmtree(backup)
+        try:
+            shutil.rmtree(backup)
+        except OSError:
+            pass
     directory_fd = os.open(managed.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(directory_fd)
@@ -1454,12 +1457,9 @@ def catalog(status: dict[str, Any] | None = None, settings: dict[str, Any] | Non
 
     items: list[dict[str, Any]] = []
     for canonical_name, meta in MODEL_CATALOG.items():
-        installed = canonical_name in installed_names or any(
-            n == canonical_name or n.startswith(meta["family"] + ":") for n in installed_names
-        )
-        installed_name = canonical_name if canonical_name in installed_names else next(
-            (n for n in installed_names if n.startswith(meta["family"] + ":")), None
-        )
+        family_matches = sorted(n for n in installed_names if n.startswith(meta["family"] + ":"))
+        installed = canonical_name in installed_names or bool(family_matches)
+        installed_name = canonical_name if canonical_name in installed_names else (family_matches[0] if family_matches else None)
         job = live_jobs.get(canonical_name)
         items.append({
             "name": canonical_name,

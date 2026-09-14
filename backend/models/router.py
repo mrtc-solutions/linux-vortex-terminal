@@ -6,6 +6,7 @@ authorize execution, or contact a non-loopback endpoint.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -504,7 +505,7 @@ def model_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     if _STATUS_CACHE.get("key") == cache_key and (now - float(_STATUS_CACHE.get("at") or 0.0)) < _STATUS_TTL_SECONDS:
         cached = _STATUS_CACHE.get("value")
         if isinstance(cached, dict):
-            return cached
+            return copy.deepcopy(cached)
     if not enabled:
         local = {
             "provider": "ollama",
@@ -565,7 +566,7 @@ def model_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
         "routing": {"phases": routes, "resource_mode": (local.get("resources") or {}).get("mode")},
         "message": "Local advisory routing prefers the llamafile loopback server, then on-device GGUF, then Ollama loopback, then the agent council. Deterministic planning and execution remain authoritative.",
     }
-    _STATUS_CACHE.update({"at": now, "key": cache_key, "value": value})
+    _STATUS_CACHE.update({"at": now, "key": cache_key, "value": copy.deepcopy(value)})
     return value
 
 
@@ -1210,11 +1211,11 @@ def advise(request: str, *, plan: dict[str, Any] | None = None, operation: dict[
     if phase == "plan":
         consult_settings = dict(settings)
         consult_settings["model_timeout_seconds"] = min(_model_timeout(settings), 6)
-        try:
-            consult_settings["gguf_timeout_seconds"] = min(
-                max(2, int(settings.get("gguf_timeout_seconds", 20))), 12)
-        except (TypeError, ValueError):
-            consult_settings["gguf_timeout_seconds"] = 12
+        for _key, _default in (("gguf_timeout_seconds", 20), ("llamafile_timeout_seconds", 20)):
+            try:
+                consult_settings[_key] = min(max(2, int(settings.get(_key, _default))), 12)
+            except (TypeError, ValueError):
+                consult_settings[_key] = 12
     responses: list[dict[str, Any]] = []
 
     def _consult(item: dict[str, Any]) -> dict[str, Any]:

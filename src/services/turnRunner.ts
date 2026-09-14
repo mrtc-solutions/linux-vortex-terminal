@@ -48,7 +48,8 @@ function budgetsSeconds(operation: OperationDocument, turn?: TurnResult): number
   const list = Array.isArray(commands) ? commands : [];
   const total = list.reduce((sum, item) => {
     const entry = (item && typeof item === 'object' ? item : {}) as JsonRecord;
-    return sum + Number(entry.timeout_seconds || 30);
+    const seconds = Number(entry.timeout_seconds);
+    return sum + (Number.isFinite(seconds) && seconds > 0 ? seconds : 30);
   }, 0);
   void operation;
   return total;

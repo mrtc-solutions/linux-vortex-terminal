@@ -732,64 +732,80 @@ def server_start(model: str | None = None, settings: dict[str, Any] | None = Non
                  *, timeout: float | None = None) -> dict[str, Any]:
     """Start the managed loopback server for one validated model."""
     settings = _effective_settings(settings)
-    current = server_state(settings)
-    if current.get("state") == "running":
-        return {"state": "running", "endpoint": current["endpoint"], "model": current.get("model"),
-                "pid": current.get("pid"), "served_models": current.get("served_models") or []}
-    if current.get("state") == "starting" and _process_alive(current.get("pid")) and current.get("endpoint"):
-        # A previous start is still loading the model. Wait on it instead of
-        # spawning a second server that would orphan the first process.
-        endpoint = str(current["endpoint"])
-        deadline = time.monotonic() + max(5.0, min(float(timeout or _START_TIMEOUT_SECONDS), 600.0))
+    # Decide and spawn under the lock so two concurrent starts cannot both
+    # observe "stopped" and orphan a second server. The readiness wait runs
+    # outside the lock so status reads never stall behind a model load.
+    with _LOCK:
+        current = server_state(settings)
+        if current.get("state") == "running":
+            return {"state": "running", "endpoint": current["endpoint"], "model": current.get("model"),
+                    "pid": current.get("pid"), "served_models": current.get("served_models") or []}
+        if current.get("state") == "starting" and _process_alive(current.get("pid")) and current.get("endpoint"):
+            # A previous start is still loading the model. Wait on it instead of
+            # spawning a second server that would orphan the first process.
+            wait_for = {"pid": current.get("pid"), "endpoint": str(current["endpoint"]),
+                        "model": current.get("model")}
+            fresh = None
+        else:
+            wait_for = None
+            wanted = str(model or settings.get("llamafile_model") or "").strip()
+            if not wanted:
+                raise PolicyError("No llamafile model selected. Import a model and activate it first.")
+            resolved = resolve_model_path(validate_model_name(wanted), settings)
+            binary = _binary_path()
+            if resolved["kind"] == "gguf":
+                info = binary_status()
+                if not info.get("present") or not info.get("executable"):
+                    raise PolicyError(str(info.get("reason") or "llamafile binary is not installed"))
+                runner = str(binary)
+                model_arg = ["-m", resolved["path"]]
+            else:
+                runner = resolved["path"]
+                model_arg = []
+                try:
+                    os.chmod(runner, 0o700)
+                except OSError as exc:
+                    raise PolicyError(f"imported llamafile is not executable: {exc.strerror or exc}")
+            try:
+                gpu = settings.get("llamafile_gpu") is True
+            except Exception:
+                gpu = False
+            port = _free_loopback_port()
+            endpoint = f"http://127.0.0.1:{port}"
+            argv = [runner, *model_arg, "--server", "--host", "127.0.0.1", "--port", str(port),
+                   "--nobrowser", "-ngl", "99" if gpu else "0"]
+            try:
+                proc = subprocess.Popen(
+                    argv, shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL, env=minimal_env(False), start_new_session=True,
+                )
+            except OSError as exc:
+                raise PolicyError(f"llamafile server failed to start: {exc.strerror or exc}")
+            _write_json(_pid_path(), {"pid": proc.pid, "endpoint": endpoint, "model": resolved["name"],
+                                      "kind": resolved["kind"], "started_at": now_iso()})
+            fresh = {"proc": proc, "endpoint": endpoint, "resolved": resolved}
+    window = max(5.0, min(float(timeout or _START_TIMEOUT_SECONDS), 600.0))
+    if wait_for is not None:
+        deadline = time.monotonic() + window
         last_reason = "server is loading the model"
         while time.monotonic() < deadline:
-            if not _process_alive(current.get("pid")):
+            if not _process_alive(wait_for["pid"]):
                 break
-            health = probe(endpoint)
+            health = probe(wait_for["endpoint"])
             if health.get("ok"):
-                return {"state": "running", "endpoint": endpoint, "model": current.get("model"),
-                        "pid": current.get("pid"), "served_models": health.get("models") or []}
+                return {"state": "running", "endpoint": wait_for["endpoint"], "model": wait_for.get("model"),
+                        "pid": wait_for["pid"], "served_models": health.get("models") or []}
             last_reason = str(health.get("reason") or last_reason)
             time.sleep(1.0)
         else:
             raise PolicyError(f"llamafile server did not answer within the startup window: {last_reason}")
-        # The in-flight process died while we waited; fall through to a fresh start.
-    wanted = str(model or settings.get("llamafile_model") or "").strip()
-    if not wanted:
-        raise PolicyError("No llamafile model selected. Import a model and activate it first.")
-    resolved = resolve_model_path(validate_model_name(wanted), settings)
-    binary = _binary_path()
-    if resolved["kind"] == "gguf":
-        info = binary_status()
-        if not info.get("present") or not info.get("executable"):
-            raise PolicyError(str(info.get("reason") or "llamafile binary is not installed"))
-        runner = str(binary)
-        model_arg = ["-m", resolved["path"]]
-    else:
-        runner = resolved["path"]
-        model_arg = []
-        try:
-            os.chmod(runner, 0o700)
-        except OSError as exc:
-            raise PolicyError(f"imported llamafile is not executable: {exc.strerror or exc}")
-    try:
-        gpu = settings.get("llamafile_gpu") is True
-    except Exception:
-        gpu = False
-    port = _free_loopback_port()
-    endpoint = f"http://127.0.0.1:{port}"
-    argv = [runner, *model_arg, "--server", "--host", "127.0.0.1", "--port", str(port),
-           "--nobrowser", "-ngl", "99" if gpu else "0"]
-    try:
-        proc = subprocess.Popen(
-            argv, shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL, env=minimal_env(False), start_new_session=True,
-        )
-    except OSError as exc:
-        raise PolicyError(f"llamafile server failed to start: {exc.strerror or exc}")
-    _write_json(_pid_path(), {"pid": proc.pid, "endpoint": endpoint, "model": resolved["name"],
-                              "kind": resolved["kind"], "started_at": now_iso()})
-    deadline = time.monotonic() + max(5.0, min(float(timeout or _START_TIMEOUT_SECONDS), 600.0))
+        # The in-flight process died while we waited; retry once as a fresh start.
+        return server_start(model, settings, timeout=timeout)
+    assert fresh is not None
+    proc = fresh["proc"]
+    endpoint = fresh["endpoint"]
+    resolved = fresh["resolved"]
+    deadline = time.monotonic() + window
     last_reason = "server is loading the model"
     while time.monotonic() < deadline:
         if proc.poll() is not None:
@@ -807,6 +823,30 @@ def server_start(model: str | None = None, settings: dict[str, Any] | None = Non
     raise PolicyError(f"llamafile server did not answer within the startup window: {last_reason}")
 
 
+def _pid_is_managed(number: int, record: dict[str, Any]) -> bool:
+    """Confirm a recorded PID is the managed server before signalling it.
+
+    PIDs are recycled by the kernel: a stale record could otherwise point at
+    an unrelated same-user process. The managed server's command line always
+    carries ``--port <recorded port>`` plus the llamafile runner or model
+    path, so require both before any kill.
+    """
+    try:
+        port = str(urllib.parse.urlsplit(str(record.get("endpoint") or "")).port or "")
+    except ValueError:
+        port = ""
+    model = str(record.get("model") or "")
+    if not port or not model:
+        return False
+    try:
+        with open(f"/proc/{number}/cmdline", "rb") as handle:
+            parts = handle.read().decode("utf-8", "replace").split("\x00")
+    except OSError:
+        return False
+    blob = "\x00".join(parts).lower()
+    return "--port" in parts and port in parts and ("llamafile" in blob or model.lower() in blob)
+
+
 def server_stop() -> dict[str, Any]:
     record = _pid_record()
     pid = record.get("pid")
@@ -820,6 +860,12 @@ def server_stop() -> dict[str, Any]:
         except OSError:
             pass
         return {"state": "stopped", "reason": "stale server record cleared"}
+    if _process_alive(number) and not _pid_is_managed(number, record):
+        try:
+            _pid_path().unlink()
+        except OSError:
+            pass
+        return {"state": "stopped", "reason": "stale server record cleared; PID is not the managed server"}
     try:
         os.kill(number, signal.SIGTERM)
     except ProcessLookupError:

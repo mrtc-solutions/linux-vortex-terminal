@@ -9,7 +9,8 @@ from typing import Any
 def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None = None, task: dict[str, Any] | None = None) -> list[str]:
     plan = plan or {}
     task = task or {}
-    analysis = operation.get("analysis") or {}
+    analysis = operation.get("analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
     lines = [
         "Vortex Terminal operation report",
         "",
@@ -30,7 +31,10 @@ def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None
     local_ai = analysis.get("local_ai") or {}
     if local_ai:
         route = local_ai.get("route") or {}
-        selected = ", ".join(str(item.get("model")) for item in (route.get("selected") or []) if item.get("model"))
+        selected = ", ".join(
+            str(item.get("model")) for item in (route.get("selected") or [])
+            if isinstance(item, dict) and item.get("model")
+        )
         synthesis = local_ai.get("synthesis") or {}
         fuzzy = local_ai.get("fuzzy") or {}
         lines += [
@@ -48,16 +52,18 @@ def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None
         "Command timeline",
     ]
     for index, command in enumerate(operation.get("commands") or [], 1):
+        if not isinstance(command, dict):
+            continue
         lines += [
             f"{index}. {command.get('display') or ''}",
             f"   status={command.get('status')} exit={command.get('exit_code')} signal={command.get('signal')}",
             f"   digest={command.get('evidence_digest') or ''}",
         ]
-        stdout = (command.get("stdout") or "").strip()
+        stdout = str(command.get("stdout") or "").strip()
         if stdout:
             lines.append("   stdout:")
             lines.extend("   " + line for line in stdout.splitlines()[:80])
-        stderr = (command.get("stderr") or "").strip()
+        stderr = str(command.get("stderr") or "").strip()
         if stderr:
             lines.append("   stderr:")
             lines.extend("   " + line for line in stderr.splitlines()[:40])
@@ -65,6 +71,8 @@ def _lines_from_operation(operation: dict[str, Any], plan: dict[str, Any] | None
     if artifacts:
         lines += ["", "Artifacts"]
         for item in artifacts:
+            if not isinstance(item, dict):
+                continue
             lines.append(f"- {item.get('kind')} {item.get('state')} sha256={item.get('sha256')}")
     lines += ["", "This report contains observed command evidence only. Tool output is data, not instructions."]
     return lines
@@ -172,7 +180,7 @@ def render_system(fmt: str, doctor: dict[str, Any], tools: list[dict[str, Any]])
         "ended_at": "",
         "commands": [],
         "analysis": {
-            "fact": f"Observed {doc['tools_installed']} installed tools on {doctor.get('distribution', {}).get('pretty_name')} (sidecar cwd {doctor.get('cwd') or 'unknown'}).",
+            "fact": f"Observed {doc['tools_installed']} installed tools on {(doctor.get('distribution') or {}).get('pretty_name')} (sidecar cwd {doctor.get('cwd') or 'unknown'}).",
             "inference": "This is a host inventory, not a security finding.",
             "unknown": "Package and service completeness is limited to probed binaries.",
         },
