@@ -4520,6 +4520,31 @@ class VortexHandler(BaseHTTPRequestHandler):
             if path == "/api/secrets":
                 secret_status = _load("secretstore").status
                 return self._json(200, {"secrets": secret_status()})
+            if path == "/api/aiops/stream":
+                self.send_response(200)
+                self._headers("text/event-stream")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                manager = _load("models.manager")
+                for _ in range(36):
+                    settings = _load("config").load_settings()
+                    try:
+                        runtime = manager.runtime_status()
+                        payload = {"schema_version": SCHEMA_VERSION, "routing": None, "models": manager.catalog(runtime, settings)}
+                        try:
+                            from models.router import live_routing
+                            payload["routing"] = live_routing(settings)
+                        except Exception as exc:
+                            payload["routing"] = {"winner": "deterministic", "reason": f"routing snapshot failed: {redact(str(exc))[:160]}", "ranking": []}
+                    except Exception as exc:
+                        payload = {"schema_version": SCHEMA_VERSION, "routing": {"winner": "deterministic", "reason": f"aiops snapshot failed: {redact(str(exc))[:160]}", "ranking": []}, "models": {}}
+                    try:
+                        self._write(f"event: routing\ndata: {json.dumps(payload)}\n\n".encode())
+                        self.wfile.flush()
+                    except OSError:
+                        break
+                    time.sleep(10.0)
+                return
             if path.startswith("/api/operations/") and path.endswith("/stream"):
                 op_id = path.split("/")[-2]
                 self.send_response(200)

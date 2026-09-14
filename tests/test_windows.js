@@ -175,6 +175,7 @@ assert.strictEqual(isDirectRendererRequest(`${sidecar}/`, sidecar, 'GET'), true)
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/assets/app.js`, sidecar, 'GET'), true);
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/health`, sidecar, 'GET'), false);
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/operations/abc/stream`, sidecar, 'GET'), true);
+assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/aiops/stream`, sidecar, 'GET'), true);
 assert.strictEqual(isSidecarDownloadUrl(`${sidecar}/api/reports/abc/download?format=md`, sidecar), true);
 assert.strictEqual(isSidecarDownloadUrl(`${sidecar}/api/reports/system`, sidecar), true);
 assert.strictEqual(isDirectRendererRequest(`${sidecar}/api/reports/system`, sidecar, 'GET'), true);

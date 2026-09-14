@@ -284,6 +284,30 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(headers.get_content_type(), "text/event-stream")
         self.assertIn(b'"data": "remote"', body)
 
+    def test_aiops_stream_emits_live_routing_snapshot(self):
+        request = urllib.request.Request(self.base + "/api/aiops/stream")
+        with urllib.request.urlopen(request, timeout=30) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers.get_content_type(), "text/event-stream")
+            raw = b""
+            while b"\n\n" not in raw:
+                chunk = response.read(1)
+                if not chunk:
+                    break
+                raw += chunk
+                self.assertLess(len(raw), 128 * 1024, "first stream event must arrive promptly")
+        text = raw.decode("utf-8")
+        self.assertIn("event: routing", text)
+        payload = None
+        for line in text.splitlines():
+            if line.startswith("data: "):
+                payload = json.loads(line[6:])
+                break
+        self.assertIsNotNone(payload)
+        self.assertIn("winner", payload["routing"])
+        self.assertIn("ranking", payload["routing"])
+        self.assertIn("models", payload)
+
     def test_http_security_headers_and_query_safe_logging(self):
         import contextlib
         import io

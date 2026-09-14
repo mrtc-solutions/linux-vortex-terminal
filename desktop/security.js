@@ -100,6 +100,7 @@ function isDirectRendererRequest(rawUrl, sidecarUrl, method = 'GET') {
   try {
     const pathname = decodeURIComponent(new URL(rawUrl).pathname);
     return pathname === '/' || pathname === '/index.html' || pathname.startsWith('/assets/') ||
+      pathname === '/api/aiops/stream' ||
       new RegExp(`^/api/operations/${SAFE_ID}/stream$`).test(pathname) ||
       new RegExp(`^/api/sessions/${SAFE_ID}/stream$`).test(pathname) ||
       isSidecarDownloadUrl(rawUrl, sidecarUrl);
