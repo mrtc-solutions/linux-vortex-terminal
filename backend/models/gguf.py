@@ -1,4 +1,4 @@
-"""Local GGUF model provider — primary on-device inference for VORTEX.
+"""Local GGUF model provider — primary on-device inference for Vortex Terminal.
 
 The operator keeps two curated GGUF files on their own Linux host
 (``~/linux-vortex-terminal/models`` by default):
@@ -16,7 +16,7 @@ Inference engines (first available wins, honestly reported):
 2. a ``llama-cli`` / ``llama.cpp`` style binary on the controlled PATH
    (subprocess, typed argv, timeout, process-group kill)
 3. no engine → ``state == "unavailable"`` with actionable guidance.
-   VORTEX never simulates model output.
+   Vortex Terminal never simulates model output.
 
 Advisory-only contract: same JSON keys as the Ollama router
 (``fact_summary``, ``meaning``, ``unknowns``, ``next_steps``, ``caution``,

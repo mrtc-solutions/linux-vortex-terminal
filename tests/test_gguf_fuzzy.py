@@ -373,6 +373,21 @@ class UpstreamTrackingTests(unittest.TestCase):
         result = upstream_module.refresh("not-a-real-agent")
         self.assertEqual(result["state"], "unknown_agent")
 
+    def test_fetch_head_tolerates_empty_commit_message(self):
+        from unittest.mock import MagicMock
+
+        from backend.agents import upstream as upstream_module
+
+        payload = json.dumps([{"sha": "abc123", "commit": {}}]).encode()
+        response = MagicMock()
+        response.geturl.return_value = "https://api.github.com/repos/o/r/commits?per_page=1"
+        response.read.return_value = payload
+        response.__enter__.return_value = response
+        with patch("urllib.request.urlopen", return_value=response):
+            head = upstream_module._fetch_head("https://api.github.com/repos/o/r/commits?per_page=1", 8.0)
+        self.assertEqual(head["sha"], "abc123")
+        self.assertEqual(head["message"], "")
+
     def test_council_discover_carries_upstream(self):
         from backend.agents.council import discover
 

@@ -1,4 +1,4 @@
-"""Build a signed Android APK of the VORTEX workbench client.
+"""Build a signed Android APK of the Vortex Terminal workbench client.
 
 The APK is a real Android package:
 
@@ -275,7 +275,7 @@ def _generate_signing_material(work: Path) -> tuple[Path, Path]:
     _openssl(
         "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-days", "3650",
         "-nodes", "-keyout", str(key), "-out", str(cert),
-        "-subj", "/CN=VORTEX Mobile/O=VORTEX/OU=MIT-License",
+        "-subj", "/CN=Vortex Terminal Mobile/O=Vortex Terminal/OU=MIT-License",
     )
     try:
         key.chmod(0o600)

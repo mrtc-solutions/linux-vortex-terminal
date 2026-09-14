@@ -402,7 +402,7 @@ def main(argv=None):
     e = sub.add_parser('engagement'); e.add_argument('action', choices=['list','create']); e.add_argument('--name'); e.add_argument('--authorization'); e.add_argument('--target', action='append')
     n = sub.add_parser('_request', help=argparse.SUPPRESS); n.add_argument('request', nargs='+')
     sub._choices_actions = [action for action in sub._choices_actions if action.dest != '_request']
-    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--preflight-digest'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs=argparse.REMAINDER)
+    r = sub.add_parser('run'); r.add_argument('plan_id', nargs='?'); r.add_argument('--digest'); r.add_argument('--approval-token'); r.add_argument('--preflight-digest'); r.add_argument('--direct-mode', nargs=argparse.REMAINDER, dest='direct_mode'); r.add_argument('direct', nargs='*')
     args = parser.parse_args(argv)
     args.as_json = args.as_json or args.format == 'json'
     is_natural_request = args.subcommand == '_request'
@@ -739,7 +739,9 @@ def main(argv=None):
                 return EXIT_CODES['confirmation_required']
         supplied_token = getattr(args, 'approval_token', None)
         token = plan['approval_token'] if supplied_token is None else supplied_token
-        if non_interactive and (not getattr(args, 'digest', None) or supplied_token is None or args.digest != plan['digest']): return EXIT_CODES['policy_denied']
+        if non_interactive and (not getattr(args, 'digest', None) or supplied_token is None or args.digest != plan['digest']):
+            print('vortex: non-interactive execution needs the exact --digest and --approval-token of the plan', file=sys.stderr)
+            return EXIT_CODES['policy_denied']
         needs_privilege = any(spec.get('privilege') == 'root-required' for spec in plan.get('commands', []))
         if needs_privilege and os.getuid() != 0:
             authorize_privileged_handoff(non_interactive)

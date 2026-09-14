@@ -1,4 +1,4 @@
-/* ARENA AI // VORTEX — tactical HUD wiring.
+/* Vortex Terminal — tactical HUD wiring.
    Loaded last, after app.js/workspace.js/models.js (which provide $, esc, api,
    toast, fmtDate, state). Every readout is derived from real backend state:
    /api/dashboard (CPU load, memory, disk, network, AI, sessions) and

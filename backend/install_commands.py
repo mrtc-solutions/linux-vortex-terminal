@@ -2,7 +2,7 @@
 
 Aggregates the verified upstream commands for each layer that is actually
 missing on this host (Ollama runtime, GGUF engine, GGUF model files, and the
-individual AI assistants). VORTEX never executes any of it: the operator
+individual AI assistants). Vortex Terminal never executes any of it: the operator
 copies the block into their main Linux terminal, pastes it, and returns to
 click REFRESH ALL. Sections that are already present are omitted, so the
 block always reflects live state. Assistants without a uniquely verified

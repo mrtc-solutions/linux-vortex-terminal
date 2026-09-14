@@ -1,4 +1,4 @@
-"""VORTEX Guardian — independent of any model or external agent.
+"""Vortex Terminal Guardian — independent of any model or external agent.
 
 The Guardian recomputes risk from typed command specs, policy, and scope.
 An LLM or agent cannot instruct it to approve itself.

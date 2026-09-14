@@ -337,7 +337,7 @@
       section.hidden = false;
       var combined = payload.combined || '';
       host.innerHTML =
-        '<p class="form-note">' + esc(sections.length) + ' item(s) missing on this host. Copy the whole block and paste it into your main Linux terminal, then return and click REFRESH ALL. VORTEX will validate the installers before running anything.</p>' +
+        '<p class="form-note">' + esc(sections.length) + ' item(s) missing on this host. Copy the whole block and paste it into your main Linux terminal, then return and click REFRESH ALL. Vortex Terminal will validate the installers before running anything.</p>' +
         '<div class="command-actions"><button class="secondary-button" data-aiops-copy-all>COPY ALL COMMANDS</button>' +
         '<button class="secondary-button" data-aiops-terminal-all>OPEN IN TERMINAL</button></div>' +
         '<pre class="install-commands">' + esc(combined) + '</pre>';

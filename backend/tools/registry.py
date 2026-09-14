@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 # SPDX identifiers for well-known builtin tools.  ``unknown`` is used honestly
-# where the registry does not carry a verified license; VORTEX never bundles or
+# where the registry does not carry a verified license; Vortex Terminal never bundles or
 # relabels third-party code.
 _BUILTIN_LICENSES: dict[str, str] = {
     "git": "GPL-2.0",

@@ -3,7 +3,7 @@
 llamafile (https://github.com/mozilla-ai/llamafile) distributes llama.cpp as
 one executable that serves an OpenAI-compatible API on loopback
 (``./llamafile -m model.gguf --server --host 127.0.0.1 --port 8080``).
-VORTEX treats it as the primary local advisory provider:
+Vortex Terminal treats it as the primary local advisory provider:
 
 * install: pinned release binary, GitHub digest + size verified, SHA-256
   re-verified after download, stored privately under the data root;

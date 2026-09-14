@@ -6,7 +6,7 @@ Decision chain (highest priority first):
 2. local GGUF files (``Llama-3.2-3B`` fast, ``Qwen2.5-3B`` planner)
 3. Ollama loopback pool — secondary when llamafile/GGUF is slow, missing, or failing
 4. agent council — deterministic secondary when no model responds
-5. deterministic VORTEX core — always available, never fabricated
+5. deterministic Vortex Terminal core — always available, never fabricated
 
 The fuzzy engine blends four signals per provider into a 0..1 score:
 

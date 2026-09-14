@@ -5,7 +5,7 @@ record. :func:`refresh` (only ever operator-triggered, never automatic) would
 check a GitHub HEAD commit for any GitHub-backed advisor; with none tracked
 it is a no-op that never dials the network.
 
-VORTEX never downloads, executes, or auto-installs third-party agent code.
+Vortex Terminal never downloads, executes, or auto-installs third-party agent code.
 """
 from __future__ import annotations
 
@@ -107,7 +107,8 @@ def _fetch_head(api_url: str, timeout: float) -> dict[str, Any]:
     head = payload[0]
     sha = str(head.get("sha") or "")[:40]
     commit = head.get("commit") or {}
-    message = str((commit.get("message") or "").splitlines()[0][:160]) if isinstance(commit, dict) else ""
+    first_line = ((commit.get("message") or "").splitlines() or [""])[0] if isinstance(commit, dict) else ""
+    message = str(first_line[:160])
     return {"sha": sha, "message": message}
 
 

@@ -8,7 +8,7 @@ cancelling, and removing local models.
 Safety invariants:
 
 * Every install/download is explicitly operator-confirmed and never runs in
-  offline mode. VORTEX never captures a sudo password: the install path is a
+  offline mode. Vortex Terminal never captures a sudo password: the install path is a
   user-space tarball, not ``curl | sh``.
 * The service binds to loopback (``127.0.0.1``) only.
 * Model names are validated before ``ollama pull``; they are passed as a
@@ -151,7 +151,7 @@ def _trusted_executable(path: Path, *, managed: bool = False) -> str | None:
 def _locate_binary() -> str | None:
     # Never execute an ambient PATH entry from a writable project/virtualenv.
     # System binaries come only from the controlled runtime PATH; the one
-    # user-owned exception is VORTEX's fixed, mode-0700 managed data tree.
+    # user-owned exception is Vortex Terminal's fixed, mode-0700 managed data tree.
     controlled_path = minimal_env(False).get("PATH", "/usr/local/bin:/usr/bin:/bin")
     found = shutil.which("ollama", path=controlled_path)
     trusted = _trusted_executable(Path(found)) if found else None

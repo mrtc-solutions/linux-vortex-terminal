@@ -1,4 +1,4 @@
-"""Build the Linux desktop (.deb) package of the VORTEX workbench.
+"""Build the Linux desktop (.deb) package of the Vortex Terminal workbench.
 
 The package is a real Debian archive produced by the reviewed
 ``packaging/deb/build.sh`` script — the single source of truth for packaging.
@@ -7,7 +7,7 @@ This module only orchestrates it:
 - runs the builder against the live repository tree (the same files the
   running sidecar serves), so a downloaded package can never lag behind the
   workbench that produced it;
-- stages output under the VORTEX data root (never inside the repository);
+- stages output under the Vortex Terminal data root (never inside the repository);
 - reports size/sha256 plus a frontend digest proving which UI the package
   carries.
 

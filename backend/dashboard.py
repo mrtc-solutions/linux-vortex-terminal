@@ -1,9 +1,9 @@
 """Lightweight terminal dashboard.
 
-Collects live host facts plus VORTEX state (AI, sessions, tools, VPN) into a
+Collects live host facts plus Vortex Terminal state (AI, sessions, tools, VPN) into a
 single panel without interfering with the existing terminal.  Everything that
 cannot be observed on this host is reported as ``unavailable`` rather than
-fabricated; specifically VORTEX does not claim a VPN/Secure Network tunnel when
+fabricated; specifically Vortex Terminal does not claim a VPN/Secure Network tunnel when
 no such subsystem is implemented.
 """
 from __future__ import annotations

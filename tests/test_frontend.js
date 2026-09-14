@@ -58,7 +58,7 @@ assert.ok(contrast(dimColor, lightestSurface) >= 4.5, 'small secondary text meet
 
 // Chat bar must be focusable/labeled and submit must local-echo, reset, and
 // re-enable the SEND button in a finally block.
-assert.ok(index.includes('id="request-input"') && index.includes('aria-label="Ask VORTEX"'), 'request input is labeled');
+assert.ok(index.includes('id="request-input"') && index.includes('aria-label="Ask Vortex Terminal"'), 'request input is labeled');
 assert.ok(index.includes('id="plan-button"') && index.includes('aria-label="Send"'), 'send button is labeled');
 assert.ok(workspace.includes('local-echo'), 'chat submit local-echoes the user message');
 assert.ok(workspace.includes("api('/api/workspace/turn'"), 'chat submit uses the workspace turn endpoint');
@@ -68,7 +68,7 @@ assert.ok(index.includes('id="custom-dependency-form"') && index.includes('id="c
 assert.ok(index.includes('<option value="package">') && index.includes('<option value="ollama">') && index.includes('<option value="model">'), 'manual workflow explicitly classifies package, runtime, and model requests');
 assert.ok(workspace.includes("body: { package: name") && workspace.includes("body: { name, role }"), 'manual input routes to typed package planning or model management rather than a shell');
 assert.ok(app.includes("api('/api/dependencies/execute'") && app.includes('OPEN INSTALL TERMINAL'), 'root package plans launch the exact reviewed CLI handoff in an in-app PTY');
-assert.ok(app.includes('VORTEX never reads your password'), 'root package plan explains narrow OS-owned authentication');
+assert.ok(app.includes('Vortex Terminal never reads your password'), 'root package plan explains narrow OS-owned authentication');
 
 // Reports view is fully interactive: downloads, PREVIEW, DELETE; renaming a
 // conversation renames its reports; next steps are one-click follow-ups; a

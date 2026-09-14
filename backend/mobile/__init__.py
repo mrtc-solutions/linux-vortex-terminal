@@ -1,1 +1,1 @@
-"""Android APK packaging for the VORTEX workbench client."""
+"""Android APK packaging for the Vortex Terminal workbench client."""

@@ -1,4 +1,4 @@
-/* Window controls shared by Electron's native frame and VORTEX in-app windows.
+/* Window controls shared by Electron's native frame and Vortex Terminal in-app windows.
    Pop-up surfaces can be open at the same time: the front one tracks focus,
    minimized ones wait in the tray, and every surface keeps its own state. */
 (function (root) {

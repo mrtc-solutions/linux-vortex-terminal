@@ -1,7 +1,7 @@
 """Minimal Android binary XML (AXML) encoder.
 
 Produces the resource-table XML used inside APKs. Only the constructs needed
-for VORTEX's WebView manifest are implemented. Values are typed; nothing is
+for Vortex Terminal's WebView manifest are implemented. Values are typed; nothing is
 left as plaintext XML inside the APK.
 """
 from __future__ import annotations
@@ -133,8 +133,8 @@ class _Pool:
 def encode_manifest(
     *,
     package: str = "io.vortex.mobile",
-    version_code: int = 219,
-    version_name: str = "0.2.23",
+    version_code: int = 230,
+    version_name: str = "0.3.0",
     label: str = "Vortex Terminal",
     activity: str = "io.vortex.mobile.MainActivity",
     min_sdk: int = 21,

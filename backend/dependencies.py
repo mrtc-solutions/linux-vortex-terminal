@@ -2,14 +2,14 @@
 
 Vortex Terminal never silently installs software and never captures a sudo password.
 Debian/Kali packages can become a reviewed apt plan. Third-party agents stay
-proposal-only until the operator installs them outside VORTEX.
+proposal-only until the operator installs them outside Vortex Terminal.
 """
 from __future__ import annotations
 
 import re
 from typing import Any
 
-# Distro package names for tools VORTEX can actually plan through linux.packages.apt.
+# Distro package names for tools Vortex Terminal can actually plan through linux.packages.apt.
 APT_PACKAGES: dict[str, str] = {
     "nmap": "nmap",
     "curl": "curl",

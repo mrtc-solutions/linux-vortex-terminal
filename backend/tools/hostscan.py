@@ -1,7 +1,7 @@
 """Live Kali/Linux host-tool discovery.
 
-VORTEX's builtin catalog is reviewed and finite. Operators on Kali (and other
-Linux hosts) install additional tools after VORTEX starts. This module:
+Vortex Terminal's builtin catalog is reviewed and finite. Operators on Kali (and other
+Linux hosts) install additional tools after Vortex Terminal starts. This module:
 
 - walks only PATH directories that are safe for managed execution;
 - classifies well-known Kali/Linux security tools;

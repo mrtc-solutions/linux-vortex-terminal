@@ -1,7 +1,7 @@
 """Reviewed SIGIT OSINT capability catalog.
 
 SIGIT — "Simple Information Gathering Toolkit" — is a modular Python OSINT CLI
-(MIT). VORTEX does not vendor, install, or auto-run SIGIT. Instead it reviews
+(MIT). Vortex Terminal does not vendor, install, or auto-run SIGIT. Instead it reviews
 the toolkit's service surface and treats it as engagement-gated OSINT
 capability alongside the existing amass / subfinder / theharvester adapters:
 
@@ -10,7 +10,7 @@ capability alongside the existing amass / subfinder / theharvester adapters:
 - services with no reviewed local equivalent (username / phone / email /
   breach / GitHub / tech / reverse-IP recon) are reported as reviewed
   capabilities that require an authorized engagement and the operator-installed
-  ``sigit`` interactive TUI inside a PTY session. VORTEX never fabricates their
+  ``sigit`` interactive TUI inside a PTY session. Vortex Terminal never fabricates their
   output and never invents a subcommand argv for the TUI.
 
 Reference: the canonical upstream repository (``termuxhackers-id/SIGIT``) was
@@ -27,7 +27,7 @@ from typing import Any
 SIGIT_CLI_NAMES = ("sigit", "sigit.sh")
 
 # SIGIT's service surface. ``safe_adapter`` is the reviewed, typed equivalent
-# VORTEX can already plan; ``None`` means there is no safe local equivalent and
+# Vortex Terminal can already plan; ``None`` means there is no safe local equivalent and
 # the capability must run inside the operator-installed TUI. ``keywords`` are
 # intentionally phrase-scoped so a generic word like "user" or "port" does not
 # hijack an existing reviewed adapter. ``whois`` carries no keywords because the
@@ -176,7 +176,7 @@ def probe_sigit(installed: dict[str, str] | None = None) -> dict[str, Any]:
     """Probe for an operator-installed SIGIT CLI on a safe PATH.
 
     Presence-only: SIGIT's entry point is an interactive TUI that ignores
-    arguments, so VORTEX never invokes it for a version string."""
+    arguments, so Vortex Terminal never invokes it for a version string."""
     found = installed
     if found is None:
         try:

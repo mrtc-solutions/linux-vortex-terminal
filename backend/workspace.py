@@ -307,7 +307,7 @@ class Workspace:
         operation. Once the store has marked that operation
         ``unknown_after_crash`` no such thread exists, so the task is paused and
         the honest unknown outcome is recorded. The task is never marked
-        COMPLETED: VORTEX does not claim an outcome it did not observe.
+        COMPLETED: Vortex Terminal does not claim an outcome it did not observe.
         """
         recovered: list[str] = []
         for task in self.list_tasks(200):
@@ -717,7 +717,7 @@ class Workspace:
         operations, tasks, tools, sessions, and declared/authorized targets).
         Edges come only from explicit relationships in those records.  Nothing
         is invented: a target, tool, or topology link appears here only because
-        VORTEX observed it or an operator declared it, never by guesswork.
+        Vortex Terminal observed it or an operator declared it, never by guesswork.
         """
         limit = max(1, min(int(limit), 500))
         nodes: dict[str, dict[str, Any]] = {}
@@ -752,7 +752,7 @@ class Workspace:
                 target_id, _ = target_node(entry)
                 edge(eng_id, target_id, "authorizes")
             # Excluded targets are deliberately not added as assets: the operator
-            # told VORTEX they are out of scope, so no link is drawn to them.
+            # told Vortex Terminal they are out of scope, so no link is drawn to them.
 
         # Findings (observed evidence) -> task -> operation -> tools.
         findings = self.list_findings()

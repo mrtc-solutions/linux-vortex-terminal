@@ -98,8 +98,6 @@ def consult(plan: dict[str, Any], task: dict[str, Any] | None = None, observatio
     for agent_id in selected:
         result = ADAPTERS[agent_id].submit_task(payload)
         consultations.append(result)
-        if budget["mode"] == "sequential":
-            continue
     for agent_id in selected:
         ADAPTERS[agent_id].cleanup()
     review = critic(plan, consultations)

@@ -69,6 +69,7 @@ class DesktopDebTests(unittest.TestCase):
         # Desktop integration: menu entry + icon, operator-started only.
         desktop_entry = (extract / "usr" / "share" / "applications" / "vortex.desktop").read_text(encoding="utf-8")
         self.assertIn("Exec=vortex serve", desktop_entry)
+        self.assertIn("Name=Vortex Terminal", desktop_entry)
         self.assertTrue((extract / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps" / "vortex.svg").is_file())
         # CLI entry point and man page ship.
         self.assertTrue((extract / "usr" / "bin" / "vortex").is_file())

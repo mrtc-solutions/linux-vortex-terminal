@@ -99,7 +99,7 @@
       statusRow('VERSION', runtime.version || runtime.api_version || 'unknown', runtime.version ? 'ok' : 'warn'),
       statusRow('SERVICE', apiState + (runtime.api_reason ? ' · ' + runtime.api_reason : ''), stateClass(apiState)),
       statusRow('ENDPOINT', runtime.endpoint || '—', ''),
-      statusRow('SERVER', server.managed ? 'vortex-managed · ' + (server.state || 'stopped') : (serviceReady ? 'external service · running' : 'not managed by VORTEX'), serviceReady || server.state === 'running' ? 'ok' : stateClass(server.state)),
+      statusRow('SERVER', server.managed ? 'vortex-managed · ' + (server.state || 'stopped') : (serviceReady ? 'external service · running' : 'not managed by Vortex Terminal'), serviceReady || server.state === 'running' ? 'ok' : stateClass(server.state)),
       statusRow('ARCH', platform.arch + (platform.supported_arch === false ? ' (no user-space build)' : ''), platform.supported_arch === false ? 'bad' : ''),
       statusRow('ARCHIVE HELPER', platform.zstd_available ? 'zstd available' : 'zstd missing — install it in Dependencies', platform.zstd_available ? 'ok' : 'warn'),
       statusRow('OFFLINE', platform.offline ? 'yes — install/download disabled' : 'no', platform.offline ? 'warn' : 'ok'),
@@ -162,7 +162,7 @@
         if (failed || cancelled) controls = '<button class="text-button" id="retry-install-ollama">RETRY</button>';
         installBox.innerHTML =
           '<h3>Install the Ollama runtime</h3>' +
-          '<p>VORTEX resolves the official Ollama release into its own data directory (no root, no <code>curl | sh</code>), requires its published SHA-256 digest, and serves it on loopback only.</p>' +
+          '<p>Vortex Terminal resolves the official Ollama release into its own data directory (no root, no <code>curl | sh</code>), requires its published SHA-256 digest, and serves it on loopback only.</p>' +
           '<ol><li>Operator-confirmed, on-network download.</li><li>Exact release size and mandatory published SHA-256 enforced; malformed archives are rejected.</li><li>Executable and loopback API always verified after install.</li></ol>' +
           '<p>' + esc(line) + '</p>' +
           bar + '<div class="ollama-actions">' + controls + '</div>';
@@ -474,7 +474,7 @@
   async function importLocalModels(files) {
     var getLocalFilePath = window.vortexApi && window.vortexApi.localFilePath;
     if (typeof getLocalFilePath !== 'function') {
-      toast('Local model selection is available in the VORTEX desktop application.', true);
+      toast('Local model selection is available in the Vortex Terminal desktop application.', true);
       return;
     }
     var paths = Array.prototype.map.call(files || [], function (file) { return getLocalFilePath(file); }).filter(Boolean);

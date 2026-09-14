@@ -1,6 +1,6 @@
 """Universal per-function AI assistance.
 
-Every user-facing VORTEX function can request a short advisory hint through
+Every user-facing Vortex Terminal function can request a short advisory hint through
 :func:`assist`. The hint is explanatory only — it never authorizes, never
 executes, and never invents evidence. When no model answers, the function
 continues deterministically with ``available == False``.
@@ -129,7 +129,7 @@ def assist(function: str, request: str = "", *,
 
 
 def coverage() -> dict[str, Any]:
-    """Inspectable registry: every function VORTEX assists with AI."""
+    """Inspectable registry: every function Vortex Terminal assists with AI."""
     return {"assisted_functions": sorted(ASSISTED_FUNCTIONS),
             "count": len(ASSISTED_FUNCTIONS),
             "contract": ("Advisory hints only. Deterministic planning, Guardian, "

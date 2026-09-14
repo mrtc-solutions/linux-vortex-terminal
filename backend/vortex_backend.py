@@ -336,7 +336,7 @@ def data_root() -> Path:
         # Never infer an invoking sudo user's state directory. Opening that
         # user's WAL database as UID 0 can leave root-owned sidecars and lock
         # the application out. Privileged mutations use the narrow sudo broker
-        # while VORTEX itself remains the invoking user.
+        # while Vortex Terminal itself remains the invoking user.
         root = Path(pwd.getpwuid(0).pw_dir) / ".local" / "share" / "vortex"
     else:
         root = xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share") / "vortex"
