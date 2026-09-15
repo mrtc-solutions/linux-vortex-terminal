@@ -1,6 +1,6 @@
 # Real integration audit — 2026-09-15
 
-## Verdict: NOT ready for an unconditional merge/release
+## Historical baseline verdict (ccb838f): NOT ready for release
 
 The passing unit tests and mocked React browser suite did not establish production
 integration or full legacy parity. This audit tested commit ccb838f with its built
@@ -85,7 +85,7 @@ raw operation approval tokens, or generated packages are committed.
 PR #23 should remain unmerged pending these blockers. The earlier green checks
 remain valid for their narrower coverage, not as a 10/10 production guarantee.
 
-## Remediation in progress
+## Implemented remediation and release criteria
 
 The subsequent implementation now hashes the exact inline bundle into the HTML
 CSP, removes network font dependencies, preserves Host through the dev proxy and
@@ -99,5 +99,15 @@ five live tests locally. A new `scripts/release_gates.py` requires ten explicit
 checks, including native Electron and real-weight GGUF inference; missing
 prerequisites are failures, never skips. GitHub Actions supplies a display/window
 manager, Electron, and a CPU inference engine plus a real small GGUF model.
-Final remote results are pending; the original findings above are historical
-reproduction evidence, not a claim that those bugs remain unchanged.
+Remote acceptance on 7428f7f reached 9/10: native Electron and real GGUF inference
+passed, with only three host-dependent Python assertions failing. The follow-up
+fix preserves interpreter trust while allowing verified /usr/bin/python3 as a
+fallback, and verifies the correct bounded log adapter for the actual host's log
+storage. It does not disable security checks or skip platform tests.
+
+The latest `release-acceptance` check on PR #23 is authoritative for the final
+commit. Original findings above are historical reproduction evidence, not a claim
+that those bugs remain unchanged. Saved transcripts now restore retained operation
+output/tables, and Agent Mode and llamafile model management are reachable in React.
+Compatibility scripts remain isolated from the React document; deletion is not
+safe merely because a finite release suite passes.

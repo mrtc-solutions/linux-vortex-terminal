@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import {
   JsonRecord, activateGguf, importGguf, localFilePath, pullOllamaModel,
   activateOllamaModel, removeOllamaModel, startOllamaServer, stopOllamaServer,
-  installOllama, cancelOllamaInstall, cancelOllamaPull,
+  installOllama, cancelOllamaInstall, cancelOllamaPull, importLlamafileModel, activateLlamafileModel, removeLlamafileModel,
 } from '../../services/vortexApi';
 import { ErrorLine, GhostButton, PrimaryButton, Section, asRecord, inputCls } from './common';
 
 const roles = ['primary', 'planner', 'fast', 'specialist'];
-export function ModelManagement({ gguf, runtime, catalog, refresh, onOpenPopup }: {
-  gguf: JsonRecord | null; runtime: JsonRecord | null; catalog: JsonRecord;
+export function ModelManagement({ gguf, runtime, catalog, llamafile, refresh, onOpenPopup }: {
+  llamafile: JsonRecord | null; gguf: JsonRecord | null; runtime: JsonRecord | null; catalog: JsonRecord;
   refresh: () => Promise<void>; onOpenPopup: (kind: string, props?: JsonRecord) => void;
 }) {
   const [role, setRole] = useState('primary');
@@ -77,6 +77,18 @@ export function ModelManagement({ gguf, runtime, catalog, refresh, onOpenPopup }
         <span>{String(file.name)}</span>
         <GhostButton disabled={busy} onClick={() => void run(() => activateGguf(String(file.name), role))}>Use {String(file.name)} for {role}</GhostButton>
       </div>)}
+    </Section>
+    <Section title="Manage llamafile models">
+      <p>Use the sidecar-host GGUF path above to import a model into llamafile storage.</p>
+      <PrimaryButton disabled={busy || !path.trim()} onClick={() => void run(() => importLlamafileModel(path.trim()))}>Import path into llamafile</PrimaryButton>
+      {(Array.isArray(llamafile?.models) ? llamafile.models : []).map(asRecord).map(item => {
+        const name = String(item.name || '');
+        return <div key={name} className="flex flex-wrap gap-2 py-1">
+          <span>{name}</span>
+          <GhostButton disabled={busy} onClick={() => void run(() => activateLlamafileModel(name))}>Activate llamafile {name}</GhostButton>
+          <GhostButton disabled={busy} onClick={() => confirm(`Remove llamafile model ${name}?`, () => removeLlamafileModel(name))}>Remove llamafile {name}</GhostButton>
+        </div>;
+      })}
     </Section>
     <Section title="Manage Ollama">
       <p>API: {String(runtime?.api_state || 'unavailable')} · {String(runtime?.api_reason || '')}</p>

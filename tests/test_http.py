@@ -44,6 +44,15 @@ class HttpApiTests(unittest.TestCase):
         self.thread.start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 
+    def test_dependency_python_fallback_preserves_executable_trust(self):
+        safe = {"state": "installed", "realpath": "/usr/bin/python3"}
+        with patch.object(vtx_backend.sys, "executable", "/unsafe/python"), patch.object(vtx_backend, "probe_executable", side_effect=[{"state": "unsafe"}, safe]) as probe:
+            self.assertEqual(vtx_backend.trusted_python_runtime(), safe)
+            self.assertEqual([call.args[0] for call in probe.call_args_list], ["/unsafe/python", "/usr/bin/python3"])
+        with patch.object(vtx_backend, "probe_executable", return_value={"state": "unsafe", "realpath": "/unsafe/python"}):
+            with self.assertRaisesRegex(PermissionError, "trusted Python"):
+                vtx_backend.trusted_python_runtime()
+
     def test_react_csp_authorizes_only_exact_inline_bundle(self):
         import base64
         import hashlib

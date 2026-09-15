@@ -436,7 +436,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       setInputValue('');
       return;
     }
-    for (const popup of ['tasks', 'scope', 'tools', 'dependencies', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
+    for (const popup of ['agent', 'tasks', 'scope', 'tools', 'dependencies', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
       if (trimmed === popup) {
         appendLines([{ id: `input-${Date.now()}`, timestamp: timeStr, type: 'input', content: trimmed }]);
         onOpenPopup(popup, {});

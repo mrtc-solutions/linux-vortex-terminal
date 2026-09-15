@@ -38,16 +38,50 @@ windows, a 375px viewport, drag bounds, and navigation while a turn is pending.
 Every test also fails on uncaught browser exceptions. CI runs this suite separately
 from the legacy/backend tests.
 
-## Limits
+## Production and release acceptance
 
-These tests do not execute real host mutations, validate native Electron IPC/PTY
-behavior, or certify complete feature parity with the legacy renderer. Resume
-renders saved message text; it does not reconstruct every rich live-output card.
-Legacy scripts and branches are deliberately retained pending a broader parity
-and native-desktop acceptance audit. No zero-bug guarantee is implied.
+The mocked browser suite is only one layer. The following opt-in runners create
+isolated sidecars and use actual HTTP responses, real approved `whoami` execution,
+PTY/SSE output, independent shell sessions, and saved-conversation branching:
 
-## Subsequent real-backend audit
+```sh
+npm run build
+python3 scripts/test_live_ui.py            # Python-served production build
+python3 scripts/test_live_ui.py --dev      # authenticated Vite proxy
+python3 scripts/test_live_ui.py --package  # actual extracted Debian package
+```
 
-See [REAL_INTEGRATION_AUDIT.md](REAL_INTEGRATION_AUDIT.md). Real-backend testing
-found production startup, authenticated dev-proxy, packaging and parity blockers.
-The mocked-browser passes do not supersede these findings.
+`npm run test:release` requires ten checks, without skips: lint/typechecking,
+production build, Python regressions, legacy JS regressions, React browser tests,
+three live browser targets, native Electron/IPC/PTY, and real-weight GGUF inference.
+GitHub Actions installs Electron, Xvfb/Openbox, Chromium and a CPU GGUF engine, and
+downloads a small real model into runner temporary storage. Missing prerequisites
+fail the gate; the earlier regression-only `scripts/final_gates.py` is not a
+substitute for this release suite.
+
+The native test drives the actual frameless Electron window and preload bridge.
+The real-provider test uses a tiny story model from `ggml-org/models` on Hugging
+Face. It verifies successful real inference through the GGUF provider, not answer
+quality, every Ollama/llamafile version, or suitability for operational advice.
+Model weights and binaries are never committed. The acceptance output records
+the model SHA-256 for reproducibility.
+
+The UI now includes model import/activation/removal, guarded Ollama downloads,
+conversation search and Edit & Branch, saved operation evidence restoration,
+native window controls, and a bounded Agent Mode surface distinct from AI Ops.
+
+## Compatibility and limits
+
+Legacy scripts remain only for explicit compatibility/fallback and their regression
+coverage. They are not loaded into the React document. Desktop startup builds
+React; Debian packaging refuses to silently omit it and verifies its digest.
+Deleting the compatibility renderer is a separate migration, not a prerequisite
+for eliminating simultaneous script collisions.
+
+These tests do not certify every external model, privileged host mutation, every
+legacy branch feature, or every desktop/window-manager combination. A 10/10 result
+means all ten defined gates passed—not that all possible bugs are absent.
+
+See [REAL_INTEGRATION_AUDIT.md](REAL_INTEGRATION_AUDIT.md) for historical failure
+evidence and remediation. The latest `release-acceptance` PR check is the source
+of truth for the current commit's release result.

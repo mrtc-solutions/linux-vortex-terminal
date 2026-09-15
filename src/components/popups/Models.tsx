@@ -235,7 +235,7 @@ export const Models: React.FC<{ onOpenPopup: (kind: string, props?: JsonRecord) 
         </Section>
       )}
 
-      <ModelManagement gguf={gguf} runtime={ollama} catalog={catalog} refresh={refresh} onOpenPopup={onOpenPopup} />
+      <ModelManagement llamafile={llamafile} gguf={gguf} runtime={ollama} catalog={catalog} refresh={refresh} onOpenPopup={onOpenPopup} />
 
       {ollama && typeof ollama === 'object' && (
         <Section title="Ollama">

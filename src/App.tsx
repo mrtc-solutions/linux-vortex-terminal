@@ -32,6 +32,7 @@ import { History } from './components/popups/History';
 import { Memory } from './components/popups/Memory';
 import { SettingsPanel } from './components/popups/SettingsPanel';
 import { Launcher } from './components/popups/Launcher';
+import { AgentMode } from './components/popups/AgentMode';
 import { AiOps } from './components/popups/AiOps';
 import { Help } from './components/popups/Help';
 import { About } from './components/popups/About';
@@ -140,6 +141,9 @@ export function App() {
           width: 600, height: 480,
           content: <Launcher onGoTab={(tab) => setActiveTab(tab)} onOpenPopup={(kind) => openPopup(kind)} onClose={close} />,
         };
+        break;
+      case 'agent':
+        spec = { id, title: 'BOUNDED AGENT MODE', width: 680, height: 600, content: <AgentMode /> };
         break;
       case 'aiops':
         spec = { id, title: 'AI OPERATIONS', icon: <Bot className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 640, height: 560, content: <AiOps /> };

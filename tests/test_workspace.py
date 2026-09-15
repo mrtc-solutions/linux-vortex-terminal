@@ -303,7 +303,11 @@ class WorkspaceTests(unittest.TestCase):
             generic_logs = build_plan(self.store, phrase, self.tmp.name)
             self.assertEqual(generic_logs["kind"], "plan", phrase + ": " + "; ".join(generic_logs["notes"]))
             if generic_logs["status"] == "planned":
-                self.assertEqual(generic_logs["commands"][0]["adapter_id"], "linux.systemd.journal", phrase)
+                if phrase == "show system logs" and Path("/var/log/syslog").is_file():
+                    self.assertEqual(generic_logs["commands"][0]["adapter_id"], "linux.filesystem.log", phrase)
+                    self.assertEqual(generic_logs["commands"][0]["argv"], ["tail", "-n", "200", "/var/log/syslog"])
+                else:
+                    self.assertEqual(generic_logs["commands"][0]["adapter_id"], "linux.systemd.journal", phrase)
         ssh_config = build_plan(self.store, "test ssh connectivity to lab.example.test", self.tmp.name)
         self.assertEqual(ssh_config["kind"], "ssh_diagnostics", ssh_config["notes"])
         # Connectivity checks are engagement-gated; key assertion is that the
@@ -770,7 +774,11 @@ class WorkspaceTests(unittest.TestCase):
         journal = build_plan(self.store, "show syslog", self.tmp.name)
         self.assertEqual(journal["kind"], "plan")
         if journal["status"] == "planned":
-            self.assertEqual(journal["commands"][0]["adapter_id"], "linux.systemd.journal")
+            if Path("/var/log/syslog").is_file():
+                self.assertEqual(journal["commands"][0]["adapter_id"], "linux.filesystem.log")
+                self.assertEqual(journal["commands"][0]["argv"], ["tail", "-n", "200", "/var/log/syslog"])
+            else:
+                self.assertEqual(journal["commands"][0]["adapter_id"], "linux.systemd.journal")
         remotes = build_plan(self.store, "show git remotes", self.tmp.name)
         self.assertEqual(remotes["kind"], "plan")
         if remotes["status"] == "planned":

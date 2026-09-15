@@ -537,6 +537,19 @@ def probe_executable(name: str, *, include_version: bool = True) -> dict[str, An
         return {"name": name, "state": "blocked", "path": str(path), "error": str(exc), "version": None}
 
 
+def trusted_python_runtime() -> dict[str, Any]:
+    """Use a verified interpreter, including when launched from an unsafe venv.
+
+    The dependency CLI is stdlib-only. Fall back only to the known system
+    interpreter, never an unverified PATH hit or a relaxed trust policy.
+    """
+    for candidate in dict.fromkeys((sys.executable, "/usr/bin/python3")):
+        runtime = probe_executable(candidate, include_version=False)
+        if runtime.get("state") == "installed" and runtime.get("realpath"):
+            return runtime
+    raise PermissionError("the trusted Python runtime is unavailable")
+
+
 def trusted_privilege_broker() -> dict[str, Any]:
     """Identify the fixed, root-owned sudo broker used by interactive CLI runs.
 
@@ -5410,9 +5423,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                     or cli_path.resolve(strict=True).parent != (app_root / "cli").resolve(strict=True)
                 ):
                     raise PermissionError("the reviewed Vortex Terminal CLI entry point is unavailable or unsafe")
-                python = probe_executable(sys.executable, include_version=False)
-                if python.get("state") != "installed" or not python.get("realpath"):
-                    raise PermissionError("the trusted Python runtime is unavailable")
+                python = trusted_python_runtime()
                 command = [python["realpath"], str(cli_path), "run", plan_id]
                 with self.sessions.lock:
                     if any(item.get("status") == "running" and item.get("command") == command for item in self.sessions.sessions.values()):

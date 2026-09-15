@@ -212,3 +212,20 @@ test('native application controls use the preload bridge', async ({ page }) => {
   await page.getByLabel('Close application').click();
   expect(await page.evaluate(() => (window as unknown as { nativeActions: string[] }).nativeActions)).toEqual(['minimize', 'maximize', 'close']);
 });
+
+test('bounded agent mode exposes backend refusal honestly', async ({ page }) => {
+  await boot(page);
+  await page.route('**/api/agent/runs', async route => {
+    if (route.request().method() === 'POST') {
+      expect(route.request().postDataJSON()).toEqual({ goal: 'identify this host', max_steps: 5 });
+      await route.fulfill({ json: { run: { id: 'test-run', goal: 'identify this host', status: 'finished' }, events: [{ seq: 1, kind: 'refused', payload: { reason: 'No real model available' } }] } });
+    } else await route.fulfill({ json: { runs: [] } });
+  });
+  await page.route('**/api/agent/runs/test-run', route => route.fulfill({ json: { run: { id: 'test-run', goal: 'identify this host', status: 'finished' }, events: [{ seq: 1, kind: 'refused', payload: { reason: 'No real model available' } }] } }));
+  await open(page, 'Agent Mode');
+  const agent = page.getByRole('dialog', { name: 'BOUNDED AGENT MODE' });
+  await agent.getByLabel('Agent goal').fill('identify this host');
+  await agent.getByRole('button', { name: 'Start bounded run' }).click();
+  await expect(agent.getByText(/No real model available/)).toBeVisible();
+  await expect(agent.getByRole('button', { name: 'Approve exact agent step' })).toHaveCount(0);
+});
