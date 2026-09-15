@@ -14,11 +14,22 @@ listed as blocked, with the exact output that blocked it — never as a pass.
 | 11 — same suite against the **Qt VNC platform plugin** serving a real Qt application | this checkout | **PASS** (43 checks) |
 | 1-10 | GitHub Actions, both jobs | **PASS** — `FINAL RELEASE CHECKS: 11/11 (100%)` |
 
-The release run that first reported 11/11 is
+The verified head of this branch is commit `56e0233`:
+<https://github.com/mrtc-solutions/linux-vortex-terminal/actions/runs/34941384749>
+reported `FINAL RELEASE CHECKS: 11/11 (100%)`, with both jobs (`browser` and
+`release-acceptance`) succeeding, and published the
+`remote-desktop-acceptance` build artifact (2,013 bytes) containing the JSON
+report this document summarises. The first 11/11 run on the branch was
 <https://github.com/mrtc-solutions/linux-vortex-terminal/actions/runs/34940036051>
-on commit `c6b7298`. Later commits in this branch touch documentation, the
-evidence wiring and test fixtures only; the CI run for the final commit is listed
-on the pull request.
+on commit `c6b7298`; the commits after it fix the evidence-directory write and
+documentation only.
+
+Evidence that can be retrieved from this development sandbox is limited to the
+GitHub API: check-run conclusions and each run's summary annotation. Run logs and
+artifact archives are served from GitHub's results/blob hosts, which are
+unreachable here, so the per-check detail of the x11vnc run lives on the run page
+itself. The equivalent per-check list for the Qt target — which runs in this
+checkout — is reproduced in full below.
 
 ## What "real" means here
 
