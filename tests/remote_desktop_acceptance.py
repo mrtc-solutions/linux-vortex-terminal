@@ -1103,7 +1103,11 @@ def run_acceptance(args: argparse.Namespace) -> int:
     report = results.report()
     print(f"\n{report['passed']} checks passed, {report['failed']} failed")
     if args.report:
-        Path(args.report).write_text(json.dumps({
+        report_path = Path(args.report)
+        # Evidence directories are created on demand: a missing one must never
+        # turn a finished run into a crash.
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps({
             "target": target.flavour if target else None,
             "target_description": getattr(target, "display_name", None),
             "sidecar_port": sidecar.port if sidecar else None,
