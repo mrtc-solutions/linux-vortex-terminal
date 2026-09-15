@@ -536,8 +536,13 @@ class X11VncTarget:
             self.vnc_procs = []
 
     def resume(self) -> None:
+        """Bring the VNC service back and wait until it really serves again."""
         env = {"DISPLAY": f":{self.display}"}
         self._spawn_vnc_servers(env)
+        # A restarted server needs a moment to bind its ports; reconnecting before
+        # then would test the harness, not the session's recovery.
+        wait_for_banner(self.port, timeout=20.0)
+        wait_for_banner(self.auth_port, timeout=20.0)
 
     def _spawn_vnc_servers(self, env: dict) -> None:
         self.vnc_procs = [
