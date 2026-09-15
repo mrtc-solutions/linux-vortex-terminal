@@ -251,6 +251,10 @@ service on the target.
 | `python3 -m unittest tests.test_remote_desktop -q` | Scope/SSRF enforcement, ticket lifecycle, approval rules, concurrency/idle/revocation, redaction, dependency reporting, disconnect bookkeeping. | 40/40 pass |
 | `python3 tests/remote_desktop_acceptance.py --target x11vnc` | Same acceptance against an **independent** server (Xvfb + openbox + xterm + xev + x11vnc) including a real VNC-authentication endpoint and a live display resize. | Runnable where `xvfb x11vnc xterm x11-utils x11-xserver-utils xdotool openbox` are installed (see [§10](#10-limitations-and-known-gaps)) |
 
+The exact commands, environment, per-check results, gate table, and blocked-path
+evidence for the current commit are recorded in
+[`REMOTE_DESKTOP_ACCEPTANCE.md`](REMOTE_DESKTOP_ACCEPTANCE.md).
+
 Reproduce the acceptance run (PyQt5 target):
 
 ```bash
