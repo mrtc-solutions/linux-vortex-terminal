@@ -14,15 +14,17 @@ listed as blocked, with the exact output that blocked it — never as a pass.
 | 11 — same suite against the **Qt VNC platform plugin** serving a real Qt application | this checkout | **PASS** (43 checks) |
 | 1-10 | GitHub Actions, both jobs | **PASS** — `FINAL RELEASE CHECKS: 11/11 (100%)` |
 
-The verified head of this branch is commit `56e0233`:
+The acceptance evidence in this file corresponds to the last code commit on this
+branch, `56e0233`:
 <https://github.com/mrtc-solutions/linux-vortex-terminal/actions/runs/34941384749>
 reported `FINAL RELEASE CHECKS: 11/11 (100%)`, with both jobs (`browser` and
 `release-acceptance`) succeeding, and published the
 `remote-desktop-acceptance` build artifact (2,013 bytes) containing the JSON
 report this document summarises. The first 11/11 run on the branch was
 <https://github.com/mrtc-solutions/linux-vortex-terminal/actions/runs/34940036051>
-on commit `c6b7298`; the commits after it fix the evidence-directory write and
-documentation only.
+on commit `c6b7298`. Commits after `56e0233` change documentation only, and CI
+re-runs all eleven gates for each of them; the run for the merge commit is on
+`main`.
 
 Evidence that can be retrieved from this development sandbox is limited to the
 GitHub API: check-run conclusions and each run's summary annotation. Run logs and
