@@ -5,10 +5,9 @@ import {
   JsonRecord, archiveConversation, createConversation, deleteConversation,
   exportConversation, listConversations, renameConversation,
 } from '../../services/vortexApi';
-import { persistConversationId } from '../../services/turnRunner';
 import { DangerButton, EmptyLine, ErrorLine, GhostButton, PrimaryButton, Section, StateBadge, inputCls } from './common';
 
-export const History: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+export const History: React.FC<{ onClose: () => void; onSelect: (id: string) => Promise<void> }> = ({ onClose, onSelect }) => {
   const [items, setItems] = useState<JsonRecord[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameText, setRenameText] = useState('');
@@ -45,8 +44,7 @@ export const History: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   };
 
   const resume = async (id: string) => {
-    persistConversationId(id);
-    onClose();
+    await run(`resume-${id}`, async () => { await onSelect(id); onClose(); });
   };
 
   const startNew = async () => {
@@ -56,7 +54,8 @@ export const History: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     try {
       const payload = await createConversation('New conversation');
       const created = (payload.conversation || {}) as JsonRecord;
-      if (typeof created.id === 'string') persistConversationId(created.id);
+      if (typeof created.id !== 'string') throw new Error('Server did not return a conversation ID.');
+      await onSelect(created.id);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -105,7 +104,7 @@ export const History: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                       onChange={(e) => setRenameText(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') void commitRename(id);
-                        if (e.key === 'Escape') setRenaming(null);
+                        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setRenaming(null); }
                       }}
                       autoFocus
                       spellCheck={false}
@@ -120,7 +119,7 @@ export const History: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                  <PrimaryButton onClick={() => void resume(id)}>Resume</PrimaryButton>
+                  <PrimaryButton disabled={!!busy} onClick={() => void resume(id)}>Resume</PrimaryButton>
                   <GhostButton onClick={() => { setRenaming(id); setRenameText(String(item.title || '')); }}>Rename</GhostButton>
                   <GhostButton onClick={() => { void exportConversation(id).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))); }}>
                     <span className="flex items-center gap-1"><Download className="w-3 h-3" />Export</span>

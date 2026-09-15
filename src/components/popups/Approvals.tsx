@@ -9,6 +9,7 @@ import { approveMutation, executePlan, watchOperation } from '../../services/tur
 import { sound } from '../../services/soundEffects';
 
 interface ApprovalsProps {
+  onBusyChange?: (busy: boolean) => void;
   plan: PlanDocument;
   guardian: JsonRecord;
   onApproved: (operation: OperationDocument) => void;
@@ -23,8 +24,9 @@ function riskColor(risk: string): string {
   return 'text-emerald-400 border-emerald-800 bg-emerald-950/40';
 }
 
-export const Approvals: React.FC<ApprovalsProps> = ({ plan, guardian, onApproved, onRejected, onClose, mutation }) => {
-  const [busy, setBusy] = useState(false);
+export const Approvals: React.FC<ApprovalsProps> = ({ plan, guardian, onApproved, onRejected, onClose, mutation, onBusyChange }) => {
+  const [busy, setBusyState] = useState(false);
+  const setBusy = (value: boolean) => { setBusyState(value); onBusyChange?.(value); };
   const [liveStatus, setLiveStatus] = useState('');
   const [error, setError] = useState('');
   const [pendingMutation, setPendingMutation] = useState<OperationDocument | null>(() => {
@@ -47,6 +49,7 @@ export const Approvals: React.FC<ApprovalsProps> = ({ plan, guardian, onApproved
       sound.playAlert();
       return;
     }
+    setBusy(false);
     sound.playSuccess();
     onApproved(operation);
     onClose();
@@ -111,6 +114,7 @@ export const Approvals: React.FC<ApprovalsProps> = ({ plan, guardian, onApproved
     try {
       await rejectPlan(String(plan.id));
       sound.playKeypress();
+      setBusy(false);
       onRejected();
       onClose();
     } catch (err) {

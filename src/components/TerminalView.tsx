@@ -15,13 +15,14 @@ import {
 } from 'lucide-react';
 import {
   ApiError, JsonRecord, OperationDocument, TurnResult,
-  getModels, getSystemHealth, stopAll,
+  getModels, getSystemHealth, stopAll, getConversation,
 } from '../services/vortexApi';
-import { startTurn, watchOperation } from '../services/turnRunner';
+import { startTurn, watchOperation, persistConversationId } from '../services/turnRunner';
 import { setLastTurn } from '../services/lastTurnStore';
 import { advisorySummary, guardianSummary, toFuzzyConsensus } from '../services/realFuzzyAdapter';
 
 interface TerminalViewProps {
+  selectionRef: React.MutableRefObject<(id: string) => Promise<void>>;
   onInspectFuzzy: (consensus: FuzzyConsensusResult) => void;
   onNavigateToOut: () => void;
   onNavigateToMap: () => void;
@@ -84,6 +85,7 @@ function commandOutput(operation: OperationDocument): { text: string; exitCode: 
 }
 
 export const TerminalView: React.FC<TerminalViewProps> = ({
+  selectionRef,
   onInspectFuzzy,
   onNavigateToOut,
   onNavigateToMap,
@@ -118,6 +120,32 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const appendLines = (lines: TerminalLine[]) => {
     setHistory((prev) => [...prev, ...lines].slice(-400));
   };
+
+  useEffect(() => {
+    selectionRef.current = async (id: string) => {
+      if (busyRef.current) throw new Error('Wait for the active operation before switching conversations.');
+      busyRef.current = true;
+      setIsProcessing(true);
+      try {
+        const payload = await getConversation(id);
+        if (asRecord(payload.conversation).id !== id || !Array.isArray(payload.messages)) throw new Error('Invalid conversation response.');
+        const lines: TerminalLine[] = payload.messages.map((value, index) => {
+          const message = asRecord(value);
+          return { id: String(message.id || `message-${index}`), timestamp: String(message.created_at || ''),
+            type: message.role === 'user' ? 'input' : 'output', content: String(message.content || '') };
+        });
+        persistConversationId(id);
+        if (localStorage.getItem('vortex.conversationId') !== id) throw new Error('Unable to save conversation selection.');
+        setHistory(lines);
+        setInputValue('');
+        setCommandHistory([]);
+        setHistoryIndex(-1);
+      } finally {
+        busyRef.current = false;
+        setIsProcessing(false);
+      }
+    };
+  }, [selectionRef]);
 
   // Boot: real sidecar handshake, then a greeting built from live facts.
   // Also reused by the `retry` command after a failed handshake.
@@ -374,7 +402,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       setInputValue('');
       return;
     }
-    for (const popup of ['tasks', 'scope', 'tools', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
+    for (const popup of ['tasks', 'scope', 'tools', 'dependencies', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
       if (trimmed === popup) {
         appendLines([{ id: `input-${Date.now()}`, timestamp: timeStr, type: 'input', content: trimmed }]);
         onOpenPopup(popup, {});

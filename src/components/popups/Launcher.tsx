@@ -29,6 +29,7 @@ export const Launcher: React.FC<LauncherProps> = ({ onGoTab, onOpenPopup, onClos
   };
 
   const tiles: Tile[] = [
+    { label: 'Dependencies', hint: 'Missing tools', icon: <Wrench className="w-5 h-5" />, action: go(() => onOpenPopup('dependencies')) },
     { label: 'Terminal', hint: 'Ask + run', icon: <TerminalIcon className="w-5 h-5" />, action: go(() => onGoTab('terminal')) },
     { label: 'Tactical Map', hint: 'Asset graph', icon: <MapPin className="w-5 h-5" />, action: go(() => onGoTab('map')) },
     { label: '/out', hint: 'Evidence', icon: <FolderDown className="w-5 h-5" />, action: go(() => onGoTab('out')) },

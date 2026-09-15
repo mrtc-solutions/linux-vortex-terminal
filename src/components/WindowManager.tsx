@@ -22,6 +22,8 @@ type WindowState = 'normal' | 'minimized' | 'maximized';
 interface FrameState {
   windowState: WindowState;
   z: number;
+  x?: number;
+  y?: number;
 }
 
 const CASCADE_DX = 36;
@@ -29,6 +31,13 @@ const CASCADE_DY = 30;
 
 export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose }) => {
   const [frames, setFrames] = useState<Record<string, FrameState>>({});
+  const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
+  useEffect(() => {
+    const resize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
+  const drag = useRef<{ id: string; x: number; y: number; left: number; top: number } | null>(null);
   const zCounter = useRef(50);
 
   const bringToFront = useCallback((id: string) => {
@@ -36,7 +45,7 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
     const z = zCounter.current;
     setFrames((prev) => ({
       ...prev,
-      [id]: { windowState: prev[id]?.windowState || 'normal', z },
+      [id]: { ...prev[id], windowState: prev[id]?.windowState || 'normal', z },
     }));
   }, []);
 
@@ -59,7 +68,8 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
   // Esc closes the topmost normal/maximized window.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || popups.length === 0) return;
+      if (event.key !== 'Escape' || event.defaultPrevented || popups.length === 0) return;
+      if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
       const ordered = [...popups].sort(
         (a, b) => (frames[b.id]?.z || 0) - (frames[a.id]?.z || 0),
       );
@@ -74,13 +84,13 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
     if (windowState === 'minimized') {
       setFrames((prev) => ({
         ...prev,
-        [id]: { windowState, z: prev[id]?.z || 50 },
+        [id]: { ...prev[id], windowState, z: prev[id]?.z || 50 },
       }));
       return;
     }
     zCounter.current += 1;
     const z = zCounter.current;
-    setFrames((prev) => ({ ...prev, [id]: { windowState, z } }));
+    setFrames((prev) => ({ ...prev, [id]: { ...prev[id], windowState, z } }));
   }, []);
 
   const minimized = useMemo(
@@ -98,13 +108,15 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
         const maximized = frame.windowState === 'maximized';
         const offsetX = (index % 6) * CASCADE_DX;
         const offsetY = (index % 6) * CASCADE_DY;
-        const width = Math.min(popup.width || 640, window.innerWidth - 32);
-        const height = Math.min(popup.height || 480, window.innerHeight - 32);
+        const width = Math.min(popup.width || 640, viewport.width - 32);
+        const height = Math.min(popup.height || 480, viewport.height - 32);
+        const left = Math.max(16, Math.min(frame.x ?? (viewport.width - width) / 2 + offsetX, viewport.width - width - 16));
+        const top = Math.max(16, Math.min(frame.y ?? viewport.height * .46 - height / 2 + offsetY, viewport.height - height - 16));
         return (
           <div
             key={popup.id}
             role="dialog"
-            aria-modal="true"
+            aria-modal="false"
             aria-label={popup.title}
             className="fixed inset-0 z-50 pointer-events-none"
             style={{ zIndex: 50 + frame.z, display: isMinimized ? 'none' : 'block' }}
@@ -115,8 +127,8 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
               style={maximized
                 ? { left: 12, right: 12, top: 12, bottom: 12 }
                 : {
-                    left: `max(16px, calc(50% - ${width / 2}px + ${offsetX}px))`,
-                    top: `max(16px, calc(46% - ${height / 2}px + ${offsetY}px))`,
+                    left,
+                    top,
                     width: `${width}px`,
                     height: `${height}px`,
                     maxWidth: 'calc(100vw - 32px)',
@@ -124,12 +136,29 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
                   }}
             >
               {/* Titlebar */}
-              <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--theme-border)] bg-black/40 select-none shrink-0">
-                <div className="flex items-center gap-2 text-xs font-bold tracking-wider text-[var(--theme-primary)]">
+              <div
+                onPointerDown={(event) => {
+                  if (maximized || event.button !== 0 || (event.target as Element).closest('button')) return;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  drag.current = { id: popup.id, x: event.clientX, y: event.clientY, left, top };
+                  bringToFront(popup.id);
+                }}
+                onPointerMove={(event) => {
+                  const d = drag.current;
+                  if (!d || d.id !== popup.id) return;
+                  const x = Math.max(16, Math.min(d.left + event.clientX - d.x, viewport.width - width - 16));
+                  const y = Math.max(16, Math.min(d.top + event.clientY - d.y, viewport.height - height - 16));
+                  setFrames(prev => ({ ...prev, [popup.id]: { ...prev[popup.id], x, y } }));
+                }}
+                onPointerUp={() => { drag.current = null; }}
+                onPointerCancel={() => { drag.current = null; }}
+                style={{ touchAction: 'none' }}
+                className="flex items-center justify-between px-3 py-2 border-b border-[var(--theme-border)] bg-black/40 select-none shrink-0">
+                <div className="flex items-center gap-2 min-w-0 text-xs font-bold tracking-wider text-[var(--theme-primary)]">
                   {popup.icon}
-                  <span className="glow-primary">{popup.title}</span>
+                  <span className="glow-primary truncate">{popup.title}</span>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1 shrink-0">
                   <button
                     onClick={() => setState(popup.id, 'minimized')}
                     title="Minimize"
@@ -168,7 +197,7 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
 
       {/* Restore tray for minimized windows */}
       {minimized.length > 0 && (
-        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-black/80 border border-[var(--theme-border)] box-glow font-mono">
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[500] max-w-[calc(100vw-24px)] max-h-[30vh] overflow-auto flex flex-wrap items-center gap-1.5 px-2 py-1.5 rounded-lg bg-black/80 border border-[var(--theme-border)] box-glow font-mono">
           {minimized.map((popup) => (
             <button
               key={popup.id}

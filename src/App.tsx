@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ShieldCheck, TerminalSquare, ListChecks, Crosshair, Wrench, BrainCircuit,
   Activity, History as HistoryIcon, Database, Settings as SettingsIcon, LayoutGrid,
@@ -19,6 +19,7 @@ import { FuzzyTab } from './components/FuzzyTab';
 import { AgentReachInspector } from './components/AgentReachInspector';
 import { FuzzyOrchestrationModal } from './components/FuzzyOrchestrationModal';
 import { WindowManager, PopupSpec } from './components/WindowManager';
+import { Dependencies } from './components/popups/Dependencies';
 import { Approvals } from './components/popups/Approvals';
 import { Shell } from './components/popups/Shell';
 import { Tasks } from './components/popups/Tasks';
@@ -44,6 +45,16 @@ export function App() {
   const [inspectingFuzzy, setInspectingFuzzy] = useState<FuzzyConsensusResult | null>(null);
   const [externalCommand, setExternalCommand] = useState<string | null>(null);
   const [popups, setPopups] = useState<PopupSpec[]>([]);
+
+  const selectConversation = useRef<(id: string) => Promise<void>>(async () => { throw new Error('Terminal is not ready.'); });
+  const executingApprovals = useRef(new Set<string>());
+  const popupRef = useRef(popups);
+  popupRef.current = popups;
+  const resumeConversation = async (id: string) => {
+    if (executingApprovals.current.size || popupRef.current.some(p => p.id.startsWith('approvals-'))) throw new Error('Close or finish the pending approval before switching conversations.');
+    await selectConversation.current(id);
+    setActiveTab('terminal');
+  };
 
   // Sync /out artifact count from the REAL sidecar store.
   const updateArtifactCount = useCallback(() => {
@@ -82,7 +93,7 @@ export function App() {
           id, title: mutation ? 'MUTATION PREFLIGHT REVIEW' : 'GUARDIAN PLAN REVIEW',
           icon: <ShieldCheck className="w-3.5 h-3.5 text-[var(--theme-primary)]" />,
           width: 680, height: 560,
-          content: <Approvals plan={plan} guardian={guardian} onApproved={onApproved} onRejected={onRejected} onClose={close} mutation={mutation} />,
+          content: <Approvals onBusyChange={(busy) => { if (busy) executingApprovals.current.add(id); else executingApprovals.current.delete(id); }} plan={plan} guardian={guardian} onApproved={onApproved} onRejected={onRejected} onClose={close} mutation={mutation} />,
         };
         break;
       }
@@ -101,7 +112,10 @@ export function App() {
         spec = { id, title: 'ENGAGEMENT SCOPE', icon: <Crosshair className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 620, height: 560, content: <Scope /> };
         break;
       case 'tools':
-        spec = { id, title: 'TOOLS', icon: <Wrench className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 640, height: 560, content: <Tools /> };
+        spec = { id, title: 'TOOLS', icon: <Wrench className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 640, height: 560, content: <Tools onDependencies={() => openPopup('dependencies')} /> };
+        break;
+      case 'dependencies':
+        spec = { id, title: 'MISSING DEPENDENCIES', width: 640, height: 560, content: <Dependencies onOpenPopup={openPopup} /> };
         break;
       case 'models':
         spec = { id, title: 'LOCAL AI / MODELS', icon: <BrainCircuit className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 660, height: 580, content: <Models /> };
@@ -110,7 +124,7 @@ export function App() {
         spec = { id, title: 'SYSTEM HEALTH', icon: <Activity className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 600, height: 540, content: <SystemPanel /> };
         break;
       case 'history':
-        spec = { id, title: 'CONVERSATIONS', icon: <HistoryIcon className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 600, height: 520, content: <History onClose={close} /> };
+        spec = { id, title: 'CONVERSATIONS', icon: <HistoryIcon className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 600, height: 520, content: <History onClose={close} onSelect={resumeConversation} /> };
         break;
       case 'memory':
         spec = { id, title: 'MEMORY', icon: <Database className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 600, height: 540, content: <Memory /> };
@@ -138,7 +152,7 @@ export function App() {
       default:
         return;
     }
-    setPopups((prev) => [...prev.slice(-7), spec as PopupSpec]);
+    setPopups((prev) => [...prev, spec as PopupSpec]);
     sound.playKeypress();
   }, [closePopup]);
 
@@ -224,6 +238,7 @@ export function App() {
       <main className="flex-1 flex flex-col overflow-hidden relative z-10">
         <div className={activeTab === 'terminal' ? 'flex-1 flex flex-col overflow-hidden min-h-0' : 'hidden'}>
           <TerminalView
+            selectionRef={selectConversation}
             onInspectFuzzy={(res) => setInspectingFuzzy(res)}
             onNavigateToOut={() => setActiveTab('out')}
             onNavigateToMap={() => setActiveTab('map')}
