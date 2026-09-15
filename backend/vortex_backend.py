@@ -3969,6 +3969,7 @@ def capabilities_document() -> dict[str, Any]:
             "sigit-osint-capabilities",
             "local-ai-advisory-routing",
             "android-apk-client",
+            "authorized-remote-desktop-vnc",
             "mit-license",
         ],
         "host_probes": {
@@ -3997,6 +3998,9 @@ def capabilities_document() -> dict[str, Any]:
             "plugin-code-execution",
             "silent-third-party-install",
             "unrestricted-llm-os-control",
+            "rdp-desktop-in-app",
+            "remote-desktop-without-engagement-scope",
+            "remote-screen-or-keystroke-recording",
         ],
         "license": "MIT",
         "host_tool_access": {
@@ -4009,7 +4013,37 @@ def capabilities_document() -> dict[str, Any]:
             "sync_before_download": True,
             "same_api_as_workbench": True,
         },
+        "remote_desktop": {
+            "supported_protocols": ["vnc (RFB 3.3-3.8, noVNC client, sidecar WebSocket bridge)"],
+            "not_implemented_protocols": ["rdp"],
+            "shell_is_not_desktop": (
+                "A local PTY session (Host Shell) and an authenticated remote shell are shell access only. "
+                "Vortex never reports shell access as graphical desktop access."
+            ),
+            "authorization": (
+                "Every session is bound to an active engagement; host, resolved addresses, and the 5900-5999 "
+                "display port range are re-validated on creation, approval, and every reconnect."
+            ),
+            "credentials": "Typed in the operator interface, kept in memory, never persisted, logged, or exported.",
+            "recording_default": "off",
+            "capabilities_off_by_default": ["clipboard-sync", "file-transfer", "audio-redirection", "shared-folders"],
+            "details": "/api/remote-desktop",
+        },
     }
+
+
+def remote_desktop_error_payload(exc: BaseException) -> tuple[int, str, str] | None:
+    """Map a RemoteDesktopError to (status, code, message) without importing it eagerly."""
+    try:
+        module = _load("remote_desktop")
+    except Exception:
+        return None
+    error_cls = getattr(module, "RemoteDesktopError", None)
+    if error_cls is None or not isinstance(exc, error_cls):
+        return None
+    status = int(getattr(exc, "status", 400) or 400)
+    code = str(getattr(exc, "code", "remote_desktop_error") or "remote_desktop_error")
+    return status, code, redact(str(exc))[:400]
 
 
 def cancel_task_operation(executor: ExecutionManager, task: dict[str, Any] | None) -> bool:
@@ -4048,6 +4082,7 @@ class VortexHandler(BaseHTTPRequestHandler):
     store: Store
     executor: ExecutionManager
     sessions: SessionManager
+    remote: Any
     workspace: Any
     frontend: Path
     token: str | None = None
@@ -4081,39 +4116,63 @@ class VortexHandler(BaseHTTPRequestHandler):
         supplied = self.headers.get("X-Vortex-Token", "")
         return bool(self.token and secrets.compare_digest(supplied, self.token))
 
-    def _authorized(self) -> bool:
+    def _browser_session_id(self) -> str | None:
+        """Return the validated browser session id, or None. Never raises."""
         if not self.token:
-            return True
-        if self._capability_authorized():
-            return True
+            return None
         cookie_headers = self.headers.get_all("Cookie") or []
         if len(cookie_headers) != 1:
-            return False
+            return None
         raw_cookie = cookie_headers[0]
         # Duplicate authentication cookies are ambiguous across user agents
         # and parsers. Fail closed rather than selecting a first/last value.
         if len(re.findall(r"(?:^|;)\s*Vortex-Session\s*=", raw_cookie)) != 1:
-            return False
+            return None
         try:
             cookies = SimpleCookie(raw_cookie)
             morsel = cookies.get("Vortex-Session")
             session_id = morsel.value if morsel is not None else ""
         except (TypeError, ValueError, CookieError):
-            return False
+            return None
         if not re.fullmatch(r"[0-9a-f]{64}", session_id):
-            return False
+            return None
         now = time.monotonic()
         fingerprint = hashlib.sha256(self.token.encode("utf-8")).digest()
         sessions = type(self).browser_sessions
         with type(self).browser_sessions_lock:
             entry = sessions.get(session_id)
             if entry is None:
-                return False
+                return None
             expiry, issued_for = entry
             if expiry <= now or not secrets.compare_digest(issued_for, fingerprint):
                 sessions.pop(session_id, None)
-                return False
+                return None
+            return session_id
+
+    def _browser_session_authorized(self) -> bool:
+        return self._browser_session_id() is not None
+
+    def _auth_fingerprint(self) -> str:
+        """Credential context a remote-desktop ticket is bound to.
+
+        A ticket minted under one browser session (or under the raw capability)
+        cannot be replayed by another: cross-user credentials are rejected even
+        though the sidecar serves a single operator.
+        """
+        base = hashlib.sha256((self.token or "").encode("utf-8")).hexdigest()
+        if self._capability_authorized():
+            return base + ":capability"
+        session_id = self._browser_session_id()
+        if session_id:
+            return base + ":" + session_id
+        return base + ":anonymous"
+
+    def _authorized(self) -> bool:
+        if not self.token:
             return True
+        if self._capability_authorized():
+            return True
+        return self._browser_session_authorized()
 
     def _issue_browser_session(self) -> str:
         if not self.token:
@@ -4848,6 +4907,21 @@ class VortexHandler(BaseHTTPRequestHandler):
                         for name, meta in TOOL_CATALOG.items()
                     ]
                 return self._json(200, {"tools": _TOOLS_CACHE.get("catalog", _tools_inventory)})
+            if path == "/api/remote-desktop":
+                return self._json(200, {"remote_desktop": self.remote.capabilities(), "sessions": self.remote.list()})
+            if path == "/api/remote-desktop/sessions":
+                return self._json(200, {
+                    "sessions": self.remote.list(),
+                    "limits": self.remote.capabilities().get("limits"),
+                    "allow_unencrypted": self.remote.allow_unencrypted(),
+                })
+            if path.startswith("/api/remote-desktop/sessions/"):
+                parts = path.split("/")
+                if len(parts) == 6 and parts[-1] == "stream":
+                    return self._remote_desktop_stream(parts[-2])
+                if len(parts) == 5:
+                    session = self.remote.info(parts[-1])
+                    return self._json(200 if session else 404, {"session": session} if session else {"error": {"code": "not_found", "message": "remote-desktop session not found"}})
             if path == "/api/sessions": return self._json(200, {"sessions": self.sessions.list()})
             if path.startswith("/api/sessions/"):
                 parts = path.split("/")
@@ -4942,7 +5016,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                         return False
                 if any(is_under(asset, root) for root in allowed) and asset.is_file(): return self._static(asset, mime)
             return self._json(404, {"error": {"code": "not_found", "message": "route not found"}})
-        except (ValueError, PolicyError) as exc:
+        except (ValueError, PolicyError, json.JSONDecodeError) as exc:
+            remote = remote_desktop_error_payload(exc)
+            if remote is not None:
+                status, code, message = remote
+                return self._json(status, {"error": {"code": code, "message": message}})
             return self._json(422, {"error": {"code": "invalid_plan", "message": redact(str(exc)), "exit_code": EXIT_CODES["policy_denied"]}})
         except (sqlite3.IntegrityError, sqlite3.DatabaseError) as exc:
             return self._json(409, {"error": {"code": "persistence_integrity", "message": redact(str(exc)), "exit_code": EXIT_CODES["integrity_failure"]}})
@@ -4982,6 +5060,84 @@ class VortexHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             return self._json(404, {"error": {"code": "not_found", "message": "trusted package file is no longer available; build it again"}})
 
+    def _remote_desktop_stream(self, session_id: str) -> None:
+        """Upgrade one authenticated request into the RFB bridge WebSocket.
+
+        Access requires, in order: an accepted browser origin, sidecar
+        authentication, and a short-lived single-use ticket bound to this
+        session *and* this credential context. The upstream socket is dialled
+        only after the engagement scope is re-validated here.
+        """
+        remote = _load("remote_desktop")
+        upgrade = (self.headers.get("Upgrade") or "").strip().lower()
+        connection = (self.headers.get("Connection") or "").lower()
+        if upgrade != "websocket" or "upgrade" not in connection:
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": {"code": "upgrade_required", "message": "this route is a WebSocket endpoint"}})
+        if (self.headers.get("Sec-WebSocket-Version") or "").strip() != "13":
+            return self._json(
+                HTTPStatus.UPGRADE_REQUIRED,
+                {"error": {"code": "websocket_version", "message": "WebSocket version 13 is required"}},
+                {"Sec-WebSocket-Version": "13"},
+            )
+        key = (self.headers.get("Sec-WebSocket-Key") or "").strip()
+        try:
+            decoded = base64.b64decode(key, validate=True)
+        except Exception:
+            decoded = b""
+        if len(decoded) != 16 or len(key) > 64:
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": {"code": "invalid_websocket_key", "message": "invalid Sec-WebSocket-Key"}})
+        # Origin verification is part of _guard_request, but an upgrade must
+        # never depend on the caller: fail closed here as well.
+        if not self._browser_context_allowed():
+            return self._json(HTTPStatus.FORBIDDEN, {"error": {"code": "cross_origin_denied", "message": "cross-origin WebSocket upgrades are not accepted"}})
+        if not self._authorized():
+            return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
+        offered = self.headers.get("Sec-WebSocket-Protocol") or ""
+        try:
+            ticket = remote.subprotocol_ticket(offered, session_id)
+            prepared = self.remote.begin_bridge(session_id, ticket, self._auth_fingerprint(), self.headers.get("Origin") or "")
+        except Exception as exc:
+            payload = remote_desktop_error_payload(exc)
+            if payload is None:
+                raise
+            status, code, message = payload
+            return self._json(status, {"error": {"code": code, "message": message}})
+        # Handshake. HTTP/1.1 is required for a browser to accept the upgrade;
+        # the connection is closed when the bridge ends.
+        self.protocol_version = "HTTP/1.1"
+        self.close_connection = True
+        try:
+            self.connection.settimeout(None)
+        except OSError:
+            pass
+        self.send_response(HTTPStatus.SWITCHING_PROTOCOLS, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", remote.WebSocketConnection.accept_key(key))
+        negotiated = remote.negotiate_subprotocol(offered)
+        if negotiated:
+            self.send_header("Sec-WebSocket-Protocol", negotiated)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        ws = remote.WebSocketConnection(self.connection, self.rfile)
+        bridge = remote.RemoteBridge(
+            session_id=session_id,
+            ws=ws,
+            upstream=prepared["upstream"],
+            idle_timeout=float(prepared["idle_timeout"]),
+            on_activity=None,
+        )
+        self.remote.bind_bridge(session_id, bridge)
+        try:
+            bridge.run()
+        finally:
+            # Idempotent: covers handler-level teardown, window close and STOP ALL.
+            bridge.stop("stream_handler_exit")
+            self.remote.note_disconnect(session_id, bridge.close_reason or "closed",
+                                       unexpected=bridge.unexpected, epoch=prepared.get("epoch"))
+        return None
+
     @staticmethod
     def _inline_script_hashes(data: bytes) -> tuple[str, ...]:
         # CSP hashes use UTF-8 and HTML's newline normalization.
@@ -5016,6 +5172,59 @@ class VortexHandler(BaseHTTPRequestHandler):
                 session_id = self._issue_browser_session()
                 cookie = f"Vortex-Session={session_id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800"
                 return self._json(200, {"authenticated": True, "expires_in": 28800}, {"Set-Cookie": cookie})
+            if path == "/api/remote-desktop/probe":
+                report = self.remote.probe(
+                    engagement_id=(self._optional_str(body, "engagement_id") or ""),
+                    host=(self._text(body, "host") or ""),
+                    protocol=(self._optional_str(body, "protocol") or "vnc"),
+                    display=body.get("display"),
+                    port=body.get("port"),
+                    transport=(self._optional_str(body, "transport") or "tls"),
+                    deep=self._flag(body, "deep"),
+                    private_address_ack=self._flag(body, "private_address_ack"),
+                )
+                return self._json(200, {"probe": report})
+            if path == "/api/remote-desktop/sessions":
+                session = self.remote.create(
+                    engagement_id=(self._optional_str(body, "engagement_id") or ""),
+                    host=(self._text(body, "host") or ""),
+                    protocol=(self._optional_str(body, "protocol") or "vnc"),
+                    display=body.get("display"),
+                    port=body.get("port"),
+                    transport=(self._optional_str(body, "transport") or "tls"),
+                    label=(self._optional_str(body, "label") or ""),
+                    owner=self._auth_fingerprint()[:16],
+                    client_library=(self._optional_str(body, "client_library") or ""),
+                )
+                return self._json(201, {"session": session})
+            if path.startswith("/api/remote-desktop/sessions/"):
+                parts = path.split("/")
+                session_id = parts[-2] if len(parts) >= 6 else ""
+                action = parts[-1] if len(parts) >= 6 else ""
+                if len(parts) == 6 and action == "approve":
+                    session = self.remote.approve(
+                        session_id,
+                        confirm=self._flag(body, "confirm"),
+                        unencrypted_approved=self._flag(body, "unencrypted_approved"),
+                        protected_path_ack=self._flag(body, "protected_path_ack"),
+                        private_address_ack=self._flag(body, "private_address_ack"),
+                        watch=self._flag(body, "watch"),
+                    )
+                    return self._json(200, {"session": session})
+                if len(parts) == 6 and action == "ticket":
+                    ticket = self.remote.issue_ticket(session_id, self._auth_fingerprint())
+                    return self._json(200, {"ticket": ticket})
+                if len(parts) == 6 and action == "reconnect":
+                    return self._json(200, {"session": self.remote.request_reconnect(session_id)})
+                if len(parts) == 6 and action == "disconnect":
+                    return self._json(200, {"session": self.remote.disconnect(session_id, self._optional_str(body, "reason") or "operator_disconnected")})
+                if len(parts) == 6 and action == "close":
+                    return self._json(200, {"session": self.remote.close(session_id, self._optional_str(body, "reason") or "operator_closed")})
+                if len(parts) == 6 and action == "activity":
+                    kind = self._optional_str(body, "kind") or "traffic"
+                    if kind not in {"traffic", "input_begin", "input_end", "heartbeat"}:
+                        raise PolicyError("unsupported remote-desktop activity kind")
+                    return self._json(200, self.remote.mark_activity(session_id, kind))
             if path == "/api/sessions":
                 session = self.sessions.create(self._optional_str(body, "name"), self._optional_str(body, "cwd"), self._optional_str(body, "shell"), self._bounded_int(body, "cols", 100, 2, 500), self._bounded_int(body, "rows", 30, 2, 500))
                 return self._json(201, {"session": session})
@@ -5318,7 +5527,7 @@ class VortexHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"refresh": summary, "backend": "online"})
             if path == "/api/control/stop-all":
                 stop_all = _load("orchestrate").stop_all
-                result = stop_all(self.executor, self.sessions, self.workspace)
+                result = stop_all(self.executor, self.sessions, self.workspace, remote=self.remote)
                 self.store.append_audit("stop_all", result)
                 return self._json(202, {"stop": result})
             if path == "/api/settings":
@@ -5528,6 +5737,10 @@ class VortexHandler(BaseHTTPRequestHandler):
         except UnsupportedMediaType as exc:
             return self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": {"code": "unsupported_media_type", "message": str(exc)}})
         except (ValueError, PolicyError, json.JSONDecodeError) as exc:
+            remote = remote_desktop_error_payload(exc)
+            if remote is not None:
+                status, code, message = remote
+                return self._json(status, {"error": {"code": code, "message": message}})
             return self._json(422, {"error": {"code": "invalid_plan", "message": redact(str(exc)), "exit_code": EXIT_CODES["policy_denied"]}})
         except (sqlite3.IntegrityError, sqlite3.DatabaseError) as exc:
             return self._json(409, {"error": {"code": "persistence_integrity", "message": redact(str(exc)), "exit_code": EXIT_CODES["integrity_failure"]}})
@@ -5592,6 +5805,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None, f
     handler.store = store
     handler.executor = ExecutionManager(store)
     handler.sessions = SessionManager(store)
+    handler.remote = _load("remote_desktop").RemoteDesktopManager(store, audit=store.append_audit)
     handler.workspace = Workspace(store)
     handler.executor.workspace = handler.workspace
     handler.frontend = Path(__file__).resolve().parent.parent / "frontend"
@@ -5623,6 +5837,10 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None, f
             pass
     finally:
         handler.executor.shutdown()
+        try:
+            handler.remote.shutdown()
+        except Exception:
+            pass
         handler.sessions.shutdown()
         try:
             _load("models.manager").shutdown()

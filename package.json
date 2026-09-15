@@ -26,6 +26,7 @@
     "prepreview": "npm run build"
   },
   "dependencies": {
+    "@novnc/novnc": "1.7.0",
     "clsx": "2.1.1",
     "lucide-react": "^1.45.0",
     "react": "19.2.6",

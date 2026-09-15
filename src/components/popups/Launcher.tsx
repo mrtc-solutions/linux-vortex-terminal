@@ -3,7 +3,7 @@
 import React from 'react';
 import {
   Activity, BrainCircuit, Crosshair, Database, FileText, FolderDown, History,
-  ListChecks, MapPin, Scale, Settings as SettingsIcon, Terminal as TerminalIcon,
+  ListChecks, MapPin, Monitor, Scale, Settings as SettingsIcon, Terminal as TerminalIcon,
   TerminalSquare, Wrench, Bot, Cpu, CircleHelp, Info,
 } from 'lucide-react';
 import { sound } from '../../services/soundEffects';
@@ -38,6 +38,7 @@ export const Launcher: React.FC<LauncherProps> = ({ onGoTab, onOpenPopup, onClos
     { label: 'Fuzzy Router', hint: 'Live routing', icon: <Scale className="w-5 h-5" />, action: go(() => onGoTab('fuzzy')) },
     { label: 'Agent Reach', hint: 'Roster + caps', icon: <Bot className="w-5 h-5" />, action: go(() => onGoTab('agent-reach')) },
     { label: 'Host Shell', hint: 'Live PTY', icon: <TerminalSquare className="w-5 h-5" />, action: go(() => onOpenPopup('shell')) },
+    { label: 'Remote Sessions', hint: 'Authorized desktops', icon: <Monitor className="w-5 h-5" />, action: go(() => onOpenPopup('remote')) },
     { label: 'Tasks', hint: 'Ledger', icon: <ListChecks className="w-5 h-5" />, action: go(() => onOpenPopup('tasks')) },
     { label: 'Scope', hint: 'Engagements', icon: <Crosshair className="w-5 h-5" />, action: go(() => onOpenPopup('scope')) },
     { label: 'Tools', hint: 'Inventory', icon: <Wrench className="w-5 h-5" />, action: go(() => onOpenPopup('tools')) },

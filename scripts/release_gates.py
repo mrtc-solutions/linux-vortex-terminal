@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Ten explicit release checks. Missing dependencies FAIL; nothing is skipped.
+"""Eleven explicit release checks. Missing dependencies FAIL; nothing is skipped.
 
-Needs Chromium, native Electron with a display/WM, and VORTEX_REAL_MODEL plus a
-real GGUF engine. CI installs those prerequisites before running this runner.
-No finite suite establishes that every feature or every environment is bug-free.
+Needs Chromium, native Electron with a display/WM, a real graphical target for
+the authorized remote-desktop gate (Xvfb + x11vnc + xterm + xdotool, or PyQt5),
+and VORTEX_REAL_MODEL plus a real GGUF engine. CI installs those prerequisites
+before running this runner. No finite suite establishes that every feature or
+every environment is bug-free.
 """
 import os
 import re
@@ -24,13 +26,17 @@ GATES = [
     ('Extracted Debian package + actual backend', [sys.executable, 'scripts/test_live_ui.py', '--package']),
     ('Native Electron / IPC / PTY', ['node', 'tests/native_acceptance.cjs']),
     ('Real GGUF model inference', [sys.executable, 'tests/real_provider_acceptance.py']),
+    # A real VNC server serving a real graphical application, driven through the
+    # actual WebSocket/RFB bridge. Exit code 3 means the environment could not
+    # provide a target: that is a FAILED gate, never a skip.
+    ('Authorized remote desktop vs real graphical target', [sys.executable, 'tests/remote_desktop_acceptance.py']),
 ]
 
 
 def main():
     results = []
     for index, (name, command) in enumerate(GATES, 1):
-        print(f'\n::group::Gate {index}/10: {name}', flush=True)
+        print(f'\n::group::Gate {index}/{len(GATES)}: {name}', flush=True)
         start = time.monotonic()
         try:
             completed = subprocess.run(command, cwd=ROOT, timeout=900, capture_output=True, text=True)
@@ -47,9 +53,9 @@ def main():
             print(f'FAILED: {error}', flush=True)
             ok = False
         results.append((name, ok))
-        print(f'::endgroup::\n[{"PASS" if ok else "FAIL"}] {index}/10 {name} ({time.monotonic() - start:.1f}s)', flush=True)
+        print(f'::endgroup::\n[{"PASS" if ok else "FAIL"}] {index}/{len(GATES)} {name} ({time.monotonic() - start:.1f}s)', flush=True)
     passed = sum(ok for _, ok in results)
-    summary = f'FINAL RELEASE CHECKS: {passed}/10 ({passed * 10}%)'
+    summary = f'FINAL RELEASE CHECKS: {passed}/{len(GATES)} ({passed * 100 // len(GATES)}%)'
     print('\n' + summary, flush=True)
     if os.environ.get('GITHUB_ACTIONS'):
         print('::notice title=Release acceptance result::' + summary, flush=True)

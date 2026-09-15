@@ -401,7 +401,36 @@ groups. It does not kill unrelated user processes.
 The path to “installed tools ⇒ real execution, nothing fabricated” is
 `docs/READY_WHEN_TOOLS_EXIST.md`.
 
-## 14. What is not claimed
+## 14. Authorized remote desktops (VNC)
+
+An engagement that covers a target can also carry a *graphical* session, opened
+in its own window next to the local terminal. Nothing connects without an
+explicit approval step, and a desktop window is only ever opened for an endpoint
+that really answered.
+
+1. Open the target's details and choose **Open remote desktop for …**, or use
+   `Launcher → Remote Sessions`.
+2. Press **Endpoint check**. If the host is only reachable over SSH, Vortex says
+   *"Remote shell access is available, but no compatible graphical session has
+   been verified."* and offers configuration guidance — it never fakes a desktop.
+3. **Create the session**, tick the authorization confirmation, and approve it.
+   Unencrypted RFB additionally requires the deployment opt-in and a protected
+   path acknowledgement.
+4. The window opens and renders the live remote framebuffer. Click the surface
+   to send keyboard and mouse input; a banner shows while input is going to the
+   remote device. Press **Escape twice** or **RELEASE KEYBOARD** to take control
+   back; clicking elsewhere releases it automatically.
+5. **RECONNECT** after a drop (authorization is re-checked), **DISCONNECT** to
+   end the stream but keep the record, **CLOSE SESSION** to remove it, or
+   **STOP ALL** to end everything.
+
+Credentials are typed into the window, used once, and never stored. Clipboard
+synchronization, file transfer, audio redirection, and shared folders are off;
+screen contents and keystrokes are not recorded. Details, limits (concurrent
+sessions, idle timeout), and the exact support matrix are in
+[`REMOTE_DESKTOP.md`](REMOTE_DESKTOP.md).
+
+## 15. What is not claimed
 
 - Third-party AI agent code — none ships; only the built-in deterministic advisor is rostered
 - Docker sandbox **execution** when no runtime is installed

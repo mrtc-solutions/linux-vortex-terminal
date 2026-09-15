@@ -12,9 +12,17 @@ export interface PopupSpec {
   height?: number;
 }
 
+export interface FocusRequest {
+  /** Popup id to raise (open-or-focus flows). */
+  id: string;
+  /** Changes on every request so repeated focuses still fire. */
+  nonce: number;
+}
+
 interface WindowManagerProps {
   popups: PopupSpec[];
   onClose: (id: string) => void;
+  focusRequest?: FocusRequest | null;
 }
 
 type WindowState = 'normal' | 'minimized' | 'maximized';
@@ -29,7 +37,7 @@ interface FrameState {
 const CASCADE_DX = 36;
 const CASCADE_DY = 30;
 
-export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose }) => {
+export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose, focusRequest }) => {
   const [frames, setFrames] = useState<Record<string, FrameState>>({});
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   useEffect(() => {
@@ -64,6 +72,25 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose })
       return next;
     });
   }, [popups]);
+
+  // Open-or-focus: raise and restore the requested window without adding a
+  // duplicate. Used by the remote-session list and the launcher tiles.
+  useEffect(() => {
+    if (!focusRequest || !popups.some((popup) => popup.id === focusRequest.id)) return;
+    setFrames((prev) => {
+      zCounter.current += 1;
+      return {
+        ...prev,
+        [focusRequest.id]: {
+          ...prev[focusRequest.id],
+          windowState: prev[focusRequest.id]?.windowState === 'minimized' ? 'normal' : (prev[focusRequest.id]?.windowState || 'normal'),
+          z: zCounter.current,
+        },
+      };
+    });
+    // focusRequest.nonce is the trigger; the popup list is read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRequest?.nonce]);
 
   // Esc closes the topmost normal/maximized window.
   useEffect(() => {

@@ -8,3 +8,8 @@ The observe → typed action → host-state reward loop in `backend/episode.py`
 is conceptually informed by Windows Agent Arena's POMDP task framing
 (https://github.com/microsoft/WindowsAgentArena, MIT). No WAA source is
 vendored; VORTEX executes reviewed Linux argv only.
+
+The authorized remote-desktop window bundles noVNC (`@novnc/novnc`, MPL-2.0) as
+a build-time dependency; it is inlined into the production document and is not
+downloaded or executed from the network at runtime. No VNC or RDP server is
+bundled or installed by Vortex Terminal.

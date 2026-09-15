@@ -44,6 +44,11 @@ DEFAULTS = {
     "llamafile_timeout_seconds": 20,
     "first_run_complete": False,
     "host_tool_access": False,
+    # Authorized remote desktop. Transports default to verified TLS; plaintext
+    # VNC needs this deployment-level opt-in *and* a per-session acknowledgement.
+    "remote_desktop_allow_unencrypted": False,
+    "remote_desktop_idle_seconds": 900,
+    "remote_desktop_max_sessions": 4,
 }
 
 
@@ -111,6 +116,8 @@ def _load_settings_unlocked() -> dict[str, Any]:
     data["models_dir"] = str(data.get("models_dir") or "")[:300]
     for _role in ("gguf_primary", "gguf_planner", "gguf_fast", "gguf_specialist"):
         data[_role] = str(data.get(_role) or "")[:160]
+    data["remote_desktop_idle_seconds"] = max(60, min(int(data.get("remote_desktop_idle_seconds") or 900), 86400))
+    data["remote_desktop_max_sessions"] = max(1, min(int(data.get("remote_desktop_max_sessions") or 4), 16))
     data["auto_low_risk"] = data["profile"] in {"standard", "expert"}
     data["auto_medium_risk"] = False
     data["allow_root"] = False

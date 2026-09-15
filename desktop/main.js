@@ -188,6 +188,38 @@ function createWindow() {
   return win;
 }
 
+// The renderer is served from the sidecar origin, so a WebSocket upgrade cannot
+// carry the capability header the way IPC does. Mint the same short-lived
+// browser session the web build uses and install it as a real cookie, which
+// keeps desktop and browser remote-desktop authorization identical.
+async function establishRendererSession() {
+  try {
+    const response = await fetch(`${sidecarUrl}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vortex-Token': capability },
+      body: '{}'
+    });
+    if (!response.ok) throw new Error(`sidecar answered ${response.status}`);
+    const cookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+    const sessionCookie = cookies.find(value => value.startsWith('Vortex-Session='));
+    const value = sessionCookie ? sessionCookie.slice('Vortex-Session='.length).split(';')[0] : '';
+    if (!value) throw new Error('no session cookie in the response');
+    await session.defaultSession.cookies.set({
+      url: sidecarUrl,
+      name: 'Vortex-Session',
+      value,
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: false,
+      expirationDate: Math.floor(Date.now() / 1000) + 28800
+    });
+  } catch (error) {
+    // The workbench still works over IPC; only the WebSocket-backed remote
+    // desktop needs this cookie, and it reports its own actionable error.
+    process.stderr.write(`[vortex-desktop] renderer session bootstrap failed: ${error.message}\n`);
+  }
+}
+
 app.whenReady().then(async () => {
   await startSidecar();
   registerWindowControls(ipcMain, BrowserWindow);
@@ -206,6 +238,7 @@ app.whenReady().then(async () => {
     }
     callback({ requestHeaders: details.requestHeaders });
   });
+  await establishRendererSession();
   createWindow();
 }).catch(error => {
   process.stderr.write(`[vortex-desktop] startup failed: ${error.stack || error}\n`);
