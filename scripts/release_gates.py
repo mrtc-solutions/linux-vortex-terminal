@@ -6,6 +6,7 @@ real GGUF engine. CI installs those prerequisites before running this runner.
 No finite suite establishes that every feature or every environment is bug-free.
 """
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -32,7 +33,16 @@ def main():
         print(f'\n::group::Gate {index}/10: {name}', flush=True)
         start = time.monotonic()
         try:
-            ok = subprocess.run(command, cwd=ROOT, timeout=900).returncode == 0
+            completed = subprocess.run(command, cwd=ROOT, timeout=900, capture_output=True, text=True)
+            output = completed.stdout + completed.stderr
+            print(output, flush=True)
+            ok = completed.returncode == 0
+            if not ok and os.environ.get('GITHUB_ACTIONS'):
+                # Accessible via GitHub check annotations even if raw-log asset
+                # downloads are blocked. Never publish test approval tokens.
+                detail = re.sub(r'(approval_token[\"\' :]+)[^\"\'\s,}]+', r'\1[redacted]', output[-2500:])
+                detail = detail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                print(f'::error title=Release gate {index} - {name}::{detail}', flush=True)
         except (OSError, subprocess.TimeoutExpired) as error:
             print(f'FAILED: {error}', flush=True)
             ok = False
@@ -41,6 +51,8 @@ def main():
     passed = sum(ok for _, ok in results)
     summary = f'FINAL RELEASE CHECKS: {passed}/10 ({passed * 10}%)'
     print('\n' + summary, flush=True)
+    if os.environ.get('GITHUB_ACTIONS'):
+        print('::notice title=Release acceptance result::' + summary, flush=True)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
             output.write('## ' + summary + '\n\n')

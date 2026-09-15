@@ -77,6 +77,7 @@ test('real whoami operation and conversation resume roundtrip', async ({ page })
   await row.first().getByRole('button', { name: 'Resume', exact: true }).click();
   await expect(history).toHaveCount(0);
   await expect(page.locator('main').getByText('whoami', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('main')).toContainText(`[exit 0]\n${userInfo().username}`);
 });
 
 test('live PTY output, tab navigation, and cleanup on popup close', async ({ page }) => {

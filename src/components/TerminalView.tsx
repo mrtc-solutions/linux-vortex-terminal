@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import {
   ApiError, JsonRecord, OperationDocument, TurnResult,
-  getModels, getSystemHealth, stopAll, getConversation,
+  getModels, getSystemHealth, stopAll, getConversation, getTask, getOperation,
 } from '../services/vortexApi';
 import { startTurn, watchOperation, persistConversationId } from '../services/turnRunner';
 import { setLastTurn } from '../services/lastTurnStore';
@@ -129,14 +129,48 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       try {
         const payload = await getConversation(id);
         if (asRecord(payload.conversation).id !== id || !Array.isArray(payload.messages)) throw new Error('Invalid conversation response.');
-        const lines: TerminalLine[] = payload.messages.map((value, index) => {
-          const message = asRecord(value);
-          return { id: String(message.id || `message-${index}`), timestamp: String(message.created_at || ''),
-            type: message.role === 'user' ? 'input' : 'output', content: String(message.content || '') };
-        });
+        const messages = payload.messages.map(asRecord).filter(message => !message.superseded_by).slice(-400);
+        const lines: TerminalLine[] = [];
+        const operations = new Map<string, OperationDocument>();
+        // Restore retained evidence, not a new execution. Four concurrent message
+        // lookups bound API pressure for long saved conversations.
+        for (let offset = 0; offset < messages.length; offset += 4) {
+          const restored = await Promise.all(messages.slice(offset, offset + 4).map(async (message, index) => {
+            const line: TerminalLine = { id: String(message.id || `message-${offset + index}`), timestamp: String(message.created_at || ''),
+              type: message.role === 'user' ? 'input' : 'output', content: String(message.content || '') };
+            const result = [line];
+            const meta = asRecord(message.meta);
+            if (message.role === 'user' || (!meta.operation_id && !meta.task_id)) return result;
+            try {
+              let operationId = String(meta.operation_id || '');
+              if (!operationId && meta.task_id) {
+                const task = asRecord((await getTask(String(meta.task_id))).task);
+                operationId = String(task.operation_id || '');
+              }
+              if (operationId) {
+                let operation = operations.get(operationId);
+                if (!operation) {
+                  operation = (await getOperation(operationId)).operation;
+                  if (!operation) throw new Error('Saved operation not found.');
+                  operations.set(operationId, operation);
+                }
+                const rendered = commandOutput(operation);
+                result.push({ id: `${line.id}-evidence`, timestamp: line.timestamp,
+                  type: rendered.exitCode === 0 ? 'output' : 'error', content: rendered.text,
+                  tableData: rendered.table, meta: { modelName: `Saved operation ${operationId}`, exitCode: rendered.exitCode } });
+              }
+            } catch (err) {
+              result.push({ id: `${line.id}-warning`, timestamp: line.timestamp, type: 'warning',
+                content: `Saved message loaded, but evidence could not be restored: ${err instanceof Error ? err.message : String(err)}` });
+            }
+            return result;
+          }));
+          lines.push(...restored.flat());
+        }
         persistConversationId(id);
         if (localStorage.getItem('vortex.conversationId') !== id) throw new Error('Unable to save conversation selection.');
-        setHistory(lines);
+        setHistory(lines.slice(-400));
+        setLastTurn(null);
         setInputValue('');
         setCommandHistory([]);
         setHistoryIndex(-1);
