@@ -44,6 +44,8 @@ from rfb_client import RfbClient, RfbError, WebSocketChannel  # noqa: E402  (pat
 
 ANSI = {"green": "\033[32m", "red": "\033[31m", "yellow": "\033[33m", "dim": "\033[2m", "reset": "\033[0m"}
 DISPLAY_PORT_LOW, DISPLAY_PORT_HIGH = 5900, 5999
+SECURITY_NONE = 1
+SECURITY_VNC_AUTH = 2
 
 
 def color(text: str, name: str) -> str:
@@ -63,16 +65,29 @@ class CheckFailed(RuntimeError):
 # --------------------------------------------------------------------------- helpers
 
 
+# Ports handed out in this process. Calling the helper again must never return a
+# port that is about to be used by a server that has not bound it yet: two
+# targets (open + password-protected) need genuinely distinct displays.
+_RESERVED_DISPLAY_PORTS: set[int] = set()
+
+
 def free_display_port() -> int:
     for candidate in range(DISPLAY_PORT_LOW, DISPLAY_PORT_HIGH + 1):
+        if candidate in _RESERVED_DISPLAY_PORTS:
+            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind(("127.0.0.1", candidate))
-                return candidate
             except OSError:
                 continue
+        _RESERVED_DISPLAY_PORTS.add(candidate)
+        return candidate
     raise TargetUnavailable("no free VNC display port in 5900-5999")
+
+
+def release_display_port(port: int) -> None:
+    _RESERVED_DISPLAY_PORTS.discard(port)
 
 
 def wait_for_banner(port: int, timeout: float = 25.0) -> str:
@@ -392,6 +407,8 @@ class X11VncTarget:
         self.vnc_procs: list[subprocess.Popen] = []
         self.resize_supported = False
         self.resize_error = "not probed yet"
+        self.auth_required = False
+        self.auth_security_types: list[int] = []
 
     def _free_display_number(self) -> int:
         for number in range(80, 120):
@@ -440,8 +457,37 @@ class X11VncTarget:
         subprocess.run(["x11vnc", "-storepasswd", self.password, str(password_file)], check=True,
                        capture_output=True, env=env)
         self._spawn_vnc_servers(env)
+        if self.port == self.auth_port:
+            raise CheckFailed("the open and password-protected VNC servers were given the same display port")
         wait_for_banner(self.port)
         wait_for_banner(self.auth_port)
+        self.auth_required = self._auth_endpoint_requires_auth()
+
+    def _auth_endpoint_requires_auth(self) -> bool:
+        """Confirm the second server really advertises VNC authentication.
+
+        Without this the credential-failure check could silently pass by talking
+        to the open server, which would prove nothing.
+        """
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", self.auth_port), timeout=2) as sock:
+                    sock.settimeout(3)
+                    banner = sock.recv(12)
+                    version = banner[4:11].decode("ascii", "replace")
+                    sock.sendall(b"RFB " + (version if version in {"003.003", "003.007", "003.008"}
+                                            else "003.008").encode() + b"\n")
+                    if version == "003.003":
+                        code = int.from_bytes(sock.recv(4), "big")
+                        return code == SECURITY_VNC_AUTH
+                    count = sock.recv(1)[0]
+                    types = list(sock.recv(count))
+                    self.auth_security_types = types
+                    return SECURITY_VNC_AUTH in types and SECURITY_NONE not in types
+            except (OSError, IndexError):
+                time.sleep(0.4)
+        return False
 
     def _probe_resize_support(self, env: dict) -> bool:
         smaller = (self.width // 2, self.height // 2)
@@ -949,6 +995,11 @@ def run_acceptance(args: argparse.Namespace) -> int:
                                if target.flavour == "x11vnc" else ""))
 
         # --- 13. auth failure against a real VNC-auth endpoint -----------
+        if target.supports_vnc_auth and not target.auth_required:
+            results.check("the password-protected VNC endpoint advertises VNC authentication", False,
+                          f"port {target.auth_port} advertised security types {target.auth_security_types} "
+                          "instead of VNC authentication; the credential checks would prove nothing")
+            raise CheckFailed("no real credential-checking endpoint")
         if target.supports_vnc_auth:
             auth_session = Session(sidecar, engagement_id, target.auth_port)
             sessions.append(auth_session)
