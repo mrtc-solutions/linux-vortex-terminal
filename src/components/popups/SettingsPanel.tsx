@@ -38,6 +38,11 @@ const TOGGLES: ToggleDef[] = [
     label: 'Developer mode',
     help: 'Extra diagnostics in explanations and reports. No safety gate is bypassed.',
   },
+  {
+    key: 'remote_desktop_allow_unencrypted',
+    label: 'Allow unencrypted VNC transports',
+    help: 'Remote desktops may connect to plain RFB endpoints only when an approved protected path (VPN or SSH tunnel) is acknowledged per session. Off by default; TLS endpoints with verified certificates need no opt-in.',
+  },
 ];
 
 const PROFILES: { id: string; label: string; help: string }[] = [

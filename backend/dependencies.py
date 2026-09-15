@@ -6,8 +6,16 @@ proposal-only until the operator installs them outside Vortex Terminal.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
+from pathlib import Path
 from typing import Any
+
+try:
+    from .fileio import read_owner_text
+except ImportError:  # pragma: no cover - direct module import
+    from fileio import read_owner_text  # type: ignore
 
 # Distro package names for tools Vortex Terminal can actually plan through linux.packages.apt.
 APT_PACKAGES: dict[str, str] = {
@@ -58,6 +66,98 @@ APT_PACKAGES: dict[str, str] = {
 }
 
 CORE_TOOLS = ("curl", "git", "python3", "ss", "ip", "df", "ps", "whoami")
+
+# --------------------------------------------------------------------------
+# Remote-desktop capability components
+# --------------------------------------------------------------------------
+
+NOVNC_SOURCE = "https://github.com/novnc/noVNC"
+NOVNC_LICENSE = "MPL-2.0"
+NOVNC_PACKAGE = "@novnc/novnc"
+REMOTE_DESKTOP_CAPABILITY_IDS = (
+    "capability:remote-desktop.bridge",
+    "capability:remote-desktop.novnc",
+    "capability:remote-desktop.tls",
+    "capability:remote-desktop.rdp",
+)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def novnc_status() -> dict[str, Any]:
+    """Report the bundled noVNC client honestly, from the real build inputs.
+
+    noVNC is a build-time dependency: it is bundled into the single-file React
+    document by Vite. There is nothing for the operator to install at runtime,
+    so the only truthful states are "bundled" (the dependency is declared and a
+    build exists), "declared-not-built", and "absent".
+    """
+    root = _repo_root()
+    declared = ""
+    try:
+        package = json.loads(read_owner_text(root / "package.json", max_bytes=256 * 1024))
+        declared = str((package.get("dependencies") or {}).get(NOVNC_PACKAGE)
+                       or (package.get("devDependencies") or {}).get(NOVNC_PACKAGE) or "")
+    except (OSError, ValueError):
+        declared = ""
+    installed_version = ""
+    try:
+        manifest = json.loads(read_owner_text(
+            root / "node_modules" / NOVNC_PACKAGE.replace("/", os.sep) / "package.json", max_bytes=256 * 1024,
+        ))
+        installed_version = str(manifest.get("version") or "")
+    except (OSError, ValueError):
+        installed_version = ""
+    built = (root / "dist" / "index.html").is_file()
+    if declared and built:
+        state, installed = "bundled", True
+    elif declared:
+        state, installed = "declared-not-built", False
+    else:
+        state, installed = "absent", False
+    return {
+        "id": "capability:remote-desktop.novnc",
+        "kind": "capability",
+        "name": "novnc",
+        "title": "noVNC RFB client (bundled)",
+        "state": state,
+        "installed": installed,
+        "required": False,
+        "version": installed_version or declared or None,
+        "declared": declared or None,
+        "purpose": "Renders the live remote framebuffer and forwards keyboard/mouse input.",
+        "source": NOVNC_SOURCE,
+        "license": NOVNC_LICENSE,
+        "installation": (
+            "Build-time dependency installed by `npm ci` and inlined into the production document by `npm run build`. "
+            "No runtime download, no third-party script executed from the network."
+        ),
+        "message": (
+            "The remote-desktop window cannot render until the React document is built with noVNC present "
+            "(run `npm ci && npm run build`)."
+            if not installed else
+            "noVNC is bundled in the current production document."
+        ),
+    }
+
+
+def remote_desktop_capability_items() -> list[dict[str, Any]]:
+    """Capability rows for the remote-desktop feature (state, license, needs)."""
+    try:
+        from remote_desktop import RemoteDesktopManager  # type: ignore
+    except ImportError:
+        from backend.remote_desktop import RemoteDesktopManager  # type: ignore
+    listing: list[dict[str, Any]] = []
+    for item in RemoteDesktopManager.dependency_items():
+        entry = dict(item)
+        if not str(entry.get("id", "")).startswith("capability:"):
+            entry["id"] = f"capability:{entry['id']}"
+        entry.setdefault("family", "authorized-remote-desktop")
+        entry.setdefault("role", entry.get("purpose"))
+        listing.append(entry)
+    return listing
 EXTRA_RUNTIME_DEPENDENCIES: tuple[dict[str, Any], ...] = (
     {
         "id": "runtime:nodejs",
@@ -403,6 +503,29 @@ def inventory() -> dict[str, Any]:
 
     items.extend(_ollama_items())
 
+    # Remote-desktop capability rows are reported with their own state: they are
+    # in-tree/bundled components with license and installation requirements, not
+    # host tools, so they never appear as "install this with apt" suggestions.
+    capabilities: list[dict[str, Any]] = []
+    try:
+        capabilities = remote_desktop_capability_items()
+    except Exception as exc:  # never let capability reporting break the inventory
+        capabilities = [{
+            "id": "capability:remote-desktop.bridge",
+            "kind": "capability",
+            "name": "websocket-rfb-bridge",
+            "title": "Remote-desktop bridge",
+            "state": "unavailable",
+            "installed": False,
+            "required": False,
+            "version": None,
+            "purpose": "Authorized remote-desktop sessions.",
+            "source": "Vortex Terminal (in-tree, MIT)",
+            "license": "MIT",
+            "installation": "Investigate the sidecar error before using remote desktop.",
+            "detail": f"capability probe failed: {type(exc).__name__}",
+        }]
+
     missing = [item for item in items if not item["installed"]]
     return {
         "product": "Vortex Terminal",
@@ -417,6 +540,14 @@ def inventory() -> dict[str, Any]:
         },
         "items": items,
         "missing": missing,
+        "capabilities": capabilities,
+        "remote_desktop": {
+            "protocols": [
+                {"id": "vnc", "status": "supported"},
+                {"id": "rdp", "status": "not_implemented"},
+            ],
+            "components": capabilities,
+        },
     }
 
 

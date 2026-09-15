@@ -9,6 +9,8 @@ import { sound } from '../services/soundEffects';
 interface TacticalMapProps {
   onExecuteCommand: (cmd: string) => void;
   onNavigateToOut?: () => void;
+  /** Verified asset detail -> authorized remote desktop launcher for that host. */
+  onOpenRemoteDesktop?: (host: string) => void;
 }
 
 interface GraphNode extends JsonRecord {
@@ -51,7 +53,7 @@ function TypeIcon({ type }: { type: string }) {
   }
 }
 
-export const TacticalMap: React.FC<TacticalMapProps> = ({ onExecuteCommand }) => {
+export const TacticalMap: React.FC<TacticalMapProps> = ({ onExecuteCommand, onOpenRemoteDesktop }) => {
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [edges, setEdges] = useState<GraphEdge[]>([]);
   const [findings, setFindings] = useState<JsonRecord[]>([]);
@@ -230,12 +232,21 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ onExecuteCommand }) =>
               </div>
             )}
             {(selected.type === 'ip' || selected.type === 'target') && (
-              <button
-                onClick={() => assess(selected.label)}
-                className="w-full mt-1 px-2 py-1.5 rounded bg-[var(--theme-primary)] text-black font-bold hover:opacity-90 cursor-pointer"
-              >
-                Plan assessment of {selected.label.slice(0, 24)}
-              </button>
+              <>
+                <button
+                  onClick={() => assess(selected.label)}
+                  className="w-full mt-1 px-2 py-1.5 rounded bg-[var(--theme-primary)] text-black font-bold hover:opacity-90 cursor-pointer"
+                >
+                  Plan assessment of {selected.label.slice(0, 24)}
+                </button>
+                <button
+                  onClick={() => onOpenRemoteDesktop?.(selected.label)}
+                  title="Check this endpoint and open an authorized remote desktop. Engagement scope and operator approval are still required."
+                  className="w-full mt-1 px-2 py-1.5 rounded border border-[var(--theme-border)] text-stone-200 font-bold hover:text-[var(--theme-primary)] hover:border-[var(--theme-primary)] cursor-pointer"
+                >
+                  Open remote desktop for {selected.label.slice(0, 20)}
+                </button>
+              </>
             )}
           </div>
         )}

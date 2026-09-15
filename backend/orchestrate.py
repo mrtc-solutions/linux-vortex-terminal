@@ -416,7 +416,7 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
     return report
 
 
-def stop_all(executor: Any, sessions: Any, workspace: Any | None = None) -> dict[str, Any]:
+def stop_all(executor: Any, sessions: Any, workspace: Any | None = None, remote: Any | None = None) -> dict[str, Any]:
     cancelled_ops = 0
     for op_id in list(getattr(executor, "cancel_events", {}) or {}):
         if executor.cancel(op_id):
@@ -430,4 +430,18 @@ def stop_all(executor: Any, sessions: Any, workspace: Any | None = None) -> dict
         for task in workspace.interrupted_tasks():
             workspace.update_task(task["id"], state="PAUSED")
             paused += 1
-    return {"operations_cancelled": cancelled_ops, "sessions_killed": killed_sessions, "tasks_paused": paused}
+    remote_closed = 0
+    if remote is not None:
+        # Authorized remote-desktop sessions hold sockets and bridges of their
+        # own; STOP ALL must close them or a "stopped" workbench would keep a
+        # live remote desktop open.
+        try:
+            remote_closed = int(remote.close_all("operator_stop_all").get("remote_sessions_closed", 0))
+        except Exception:
+            remote_closed = 0
+    return {
+        "operations_cancelled": cancelled_ops,
+        "sessions_killed": killed_sessions,
+        "tasks_paused": paused,
+        "remote_sessions_closed": remote_closed,
+    }

@@ -450,6 +450,64 @@ export const buildDeb = () => apiPost<JsonRecord>('/api/desktop/deb', {}, 300000
 export const downloadDeb = (filename: string) =>
   apiDownload('/api/desktop/deb/download', filename || 'vortex-terminal.deb');
 
+/* ---------------- Authorized remote-desktop sessions (VNC) ---------------- */
+
+export interface RemoteProbeRequest {
+  engagement_id: string;
+  host: string;
+  protocol?: string;
+  display?: number;
+  port?: number;
+  transport?: 'tls' | 'unencrypted';
+  deep?: boolean;
+  private_address_ack?: boolean;
+}
+
+export interface RemoteSessionRequest {
+  engagement_id: string;
+  host: string;
+  protocol?: string;
+  display?: number;
+  port?: number;
+  transport?: 'tls' | 'unencrypted';
+  label?: string;
+  client_library?: string;
+}
+
+export interface RemoteApprovalRequest {
+  confirm: boolean;
+  unencrypted_approved?: boolean;
+  protected_path_ack?: boolean;
+  private_address_ack?: boolean;
+  watch?: boolean;
+}
+
+export const getRemoteDesktop = () => apiGet<JsonRecord>('/api/remote-desktop');
+export const listRemoteSessions = () => apiGet<JsonRecord>('/api/remote-desktop/sessions');
+export const getRemoteSession = (id: string) =>
+  apiGet<JsonRecord>(`/api/remote-desktop/sessions/${encodeURIComponent(id)}`, 15000);
+export const probeRemoteDesktop = (request: RemoteProbeRequest) =>
+  apiPost<JsonRecord>('/api/remote-desktop/probe', { ...request }, 45000);
+export const createRemoteSession = (request: RemoteSessionRequest) =>
+  apiPost<JsonRecord>('/api/remote-desktop/sessions', { ...request }, 30000);
+export const approveRemoteSession = (id: string, request: RemoteApprovalRequest) =>
+  apiPost<JsonRecord>(`/api/remote-desktop/sessions/${encodeURIComponent(id)}/approve`, { ...request }, 30000);
+export const requestRemoteTicket = (id: string) =>
+  apiPost<JsonRecord>(`/api/remote-desktop/sessions/${encodeURIComponent(id)}/ticket`, {}, 15000);
+export const reconnectRemoteSession = (id: string) =>
+  apiPost<JsonRecord>(`/api/remote-desktop/sessions/${encodeURIComponent(id)}/reconnect`, {}, 30000);
+export const disconnectRemoteSession = (id: string, reason = 'operator_disconnected') =>
+  apiPost<JsonRecord>(`/api/remote-desktop/sessions/${encodeURIComponent(id)}/disconnect`, { reason }, 20000);
+export const closeRemoteSession = (id: string, reason = 'operator_closed') =>
+  apiPost<JsonRecord>(`/api/remote-desktop/sessions/${encodeURIComponent(id)}/close`, { reason }, 20000);
+export const noteRemoteActivity = (id: string, kind: 'traffic' | 'input_begin' | 'input_end' | 'heartbeat') =>
+  apiPost<JsonRecord>(`/api/remote-desktop/sessions/${encodeURIComponent(id)}/activity`, { kind }, 15000);
+
+/* The stream path is always same-origin: the browser never contacts a target
+   or gateway directly, and no port or VNC address appears in the URL. */
+export const remoteDesktopStreamPath = (id: string) =>
+  `/api/remote-desktop/sessions/${encodeURIComponent(id)}/stream`;
+
 /* ---------------- Real PTY sessions ---------------- */
 
 export const listSessions = () => apiGet<JsonRecord>('/api/sessions');

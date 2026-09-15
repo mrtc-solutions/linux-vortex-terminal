@@ -214,6 +214,8 @@ records that it does not know the host outcome rather than inferring success.
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — install, test, and operate as a real app
 - [`docs/STATUS.md`](docs/STATUS.md) — tested vs remaining gates
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow
+- [`docs/REMOTE_DESKTOP.md`](docs/REMOTE_DESKTOP.md) — authorized VNC desktops: architecture, security model, support matrix, evidence
+- [`docs/REMOTE_DESKTOP_ACCEPTANCE.md`](docs/REMOTE_DESKTOP_ACCEPTANCE.md) — real-target acceptance evidence for the current commit
 - [`docs/IMPLEMENTATION_REPORT.md`](docs/IMPLEMENTATION_REPORT.md) — current slice
 - [`docs/AUDIT_REPORT_2026-08-28.md`](docs/AUDIT_REPORT_2026-08-28.md) — full audit: defects found/fixed, test results, limitations
 - [`LICENSE`](LICENSE) — MIT License

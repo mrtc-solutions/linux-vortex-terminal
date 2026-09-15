@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ShieldCheck, TerminalSquare, ListChecks, Crosshair, Wrench, BrainCircuit,
   Activity, History as HistoryIcon, Database, Settings as SettingsIcon, LayoutGrid,
-  Bot, CircleHelp, Info as InfoIcon,
+  Bot, CircleHelp, Info as InfoIcon, Monitor,
 } from 'lucide-react';
 import { ThemeMode, FuzzyConsensusResult } from './types/terminal';
 import { sound } from './services/soundEffects';
@@ -19,7 +19,7 @@ import { ReportGeneratorModal } from './components/ReportGeneratorModal';
 import { FuzzyTab } from './components/FuzzyTab';
 import { AgentReachInspector } from './components/AgentReachInspector';
 import { FuzzyOrchestrationModal } from './components/FuzzyOrchestrationModal';
-import { WindowManager, PopupSpec } from './components/WindowManager';
+import { FocusRequest, WindowManager, PopupSpec } from './components/WindowManager';
 import { Dependencies } from './components/popups/Dependencies';
 import { Approvals } from './components/popups/Approvals';
 import { Shell } from './components/popups/Shell';
@@ -36,6 +36,12 @@ import { AgentMode } from './components/popups/AgentMode';
 import { AiOps } from './components/popups/AiOps';
 import { Help } from './components/popups/Help';
 import { About } from './components/popups/About';
+import { RemoteSessions } from './components/popups/RemoteSessions';
+import RemoteDesktopView from './components/RemoteDesktopView';
+
+function asJsonRecord(value: unknown): JsonRecord {
+  return (value && typeof value === 'object' ? value : {}) as JsonRecord;
+}
 
 export function App() {
   const [activeTab, setActiveTab] = useState<'terminal' | 'map' | 'out' | 'report' | 'fuzzy' | 'agent-reach'>('terminal');
@@ -47,6 +53,10 @@ export function App() {
   const [inspectingFuzzy, setInspectingFuzzy] = useState<FuzzyConsensusResult | null>(null);
   const [externalCommand, setExternalCommand] = useState<string | null>(null);
   const [popups, setPopups] = useState<PopupSpec[]>([]);
+  // Window close ends the remote session and its socket by default; the operator
+  // can opt into "keep for an approved reconnect" from the Remote Sessions window.
+  const [keepRemoteSessionOnClose, setKeepRemoteSessionOnClose] = useState<boolean>(false);
+  const [popupFocus, setPopupFocus] = useState<FocusRequest | null>(null);
 
   const selectConversation = useRef<(id: string) => Promise<void>>(async () => { throw new Error('Terminal is not ready.'); });
   const executingApprovals = useRef(new Set<string>());
@@ -79,7 +89,18 @@ export function App() {
   }, []);
 
   const openPopup = useCallback((kind: string, props: JsonRecord = {}) => {
-    const id = `${kind}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    // Remote-desktop windows and the Remote Sessions manager use stable ids, so
+    // "open" becomes "focus" instead of spawning a second window for one session.
+    const requestedSession = kind === 'remote-session' ? String(props.sessionId || '') : '';
+    const stableId = kind === 'remote-session' && requestedSession
+      ? `remote-session-${requestedSession}`
+      : kind === 'remote' ? 'remote-manager' : '';
+    const id = stableId || `${kind}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    if (stableId && popupRef.current.some((popup) => popup.id === stableId)) {
+      setPopupFocus({ id: stableId, nonce: Date.now() });
+      sound.playKeypress();
+      return;
+    }
     const close = () => closePopup(id);
     let spec: PopupSpec | null = null;
     switch (kind) {
@@ -154,6 +175,50 @@ export function App() {
       case 'about':
         spec = { id, title: 'ABOUT · DOWNLOADS · LICENSE', icon: <InfoIcon className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 620, height: 600, content: <About /> };
         break;
+      case 'remote':
+        spec = {
+          id,
+          title: 'REMOTE SESSIONS · AUTHORIZED DESKTOPS',
+          icon: <Monitor className="w-3.5 h-3.5 text-[var(--theme-primary)]" />,
+          width: 720, height: 640,
+          content: (
+            <RemoteSessions
+              initialHost={props.host ? String(props.host) : ''}
+              initialEngagementId={props.engagementId ? String(props.engagementId) : ''}
+              openSessionIds={popupRef.current
+                .filter((popup) => popup.id.startsWith('remote-session-'))
+                .map((popup) => popup.id.slice('remote-session-'.length))}
+              keepSessionOnClose={keepRemoteSessionOnClose}
+              onToggleKeepSessionOnClose={setKeepRemoteSessionOnClose}
+              onOpenSession={(session) => openPopup('remote-session', {
+                sessionId: String(session.id || ''),
+                session,
+              })}
+              onFocusSession={(sessionId) => setPopupFocus({ id: `remote-session-${sessionId}`, nonce: Date.now() })}
+              onOpenDependencies={() => openPopup('dependencies')}
+            />
+          ),
+        };
+        break;
+      case 'remote-session': {
+        if (!requestedSession) return;
+        const remoteSession = asJsonRecord(props.session);
+        const identity = asJsonRecord(remoteSession.target).identity;
+        spec = {
+          id,
+          title: `REMOTE DESKTOP · ${typeof identity === 'string' && identity ? identity : requestedSession}`,
+          icon: <Monitor className="w-3.5 h-3.5 text-[var(--theme-primary)]" />,
+          width: 1000, height: 720,
+          content: (
+            <RemoteDesktopView
+              session={remoteSession}
+              keepSessionOnClose={keepRemoteSessionOnClose}
+              onClosed={() => closePopup(id)}
+            />
+          ),
+        };
+        break;
+      }
       default:
         return;
     }
@@ -300,7 +365,7 @@ export function App() {
       )}
 
       {/* 7. Popup windows (secondary surfaces) */}
-      <WindowManager popups={popups} onClose={closePopup} />
+      <WindowManager popups={popups} onClose={closePopup} focusRequest={popupFocus} />
     </div>
   );
 }

@@ -20,6 +20,8 @@ const GET_ROUTES = [
   /^\/api\/dependencies(?:\/proposal)?$/,
   new RegExp(`^/api/operations/${SAFE_ID}$`),
   new RegExp(`^/api/sessions/${SAFE_ID}/events$`),
+  new RegExp(`^/api/remote-desktop(?:/sessions)?$`),
+  new RegExp(`^/api/remote-desktop/sessions/${SAFE_ID}$`),
   new RegExp(`^/api/agents/${SAFE_ID}/install$`),
   new RegExp(`^/api/conversations/${SAFE_ID}$`),
   new RegExp(`^/api/tasks/${SAFE_ID}$`),
@@ -42,6 +44,8 @@ const POST_ROUTES = [
   new RegExp(`^/api/engagements/${SAFE_ID}/close$`),
   new RegExp(`^/api/operations/${SAFE_ID}/(?:approve|cancel|complete-task)$`),
   new RegExp(`^/api/sessions/${SAFE_ID}/(?:input|kill|resize)$`),
+  /^\/api\/remote-desktop\/(?:probe|sessions)$/,
+  new RegExp(`^/api/remote-desktop/sessions/${SAFE_ID}/(?:approve|ticket|reconnect|disconnect|close|activity)$`),
   new RegExp(`^/api/conversations/${SAFE_ID}/(?:rename|archive|delete)$`),
   new RegExp(`^/api/conversations/${SAFE_ID}/messages/${SAFE_ID}/edit$`),
   new RegExp(`^/api/tasks/${SAFE_ID}/(?:restart|resume|delete|pause)$`),
@@ -79,9 +83,19 @@ function isAllowedApiRequest(route, method = 'GET') {
   return routes.some(pattern => pattern.test(parsed.pathname));
 }
 
+// WebSocket upgrades live on the same host and port as the HTTP sidecar. Treat
+// ws/wss as the same authority as http/https so origin checks and the
+// renderer's capability injection apply to the real desktop stream too.
+function sidecarOrigin(rawUrl) {
+  const parsed = new URL(rawUrl);
+  const family = parsed.protocol === 'ws:' || parsed.protocol === 'http:' ? 'http:'
+    : parsed.protocol === 'wss:' || parsed.protocol === 'https:' ? 'https:' : parsed.protocol;
+  return `${family}//${parsed.host}`;
+}
+
 function sameSidecarUrl(rawUrl, sidecarUrl) {
   try {
-    return new URL(rawUrl).origin === new URL(sidecarUrl).origin;
+    return sidecarOrigin(rawUrl) === sidecarOrigin(sidecarUrl);
   } catch (_) {
     return false;
   }
@@ -109,6 +123,7 @@ function isDirectRendererRequest(rawUrl, sidecarUrl, method = 'GET') {
       pathname === '/api/aiops/stream' ||
       new RegExp(`^/api/operations/${SAFE_ID}/stream$`).test(pathname) ||
       new RegExp(`^/api/sessions/${SAFE_ID}/stream$`).test(pathname) ||
+      new RegExp(`^/api/remote-desktop/sessions/${SAFE_ID}/stream$`).test(pathname) ||
       new RegExp(`^/api/agent/runs/${SAFE_ID}/stream$`).test(pathname) ||
       isSidecarDownloadUrl(rawUrl, sidecarUrl);
   } catch (_) {
@@ -144,5 +159,6 @@ module.exports = Object.freeze({
   isSidecarDownloadUrl,
   parseBootInfo,
   parseRelativeRoute,
-  sameSidecarUrl
+  sameSidecarUrl,
+  sidecarOrigin
 });

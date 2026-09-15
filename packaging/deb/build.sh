@@ -39,7 +39,34 @@ if [[ ! -f "$root/dist/index.html" ]]; then
   echo "React build missing: run npm ci && npm run build before packaging." >&2
   exit 2
 fi
+# The remote-desktop window needs the noVNC RFB client, which is inlined into
+# this document by the build. Ship an actionable failure instead of a package
+# whose desktop window would open blank.
+if ! grep -q 'vortex.rfb.v1' "$root/dist/index.html"; then
+  echo "React build is missing the bundled noVNC client (no RFB subprotocol marker)." >&2
+  echo "Run: npm ci && npm run build  (dependency: @novnc/novnc, MPL-2.0)" >&2
+  exit 2
+fi
 install -D -m 0644 "$root/dist/index.html" "$stage/usr/share/vortex/dist/index.html"
+
+# This package carries a bundled MPL-2.0 component, so its license text and the
+# build-time notice must ship with it. Refuse to emit a package that would omit
+# them rather than silently distributing noVNC without its license.
+novnc_license="$root/node_modules/@novnc/novnc/LICENSE.txt"
+if [[ ! -f "$novnc_license" ]]; then
+  echo "noVNC license text not found at $novnc_license" >&2
+  echo "Run: npm ci  (it installs @novnc/novnc, MPL-2.0, whose license must ship)" >&2
+  exit 2
+fi
+install -D -m 0644 "$novnc_license" "$stage/usr/share/doc/$package/noVNC-LICENSE.txt"
+# noVNC's own notice refers to the MPL 2.0 text; ship the full text too so the
+# package is self-contained for license review.
+for candidate in /usr/share/common-licenses/MPL-2.0; do
+  if [[ -f "$candidate" ]]; then
+    install -D -m 0644 "$candidate" "$stage/usr/share/doc/$package/MPL-2.0.txt"
+    break
+  fi
+done
 
 # Ship only reviewed source file types and explicit frontend/assets. A blanket
 # `cp -a` would silently include an operator's untracked .env, editor backup,
@@ -56,7 +83,7 @@ done
 for source in vortex.bash vortex.zsh vortex.fish; do
   install -D -m 0644 "$root/assets/completions/$source" "$stage/usr/share/vortex/assets/completions/$source"
 done
-for source in README.md LICENSE NOTICE SECURITY.md; do
+for source in README.md LICENSE LICENSES.md NOTICE SECURITY.md; do
   install -D -m 0644 "$root/$source" "$stage/usr/share/vortex/$source"
 done
 for source in build.sh vortex.1 vortex.desktop; do
