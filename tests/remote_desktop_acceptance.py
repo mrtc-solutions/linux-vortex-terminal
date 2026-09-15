@@ -364,6 +364,9 @@ class QtVncTarget:
         """Qt focuses its own widgets, so there is nothing to arrange."""
         return True
 
+    def processes(self) -> list[subprocess.Popen]:
+        return [self.process] if self.process is not None else []
+
     def diagnostic_tail(self) -> str:
         return _log_tail(self.tmp / "target.log", lines=8)
 
@@ -541,6 +544,9 @@ class X11VncTarget:
     def keyboard_received(self, marker: str) -> bool:
         """The terminal received these exact bytes (raw mode: no Enter needed)."""
         return marker in str(self.state().get("text", ""))
+
+    def processes(self) -> list[subprocess.Popen]:
+        return list(self.procs)
 
     def diagnostic_tail(self) -> str:
         return (f"xterm: {_log_tail(self.tmp / 'target.log', lines=4)}; "
@@ -1068,8 +1074,9 @@ def run_acceptance(args: argparse.Namespace) -> int:
 
         # --- 15. no orphan processes or sockets --------------------------
         target.stop()
-        results.require("the target process tree is gone after teardown",
-                        target.process is None or target.process.poll() is not None, "")
+        leftover = [process for process in target.processes() if process.poll() is None]
+        results.require("the target process tree is gone after teardown", not leftover,
+                        f"{len(leftover)} target process(es) still running")
         results.require("the target port is released (no orphan listener)", not port_is_open(target.port), "")
         sidecar.stop()
         results.require("the sidecar stopped with the run", sidecar.process.poll() is not None, "")
