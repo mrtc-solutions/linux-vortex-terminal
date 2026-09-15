@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -389,6 +390,8 @@ class X11VncTarget:
         self.xev_path = self.tmp / "xev.log"
         self.procs: list[subprocess.Popen] = []
         self.vnc_procs: list[subprocess.Popen] = []
+        self.resize_supported = False
+        self.resize_error = "not probed yet"
 
     def _free_display_number(self) -> int:
         for number in range(80, 120):
@@ -411,6 +414,11 @@ class X11VncTarget:
         if not Path(f"/tmp/.X11-unix/X{self.display}").exists():
             raise CheckFailed(f"Xvfb did not create display :{self.display}")
         env = {"DISPLAY": f":{self.display}"}
+        # Whether this X server can change the screen size is a property of the
+        # server, not an assumption: probe it before the applications start, so
+        # the resize subtest only runs where a resize is really possible and the
+        # fixed-resolution contract is verified everywhere else.
+        self.resize_supported = self._probe_resize_support(env)
         self._spawn(["openbox"], env=env)
         # Real terminal application: keystrokes typed over RFB become a file on
         # the target host, which is application-level evidence of input delivery.
@@ -434,6 +442,15 @@ class X11VncTarget:
         self._spawn_vnc_servers(env)
         wait_for_banner(self.port)
         wait_for_banner(self.auth_port)
+
+    def _probe_resize_support(self, env: dict) -> bool:
+        smaller = (self.width // 2, self.height // 2)
+        first = self._run_in_display(["xrandr", "--fb", f"{smaller[0]}x{smaller[1]}"], env)
+        restored = self._run_in_display(["xrandr", "--fb", f"{self.width}x{self.height}"], env)
+        ok = first.returncode == 0 and restored.returncode == 0
+        if not ok:
+            self.resize_error = (first.stderr or first.stdout or "xrandr reported no reason").strip()[:200]
+        return ok
 
     def _run_in_display(self, argv: list[str], env: dict) -> subprocess.CompletedProcess:
         return subprocess.run(argv, env={**os.environ, **env}, capture_output=True, timeout=20, text=True)
@@ -484,20 +501,19 @@ class X11VncTarget:
                 f"x11vnc: {_log_tail(self.tmp / 'x11vnc.log', lines=4)}")
 
     def _window_geometry(self, name: str, env: dict) -> tuple[int, int, int, int]:
+        """Window geometry straight from the X server, tolerating xdotool's extras.
+
+        xdotool may append the screen index ("Position: 560,274 (screen: 0)"),
+        so the numbers are pulled out with a pattern instead of a bare split.
+        """
         window = self._window_id(name, env)
         result = self._run_in_display(["xdotool", "getwindowgeometry", window], env)
-        position = size = None
-        for line in (result.stdout or "").splitlines():
-            line = line.strip()
-            if line.startswith("Position:"):
-                x, y = line.split(":", 1)[1].strip().split(",")
-                position = (int(x), int(y))
-            elif line.startswith("Geometry:"):
-                width, height = line.split(":", 1)[1].strip().split("x")
-                size = (int(width), int(height))
-        if position is None or size is None:
-            raise CheckFailed(f"could not read the geometry of {name}: {result.stdout!r} {result.stderr!r}")
-        return position[0], position[1], size[0], size[1]
+        output = result.stdout or ""
+        position = re.search(r"Position:\s*(-?\d+)\s*,\s*(-?\d+)", output)
+        size = re.search(r"Geometry:\s*(\d+)\s*x\s*(\d+)", output)
+        if not position or not size:
+            raise CheckFailed(f"could not read the geometry of {name}: {output!r} {result.stderr!r}")
+        return int(position.group(1)), int(position.group(2)), int(size.group(1)), int(size.group(2))
 
     def interrupt(self) -> None:
         """Kill the VNC service but keep the desktop and its applications alive."""
@@ -528,8 +544,8 @@ class X11VncTarget:
             self._spawn(["x11vnc", "-display", f":{self.display}", "-rfbport", str(self.port), "-forever", "-shared",
                          "-xrandr", "-nopw", "-quiet", "-o", str(self.tmp / "x11vnc.log")], env=env),
             self._spawn(["x11vnc", "-display", f":{self.display}", "-rfbport", str(self.auth_port), "-forever", "-shared",
-                         "-rfbauth", str(self.tmp / "vncpasswd"), "-quiet", "-o", str(self.tmp / "x11vnc-auth.log")],
-                        env=env),
+                         "-xrandr", "-rfbauth", str(self.tmp / "vncpasswd"), "-quiet",
+                         "-o", str(self.tmp / "x11vnc-auth.log")], env=env),
         ]
 
     def stop(self) -> None:
@@ -589,7 +605,7 @@ class X11VncTarget:
 
     @property
     def supports_runtime_resize(self) -> bool:
-        return True
+        return self.resize_supported
 
     @property
     def supports_vnc_auth(self) -> bool:
@@ -923,7 +939,9 @@ def run_acceptance(args: argparse.Namespace) -> int:
         else:
             results.require("the target reports a fixed resolution the UI documents and scales",
                             (client.width, client.height) == (target.width, target.height),
-                            f"fixed {client.width}x{client.height}")
+                            f"fixed {client.width}x{client.height}"
+                            + (f"; live resize unavailable: {getattr(target, 'resize_error', '')}"
+                               if target.flavour == "x11vnc" else ""))
 
         # --- 13. auth failure against a real VNC-auth endpoint -----------
         if target.supports_vnc_auth:

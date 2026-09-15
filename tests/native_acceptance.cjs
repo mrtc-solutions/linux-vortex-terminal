@@ -42,7 +42,14 @@ const assert = require('assert/strict');
     await expect.poll(async () => (await ipc('/api/sessions')).sessions.filter(s => s.status === 'running').length).toBe(0);
     assert.deepEqual(errors, []);
     const closed = app.waitForEvent('close');
-    await page.getByLabel('Close application').click();
+    // Clicking the control that shuts the app down can tear the page down before
+    // Playwright's click() settles, which rejects with "Target page, context or
+    // browser has been closed" even though the click landed. The assertion that
+    // matters is that the application really exits, so only that specific race is
+    // tolerated: if the window does not close, `closed` still rejects.
+    await page.getByLabel('Close application').click({ timeout: 15000 }).catch((error) => {
+      if (!/closed/i.test(String(error && error.message))) throw error;
+    });
     await closed;
     app = null;
     console.log('PASS: native Electron startup, real IPC, allowlist rejection, minimize/maximize/restore/close, real PTY/SSE and cleanup');
