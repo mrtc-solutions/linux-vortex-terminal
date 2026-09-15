@@ -15,6 +15,11 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
+# Evidence file for the graphical gate. CI uploads it as a build artifact so the
+# per-check result is inspectable next to the run, not only inside the log.
+REPORT_PATH = Path(
+    os.environ.get('VORTEX_ACCEPTANCE_REPORT') or (ROOT / 'artifacts' / 'remote-desktop-acceptance.json')
+)
 GATES = [
     ('Lint and TypeScript', ['npm', 'run', 'lint']),
     ('Production React build', ['npm', 'run', 'build']),
@@ -29,7 +34,8 @@ GATES = [
     # A real VNC server serving a real graphical application, driven through the
     # actual WebSocket/RFB bridge. Exit code 3 means the environment could not
     # provide a target: that is a FAILED gate, never a skip.
-    ('Authorized remote desktop vs real graphical target', [sys.executable, 'tests/remote_desktop_acceptance.py']),
+    ('Authorized remote desktop vs real graphical target',
+     [sys.executable, 'tests/remote_desktop_acceptance.py', '--report', str(REPORT_PATH)]),
 ]
 
 

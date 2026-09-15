@@ -47,3 +47,11 @@ jobs:
           echo "VORTEX_REAL_MODEL=$RUNNER_TEMP/vortex-model/stories15M-q4_0.gguf" >> "$GITHUB_ENV"
       - name: All eleven release gates, no skipped checks
         run: xvfb-run -a sh -c 'openbox >/tmp/vortex-openbox.log 2>&1 & python3 scripts/release_gates.py'
+      - name: Upload remote-desktop acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-desktop-acceptance
+          path: artifacts/remote-desktop-acceptance.json
+          if-no-files-found: warn
+          retention-days: 30

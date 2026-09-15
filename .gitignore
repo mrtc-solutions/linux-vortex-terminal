@@ -36,3 +36,6 @@ coverage/
 # Browser test output
 /test-results/
 /playwright-report/
+
+# Local evidence written by the release gates
+artifacts/
