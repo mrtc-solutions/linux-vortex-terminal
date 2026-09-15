@@ -84,3 +84,20 @@ raw operation approval tokens, or generated packages are committed.
 
 PR #23 should remain unmerged pending these blockers. The earlier green checks
 remain valid for their narrower coverage, not as a 10/10 production guarantee.
+
+## Remediation in progress
+
+The subsequent implementation now hashes the exact inline bundle into the HTML
+CSP, removes network font dependencies, preserves Host through the dev proxy and
+serializes browser authentication. Debian builds require and digest the React
+bundle; desktop startup builds it before launching. The missing GGUF/Ollama,
+conversation search/Edit & Branch, and native titlebar controls are wired into
+React. Shell windows now own independent PTYs and clean up late-created sessions.
+
+The production, dev-proxy, and extracted-.deb browser acceptance suites each pass
+five live tests locally. A new `scripts/release_gates.py` requires ten explicit
+checks, including native Electron and real-weight GGUF inference; missing
+prerequisites are failures, never skips. GitHub Actions supplies a display/window
+manager, Electron, and a CPU inference engine plus a real small GGUF model.
+Final remote results are pending; the original findings above are historical
+reproduction evidence, not a claim that those bugs remain unchanged.

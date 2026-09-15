@@ -33,6 +33,14 @@ mkdir -p "$out" "$stage/DEBIAN" "$stage/usr/share/vortex" "$stage/usr/share/man/
   "$stage/usr/share/fish/vendor_completions.d" "$stage/usr/bin" "$stage/usr/share/doc/$package" \
   "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/scalable/apps"
 
+# The production React shell is a self-contained, CSP-hashed document.
+# Never silently release the legacy UI because the frontend build was omitted.
+if [[ ! -f "$root/dist/index.html" ]]; then
+  echo "React build missing: run npm ci && npm run build before packaging." >&2
+  exit 2
+fi
+install -D -m 0644 "$root/dist/index.html" "$stage/usr/share/vortex/dist/index.html"
+
 # Ship only reviewed source file types and explicit frontend/assets. A blanket
 # `cp -a` would silently include an operator's untracked .env, editor backup,
 # bytecode cache, or other checkout residue in a downloadable package.

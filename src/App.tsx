@@ -8,6 +8,7 @@ import { ThemeMode, FuzzyConsensusResult } from './types/terminal';
 import { sound } from './services/soundEffects';
 import { JsonRecord, OperationDocument, PlanDocument, listArtifacts } from './services/vortexApi';
 
+import { NativeTitleBar } from './components/NativeTitleBar';
 import { MatrixRainCanvas } from './components/MatrixRainCanvas';
 import { HeaderBar } from './components/HeaderBar';
 import { QuickPromptBar } from './components/QuickPromptBar';
@@ -118,7 +119,7 @@ export function App() {
         spec = { id, title: 'MISSING DEPENDENCIES', width: 640, height: 560, content: <Dependencies onOpenPopup={openPopup} /> };
         break;
       case 'models':
-        spec = { id, title: 'LOCAL AI / MODELS', icon: <BrainCircuit className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 660, height: 580, content: <Models /> };
+        spec = { id, title: 'LOCAL AI / MODELS', icon: <BrainCircuit className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 660, height: 580, content: <Models onOpenPopup={openPopup} /> };
         break;
       case 'system':
         spec = { id, title: 'SYSTEM HEALTH', icon: <Activity className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 600, height: 540, content: <SystemPanel /> };
@@ -211,6 +212,7 @@ export function App() {
 
   return (
     <div className="relative w-screen h-screen flex flex-col overflow-hidden bg-[var(--theme-bg)] text-[var(--theme-primary)] font-mono select-none">
+      <NativeTitleBar />
       {/* 1. Digital Matrix Rain Animation */}
       <MatrixRainCanvas theme={theme} enabled={matrixRainEnabled} opacity={0.16} />
 

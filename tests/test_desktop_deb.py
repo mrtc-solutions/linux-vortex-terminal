@@ -59,6 +59,9 @@ class DesktopDebTests(unittest.TestCase):
         share = extract / "usr" / "share" / "vortex"
         for relative in ("LICENSE", "NOTICE", "packaging/deb/build.sh", "packaging/deb/vortex.1", "packaging/deb/vortex.desktop"):
             self.assertTrue((share / relative).is_file(), f"{relative} must ship for installed runtime parity")
+        react = share / "dist" / "index.html"
+        self.assertTrue(react.is_file(), "React production build must ship")
+        self.assertEqual(react.read_bytes(), (Path(__file__).resolve().parent.parent / "dist" / "index.html").read_bytes())
         # The package carries the live frontend, not a stale copy.
         app_js = (extract / "usr" / "share" / "vortex" / "frontend" / "app.js").read_text(encoding="utf-8")
         self.assertIn("triggerDownload", app_js)

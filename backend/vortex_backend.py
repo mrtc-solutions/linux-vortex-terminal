@@ -9,6 +9,7 @@ execution; the renderer is never allowed to spawn a process.
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import contextmanager
 import errno
 import fcntl
@@ -4212,19 +4213,22 @@ class VortexHandler(BaseHTTPRequestHandler):
             return "null" if self.token and self._authorized() else None
         return origin if self._browser_context_allowed() else None
 
-    def _headers(self, content_type: str = "application/json") -> None:
+    def _headers(self, content_type: str = "application/json", script_hashes: tuple[str, ...] = ()) -> None:
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        # Authorize only the exact script bytes in the served, trusted UI file.
+        # Never enable arbitrary inline scripts or relax API CSP.
+        scripts = "script-src 'self'" + "".join(" 'sha256-" + value + "'" for value in script_hashes)
         if self._host_frame_allowed():
             # The operator allow-listed this preview proxy host for framing.
             # CSP frame-ancestors (not X-Frame-Options) names the exact origin.
             authority = self._authority((self.headers.get("Host") or "").strip())
             hostname = authority[0] if authority else ""
-            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://" + hostname + "; form-action 'self'")
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " + scripts + "; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://" + hostname + "; form-action 'self'")
         else:
             self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " + scripts + "; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
@@ -4431,7 +4435,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             if not stat.S_ISREG(details.st_mode) or not 0 <= details.st_size <= MAX_STATIC_ASSET_BYTES:
                 raise OSError("static asset is not a bounded regular file")
             self.send_response(200)
-            self._headers("text/html; charset=utf-8" if path in ("/", "/index.html") else mime)
+            self._headers("text/html; charset=utf-8" if path in ("/", "/index.html") else mime, self._inline_script_hashes(asset.read_bytes()) if path in ("/", "/index.html") else ())
             self.send_header("Content-Length", str(details.st_size))
             self.end_headers()
         except (OSError, ValueError):
@@ -4965,6 +4969,13 @@ class VortexHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             return self._json(404, {"error": {"code": "not_found", "message": "trusted package file is no longer available; build it again"}})
 
+    @staticmethod
+    def _inline_script_hashes(data: bytes) -> tuple[str, ...]:
+        # CSP hashes use UTF-8 and HTML's newline normalization.
+        text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        return tuple(base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
+                     for body in re.findall(r"<script\b[^>]*>(.*?)</script\s*>", text, re.I | re.S) if body.strip())
+
     def _static(self, path: Path, content_type: str) -> None:
         with path.open("rb") as handle:
             details = os.fstat(handle.fileno())
@@ -4973,7 +4984,7 @@ class VortexHandler(BaseHTTPRequestHandler):
             data = handle.read(MAX_STATIC_ASSET_BYTES + 1)
         if len(data) > MAX_STATIC_ASSET_BYTES:
             raise OSError("static asset exceeds the response bound")
-        self.send_response(200); self._headers(content_type); self.send_header("Content-Length", str(len(data))); self.end_headers(); self._write(data)
+        self.send_response(200); self._headers(content_type, self._inline_script_hashes(data) if content_type.startswith("text/html") else ()); self.send_header("Content-Length", str(len(data))); self.end_headers(); self._write(data)
 
     def do_POST(self) -> None:
         if not self._guard_request(): return

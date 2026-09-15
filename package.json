@@ -18,7 +18,12 @@
     "lint": "python3 -m compileall -q backend cli && node --check frontend/app.js && node --check frontend/aiops.js && node --check frontend/terminal.js && node --check frontend/windows.js && node --check frontend/workspace.js && node --check frontend/models.js && node --check frontend/agent.js && node --check frontend/hud.js && node --check tests/test_frontend.js && node --check tests/test_frontend_runtime.js && node --check tests/test_frontend_auth.js && node --check tests/test_agents_local_ai.js && node --check tests/test_hud.js && node --check tests/test_responsive.js && node --check tests/test_agent.js && node --check tests/test_terminal.js && node --check tests/test_windows.js && node --check desktop/main.js && node --check desktop/preload.js && node --check desktop/security.js && node --check desktop/window-controls.js && node --check scripts/ensure-electron.js && node --check scripts/start.js && npx tsc --noEmit",
     "format:check": "python3 -m compileall -q backend cli",
     "package:deb": "packaging/deb/build.sh",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:legacy": "node tests/test_terminal.js && node tests/test_windows.js && node tests/test_frontend.js && node tests/test_frontend_runtime.js && node tests/test_frontend_auth.js && node tests/test_agents_local_ai.js && node tests/test_hud.js && node tests/test_responsive.js && node tests/test_agent.js",
+    "test:live": "python3 scripts/test_live_ui.py",
+    "test:native": "node tests/native_acceptance.cjs",
+    "test:release": "python3 scripts/release_gates.py",
+    "prepreview": "npm run build"
   },
   "dependencies": {
     "clsx": "2.1.1",

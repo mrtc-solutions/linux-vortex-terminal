@@ -23,14 +23,14 @@ export default defineConfig({
     host: "0.0.0.0",
     allowedHosts: true,
     proxy: {
-      "/api": "http://127.0.0.1:8765",
+      "/api": { target: process.env.VORTEX_DEV_SIDECAR || "http://127.0.0.1:8765", changeOrigin: false },
     },
   },
   preview: {
     host: "0.0.0.0",
     allowedHosts: true,
     proxy: {
-      "/api": "http://127.0.0.1:8765",
+      "/api": { target: process.env.VORTEX_DEV_SIDECAR || "http://127.0.0.1:8765", changeOrigin: false },
     },
   },
 });

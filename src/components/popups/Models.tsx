@@ -5,6 +5,7 @@ import {
   JsonRecord, cancelLlamafileInstall, getGguf, getLlamafile, getModels, getOllama,
   installLlamafile, startLlamafileServer, stopLlamafileServer,
 } from '../../services/vortexApi';
+import { ModelManagement } from './ModelManagement';
 import { EmptyLine, ErrorLine, GhostButton, PrimaryButton, Section, StateBadge, asRecord } from './common';
 
 function ProviderCard({ name, detail }: { name: string; detail: JsonRecord }) {
@@ -21,10 +22,11 @@ function ProviderCard({ name, detail }: { name: string; detail: JsonRecord }) {
   );
 }
 
-export const Models: React.FC = () => {
+export const Models: React.FC<{ onOpenPopup: (kind: string, props?: JsonRecord) => void }> = ({ onOpenPopup }) => {
   const [models, setModels] = useState<JsonRecord | null>(null);
   const [llamafile, setLlamafile] = useState<JsonRecord | null>(null);
   const [gguf, setGguf] = useState<JsonRecord | null>(null);
+  const [catalog, setCatalog] = useState<JsonRecord>({});
   const [ollama, setOllama] = useState<JsonRecord | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
@@ -39,6 +41,7 @@ export const Models: React.FC = () => {
       setLlamafile(asRecord(l.llamafile) as JsonRecord);
       setGguf(asRecord(g.gguf) as JsonRecord);
       setOllama(asRecord(o.ollama ?? o) as JsonRecord);
+      setCatalog(asRecord(o.models));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -231,6 +234,8 @@ export const Models: React.FC = () => {
           </div>
         </Section>
       )}
+
+      <ModelManagement gguf={gguf} runtime={ollama} catalog={catalog} refresh={refresh} onOpenPopup={onOpenPopup} />
 
       {ollama && typeof ollama === 'object' && (
         <Section title="Ollama">

@@ -1,13 +1,18 @@
 /* Conversations popup — resume, rename, archive, export, delete. */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { Download, History as HistoryIcon, Loader2, RefreshCw } from 'lucide-react';
 import {
   JsonRecord, archiveConversation, createConversation, deleteConversation,
-  exportConversation, listConversations, renameConversation,
+  exportConversation, listConversations, renameConversation, getConversation, editMessage,
 } from '../../services/vortexApi';
 import { DangerButton, EmptyLine, ErrorLine, GhostButton, PrimaryButton, Section, StateBadge, inputCls } from './common';
 
 export const History: React.FC<{ onClose: () => void; onSelect: (id: string) => Promise<void> }> = ({ onClose, onSelect }) => {
+  const requestGeneration = useRef(0);
+  const [query, setQuery] = useState('');
+  const [thread, setThread] = useState<{ id: string; messages: JsonRecord[] } | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editedText, setEditedText] = useState('');
   const [items, setItems] = useState<JsonRecord[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameText, setRenameText] = useState('');
@@ -16,18 +21,23 @@ export const History: React.FC<{ onClose: () => void; onSelect: (id: string) => 
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     setError('');
     try {
-      const payload = await listConversations();
+      const payload = await listConversations(query.trim());
+      if (generation !== requestGeneration.current) return;
       setItems(Array.isArray(payload.conversations) ? payload.conversations as JsonRecord[] : []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (generation === requestGeneration.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
-  }, []);
+  }, [query]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refresh(), query ? 200 : 0);
+    return () => { window.clearTimeout(timer); requestGeneration.current += 1; };
+  }, [refresh, query]);
 
   const run = async (label: string, action: () => Promise<unknown>) => {
     if (busy) return;
@@ -63,6 +73,23 @@ export const History: React.FC<{ onClose: () => void; onSelect: (id: string) => 
     }
   };
 
+  const inspect = (id: string) => run(`read-${id}`, async () => {
+    const payload = await getConversation(id);
+    setThread({ id, messages: Array.isArray(payload.messages) ? payload.messages as JsonRecord[] : [] });
+    setEditing(null);
+  });
+
+  const branch = () => run('branch', async () => {
+    if (!thread || !editing || !editedText.trim()) throw new Error('Enter a non-empty instruction.');
+    const payload = await editMessage(thread.id, editing, editedText.trim());
+    const conversation = payload.conversation as JsonRecord;
+    if (typeof conversation?.id !== 'string') throw new Error('No branch returned.');
+    // The backend preserves the original conversation. Selecting uses the same
+    // busy/approval guard and transcript loader as Resume.
+    await onSelect(conversation.id);
+    onClose();
+  });
+
   const commitRename = async (id: string) => {
     const title = renameText.trim();
     if (!title) {
@@ -89,6 +116,20 @@ export const History: React.FC<{ onClose: () => void; onSelect: (id: string) => 
 
       <ErrorLine message={error} />
 
+      <input aria-label="Search conversations" placeholder="Search titles and saved messages…" value={query} onChange={e => setQuery(e.target.value)} className={inputCls} />
+      {thread && <Section title="Saved messages — editing creates a new branch">
+        {thread.messages.filter(m => !m.superseded_by).map(message => <div key={String(message.id)} className="border-b border-[var(--theme-border)] py-2 space-y-2">
+          {editing === message.id ? <>
+            <textarea aria-label="Edit instruction" className={inputCls} value={editedText} onChange={e => setEditedText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(null); } }} />
+            <PrimaryButton disabled={!!busy || !editedText.trim()} onClick={() => void branch()}>Save & Branch</PrimaryButton>
+            <GhostButton disabled={!!busy} onClick={() => setEditing(null)}>Cancel edit</GhostButton>
+          </> : <>
+            <p className="whitespace-pre-wrap select-text">{String(message.content || '')}</p>
+            {message.role === 'user' && <GhostButton disabled={!!busy} onClick={() => { setEditing(String(message.id)); setEditedText(String(message.content || '')); }}>Edit & Branch</GhostButton>}
+          </>}
+        </div>)}
+      </Section>}
       <Section title={`Threads (${items.length})`}>
         {loading && <EmptyLine message="Reading conversations…" />}
         {!loading && items.length === 0 && <EmptyLine message="No conversations yet. Your next terminal turn starts one." />}
@@ -100,6 +141,7 @@ export const History: React.FC<{ onClose: () => void; onSelect: (id: string) => 
                 <div className="flex items-center gap-2 flex-wrap">
                   {renaming === id ? (
                     <input
+                      aria-label="Rename conversation"
                       value={renameText}
                       onChange={(e) => setRenameText(e.target.value)}
                       onKeyDown={(e) => {
@@ -120,6 +162,7 @@ export const History: React.FC<{ onClose: () => void; onSelect: (id: string) => 
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
                   <PrimaryButton disabled={!!busy} onClick={() => void resume(id)}>Resume</PrimaryButton>
+                  <GhostButton disabled={!!busy} onClick={() => void inspect(id)}>Read messages</GhostButton>
                   <GhostButton onClick={() => { setRenaming(id); setRenameText(String(item.title || '')); }}>Rename</GhostButton>
                   <GhostButton onClick={() => { void exportConversation(id).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err))); }}>
                     <span className="flex items-center gap-1"><Download className="w-3 h-3" />Export</span>

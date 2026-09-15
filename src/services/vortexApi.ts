@@ -46,6 +46,7 @@ function toError(status: number, payload: Record<string, unknown>, fallback: str
 /* ---------------- Auth transports: Electron IPC or browser session ---------------- */
 
 interface ElectronBridge {
+  localFilePath?: (file: File) => string;
   request: (route: string, options?: { method?: string; body?: unknown }) => Promise<unknown>;
 }
 
@@ -96,6 +97,8 @@ function consumeCapabilityFragment(): string {
 
 async function ensureBrowserSession(): Promise<void> {
   if (electronBridge()) return;
+  // Concurrent mount requests must await the same cookie exchange.
+  if (sessionPromise) return sessionPromise;
   if (!consumeCapabilityFragment()) return;
   if (!sessionPromise) {
     const token = browserCapability;
@@ -332,7 +335,7 @@ export const deleteTask = (id: string) => apiPost<JsonRecord>(`/api/tasks/${enco
 
 /* ---------------- Conversations / memory / learning ---------------- */
 
-export const listConversations = () => apiGet<JsonRecord>('/api/conversations');
+export const listConversations = (query = '') => apiGet<JsonRecord>(query ? `/api/conversations?q=${encodeURIComponent(query)}` : '/api/conversations');
 export const getConversation = (id: string) =>
   apiGet<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}`);
 export const createConversation = (title: string) =>
@@ -404,6 +407,10 @@ export const removeLlamafileModel = (model: string) =>
 
 export const activateGguf = (file: string, role: string) =>
   apiPost<JsonRecord>('/api/models/gguf/activate', { file, role });
+export const localFilePath = (file: File): string => electronBridge()?.localFilePath?.(file) || '';
+export const installOllama = () => apiPost<JsonRecord>('/api/ollama/install', { confirm: true }, 120000);
+export const cancelOllamaInstall = () => apiPost<JsonRecord>('/api/ollama/install/cancel');
+export const cancelOllamaPull = (name: string) => apiPost<JsonRecord>('/api/ollama/models/cancel', { name });
 export const importGguf = (path: string) =>
   apiPost<JsonRecord>('/api/models/gguf/import', { paths: [path] });
 export const pullOllamaModel = (model: string, role = 'none') =>

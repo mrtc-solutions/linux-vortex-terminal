@@ -1,0 +1,53 @@
+'use strict';
+// Real Electron + preload IPC + Python sidecar. No renderer/API mocks.
+const { _electron: electron, expect } = require('@playwright/test');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const assert = require('assert/strict');
+
+(async () => {
+  const root = path.resolve(__dirname, '..');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vortex-native-'));
+  let app;
+  try {
+    app = await electron.launch({
+      args: [path.join(root, 'desktop/main.js'), '--no-sandbox'],
+      env: { ...process.env, VORTEX_DATA_DIR: path.join(tmp, 'data'), VORTEX_CONFIG_DIR: path.join(tmp, 'config'), VORTEX_RUNTIME_DIR: path.join(tmp, 'runtime'), VORTEX_UI: '' },
+      timeout: 60000,
+    });
+    const page = await app.firstWindow();
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await expect(page.getByTitle('Sidecar connected')).toBeVisible({ timeout: 30000 });
+    const ipc = (route, options) => page.evaluate(async ({ route, options }) => window.vortexApi.request(route, options), { route, options });
+    assert.ok((await ipc('/api/system/health')).health);
+    await assert.rejects(() => ipc('/api/not-an-allowed-route'));
+    await page.getByLabel('Maximize application').click();
+    await expect(page.getByLabel('Restore application')).toBeVisible();
+    await page.getByLabel('Restore application').click();
+    await expect(page.getByLabel('Maximize application')).toBeVisible();
+    await page.getByLabel('Minimize application').click();
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
+    await page.getByTitle('Vortex Terminal start menu', { exact: true }).click();
+    await page.getByRole('dialog', { name: 'VORTEX TERMINAL START MENU', exact: true }).getByRole('button', { name: /^Host Shell / }).click();
+    const shell = page.getByRole('dialog', { name: 'HOST SHELL (LIVE PTY)', exact: true });
+    const input = shell.getByPlaceholder('Type into the live host shell…');
+    await expect(input).toBeEnabled();
+    await input.fill("printf 'NATIVE_%s_OK\\n' PTY");
+    await input.press('Enter');
+    await expect(shell.locator('pre')).toContainText('NATIVE_PTY_OK', { timeout: 15000 });
+    await shell.getByLabel('Close window').click();
+    await expect.poll(async () => (await ipc('/api/sessions')).sessions.filter(s => s.status === 'running').length).toBe(0);
+    assert.deepEqual(errors, []);
+    const closed = app.waitForEvent('close');
+    await page.getByLabel('Close application').click();
+    await closed;
+    app = null;
+    console.log('PASS: native Electron startup, real IPC, allowlist rejection, minimize/maximize/restore/close, real PTY/SSE and cleanup');
+  } finally {
+    if (app) await app.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });

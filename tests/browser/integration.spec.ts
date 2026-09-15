@@ -73,9 +73,9 @@ test('failed resume preserves old context and displays the API error', async ({ 
 test('Escape cancels inline rename without closing its window', async ({ page }) => {
   await boot(page); await open(page, 'Conversations');
   await history(page).getByRole('button', { name: 'Rename', exact: true }).click();
-  await history(page).getByRole('textbox').press('Escape');
+  await history(page).getByLabel('Rename conversation').press('Escape');
   await expect(history(page)).toBeVisible();
-  await expect(history(page).getByRole('textbox')).toHaveCount(0);
+  await expect(history(page).getByLabel('Rename conversation')).toHaveCount(0);
 });
 
 test('dependencies are reachable from Tools and plans require review', async ({ page }) => {
@@ -174,4 +174,41 @@ test('an executing approval still blocks resume after its window is closed', asy
   await history(page).getByRole('button', { name: 'Resume', exact: true }).click();
   await expect(history(page).getByText(/Close or finish the pending approval/)).toBeVisible();
   release();
+});
+
+test('model management sends reviewed API shapes and confirms downloads', async ({ page }) => {
+  await boot(page);
+  await page.route('**/api/models/gguf', route => route.fulfill({ json: { gguf: { files: [{ name: 'example.gguf' }] } } }));
+  await page.route('**/api/ollama', route => route.fulfill({ json: { ollama: { installed: true, api_state: 'healthy' }, models: { items: [{ name: 'example:1b', installed: true }] } } }));
+  const changes: { path: string; body: unknown }[] = [];
+  await page.route('**/api/models/gguf/activate', async route => { changes.push({ path: new URL(route.request().url()).pathname, body: route.request().postDataJSON() }); await route.fulfill({ json: {} }); });
+  await page.route('**/api/ollama/models/pull', async route => { changes.push({ path: new URL(route.request().url()).pathname, body: route.request().postDataJSON() }); await route.fulfill({ json: {} }); });
+  await open(page, 'Models');
+  const models = page.getByRole('dialog', { name: 'LOCAL AI / MODELS', exact: true });
+  await models.getByRole('button', { name: 'Use example.gguf for primary', exact: true }).click();
+  await expect.poll(() => changes.length).toBe(1);
+  expect(changes[0].body).toEqual({ file: 'example.gguf', role: 'primary' });
+  await models.getByLabel('Ollama model name').fill('example:1b');
+  await models.getByRole('button', { name: 'Download named model' }).click();
+  expect(changes).toHaveLength(1);
+  await models.getByRole('button', { name: 'Confirm model change', exact: true }).click();
+  await expect.poll(() => changes.length).toBe(2);
+  expect(changes[1].body).toEqual({ name: 'example:1b', role: 'primary' });
+});
+
+test('native application controls use the preload bridge', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { vortexWindow: unknown; nativeActions: string[] };
+    w.nativeActions = [];
+    w.vortexWindow = {
+      getState: async () => ({ maximized: false }), onStateChange: () => () => {},
+      minimize: () => w.nativeActions.push('minimize'),
+      toggleMaximize: () => w.nativeActions.push('maximize'), close: () => w.nativeActions.push('close'),
+    };
+  });
+  await boot(page);
+  await page.getByLabel('Minimize application').click();
+  await page.getByLabel('Maximize application').click();
+  await page.getByLabel('Close application').click();
+  expect(await page.evaluate(() => (window as unknown as { nativeActions: string[] }).nativeActions)).toEqual(['minimize', 'maximize', 'close']);
 });

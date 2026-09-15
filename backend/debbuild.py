@@ -115,6 +115,15 @@ def _frontend_tree_digest(frontend: Path, *, require_all: bool = False) -> str:
         if not stat.S_ISREG(details.st_mode) or details.st_size > 8 * 1024 * 1024:
             raise RuntimeError(f"frontend/{name} is not a bounded regular file")
         payloads.append(path.read_bytes())
+    react = frontend.parent / "dist" / "index.html"
+    try:
+        details = react.lstat()
+        if not stat.S_ISREG(details.st_mode) or details.st_size > 8 * 1024 * 1024:
+            raise RuntimeError("React build is not a bounded regular file")
+        payloads.append(react.read_bytes())
+    except FileNotFoundError:
+        if require_all:
+            raise RuntimeError("React build missing: run npm run build before packaging")
     return _sha256_bytes(b"".join(sorted(payloads)))
 
 

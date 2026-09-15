@@ -16,3 +16,32 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test:browser
+      - run: python3 scripts/test_live_ui.py
+      - run: python3 scripts/test_live_ui.py --dev
+  release-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: sudo apt-get update && sudo apt-get install -y xvfb openbox
+      - name: Install real CPU inference engine
+        env:
+          CMAKE_ARGS: '-DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_CUDA=OFF'
+          CMAKE_BUILD_PARALLEL_LEVEL: '2'
+        run: python3 -m pip install 'llama-cpp-python==0.3.16'
+      - name: Download real test model (not a fixture)
+        run: |
+          mkdir -p "$RUNNER_TEMP/vortex-model"
+          curl --fail --location --retry 3 'https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf' -o "$RUNNER_TEMP/vortex-model/stories15M-q4_0.gguf"
+          echo "VORTEX_REAL_MODEL=$RUNNER_TEMP/vortex-model/stories15M-q4_0.gguf" >> "$GITHUB_ENV"
+      - name: All ten release gates, no skipped checks
+        run: xvfb-run -a sh -c 'openbox >/tmp/vortex-openbox.log 2>&1 & python3 scripts/release_gates.py'

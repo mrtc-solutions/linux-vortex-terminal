@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Vortex Terminal final audit: 10 real gates, 10/10 required.
 
-Every gate executes genuine checks against this tree (no simulation):
+These are regression checks; GGUF inference uses an explicit test engine.
+For production/native/real-provider acceptance use scripts/release_gates.py.
+This suite covers:
 unit suites, lint, JS suites, the GGUF provider chain, fuzzy routing,
 per-function assistance, upstream tracking, a live HTTP server, the CLI,
 and security spot-checks. Prints a score and exits 0 only at 10/10.
@@ -346,7 +348,7 @@ def gate_security() -> None:
 
 
 def main() -> int:
-    print("Vortex Terminal final audit — 10 gates, real execution, no simulation.", flush=True)
+    print("Vortex Terminal regression audit — 10 gates (includes mocked model inference).", flush=True)
     gate_unit_suite()
     gate_lint()
     gate_js_suites()
