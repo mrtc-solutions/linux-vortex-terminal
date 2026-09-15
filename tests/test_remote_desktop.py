@@ -791,6 +791,56 @@ class BridgeTests(unittest.TestCase):
             upstream_server.close()
 
 
+class AcceptanceClientCryptoTests(unittest.TestCase):
+    """The acceptance client must compute exactly what the product's client does.
+
+    ``tests/fixtures/rfb_client.py`` performs real VNC authentication against
+    real servers, so its DES must agree with noVNC (the client Vortex ships).
+    These vectors were produced by running noVNC's own ``RFB.genDES`` path
+    (``legacyCrypto.importKey('raw', passwordChars, {name: 'DES-ECB'})`` followed
+    by ``legacyCrypto.encrypt``) from ``@novnc/novnc`` 1.7.0, so a regression in
+    the fixture - such as the truncated ciphertext that made a correct password
+    time out - fails here instead of only in the acceptance run.
+    """
+
+    @staticmethod
+    def _client():
+        import sys as _sys
+        fixtures = str(Path(__file__).resolve().parent / "fixtures")
+        if fixtures not in _sys.path:
+            _sys.path.insert(0, fixtures)
+        import rfb_client
+        return rfb_client
+
+    def test_des_matches_the_fips_vector(self):
+        client = self._client()
+        ciphertext = client.des_encrypt(bytes.fromhex("4e6f772069732074"), bytes.fromhex("0123456789abcdef"))
+        self.assertEqual(ciphertext.hex(), "3fa40e8a984d4815")
+        self.assertEqual(len(ciphertext), 8, "DES must return a full 8-byte block")
+
+    def test_vnc_auth_response_matches_novnc(self):
+        client = self._client()
+        vectors = [
+            (bytes(range(16)), b"password", "b866924125c8eebb9debc1db61c538e2"),
+            (bytes.fromhex("deadbeefcafebabe0011223344556677"), b"vortex-a",
+             "4c67a6833b8ff7087e1e8413b40a0a40"),
+        ]
+        for challenge, password, expected in vectors:
+            with self.subTest(password=password):
+                response = client.vnc_auth_response(challenge, password)
+                # A 16-byte challenge needs two encrypted blocks: a short response
+                # leaves the server waiting and the client times out.
+                self.assertEqual(len(response), 16)
+                self.assertEqual(response.hex(), expected)
+
+    def test_long_passwords_use_the_first_eight_bytes(self):
+        client = self._client()
+        challenge = bytes.fromhex("00112233445566778899aabbccddeeff")
+        long_form = client.vnc_auth_response(challenge, b"vortex-acceptance")
+        short_form = client.vnc_auth_response(challenge, b"vortex-a")
+        self.assertEqual(long_form, short_form)
+
+
 class DisconnectBookkeepingTests(LoopbackWorkspace):
     """A stream teardown must never lie about who ended the connection."""
 
