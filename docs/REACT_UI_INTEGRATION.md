@@ -45,3 +45,9 @@ behavior, or certify complete feature parity with the legacy renderer. Resume
 renders saved message text; it does not reconstruct every rich live-output card.
 Legacy scripts and branches are deliberately retained pending a broader parity
 and native-desktop acceptance audit. No zero-bug guarantee is implied.
+
+## Subsequent real-backend audit
+
+See [REAL_INTEGRATION_AUDIT.md](REAL_INTEGRATION_AUDIT.md). Real-backend testing
+found production startup, authenticated dev-proxy, packaging and parity blockers.
+The mocked-browser passes do not supersede these findings.
