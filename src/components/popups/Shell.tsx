@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { TerminalSquare, PlugZap, Unplug, Loader2 } from 'lucide-react';
 import {
-  JsonRecord, killSession, listSessions, openSession, sendSessionInput, streamSession, StreamHandle,
+  JsonRecord, killSession, openSession, sendSessionInput, streamSession, StreamHandle,
 } from '../../services/vortexApi';
 import { sound } from '../../services/soundEffects';
 
@@ -23,7 +23,9 @@ export const Shell: React.FC = () => {
   const [error, setError] = useState('');
   const streamRef = useRef<StreamHandle | null>(null);
   const sessionIdRef = useRef<string | null>(null);
-  const startedRef = useRef(false);
+  const generationRef = useRef(0);
+  const connectingRef = useRef(false);
+  const aliveRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const seqRef = useRef(0);
@@ -60,65 +62,57 @@ export const Shell: React.FC = () => {
   };
 
   const connect = async () => {
-    setError('');
-    setStatus('connecting');
+    if (connectingRef.current) return;
+    connectingRef.current = true;
+    const generation = ++generationRef.current;
+    setError(''); setStatus('connecting');
     sound.playExecute();
     try {
-      const existing = await listSessions().catch(() => null);
-      const sessions = (existing && Array.isArray((existing as JsonRecord).sessions)
-        ? (existing as JsonRecord).sessions as JsonRecord[] : [])
-        .filter((item) => item.status === 'running' || !item.status);
-      const mine = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
-      const target = mine || sessions[0];
-      if (target && typeof target.id === 'string') {
-        sessionIdRef.current = target.id as string;
-        setSessionId(target.id as string);
-        setStatus('running');
-        attach(target.id as string);
+      // Each window owns its own PTY. Never attach to another window's session.
+      const created = await openSession();
+      const id = String(((created.session || {}) as JsonRecord).id || '');
+      if (!id) throw new Error('Sidecar did not return a session.');
+      if (!aliveRef.current || generation !== generationRef.current) {
+        await killSession(id);
         return;
       }
-      const created = await openSession();
-      const session = (created.session || {}) as JsonRecord;
-      const id = String(session.id || '');
-      if (!id) throw new Error('Sidecar did not return a session.');
       sessionIdRef.current = id;
-      setSessionId(id);
-      setStatus('running');
-      attach(id);
+      seqRef.current = 0;
+      setSessionId(id); setStatus('running'); attach(id);
     } catch (err) {
-      sound.playAlert();
-      setError(err instanceof Error ? err.message : String(err));
-      setStatus('failed');
+      if (aliveRef.current && generation === generationRef.current) {
+        sound.playAlert(); setError(err instanceof Error ? err.message : String(err)); setStatus('failed');
+      }
+    } finally {
+      if (generation === generationRef.current) connectingRef.current = false;
     }
   };
 
   const disconnect = async () => {
-    streamRef.current?.close();
-    streamRef.current = null;
-    if (sessionId) {
-      try {
-        await killSession(sessionId);
-      } catch {
-        /* already gone — honest either way */
-      }
+    setError('');
+    try {
+      if (sessionIdRef.current) await killSession(sessionIdRef.current);
+      streamRef.current?.close(); streamRef.current = null;
+      sessionIdRef.current = null;
+      setSessionId(null); setStatus('closed'); sound.playKeypress();
+    } catch (err) {
+      setError(`Unable to stop shell: ${err instanceof Error ? err.message : String(err)}`);
     }
-    setSessionId(null);
-    setStatus('closed');
-    sound.playKeypress();
   };
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    aliveRef.current = true;
     void connect();
     return () => {
-      streamRef.current?.close();
-      streamRef.current = null;
-      /* Popup closed: kill the sidecar session so no orphan shell survives. */
+      aliveRef.current = false;
+      generationRef.current += 1;
+      connectingRef.current = false;
+      streamRef.current?.close(); streamRef.current = null;
       const id = sessionIdRef.current;
       sessionIdRef.current = null;
       if (id) void killSession(id).catch(() => undefined);
     };
+    // A generation guard also disposes PTYs created after a window was closed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -157,6 +151,7 @@ export const Shell: React.FC = () => {
         ) : (
           <button
             onClick={connect}
+            disabled={status === 'connecting'}
             className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--theme-primary)] text-black font-bold hover:opacity-90 cursor-pointer"
           >
             {status === 'connecting' ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlugZap className="w-3 h-3" />}

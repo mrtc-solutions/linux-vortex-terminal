@@ -4,7 +4,7 @@ import { Loader2, RefreshCw, Wrench } from 'lucide-react';
 import { JsonRecord, listHostTools, listTools, rescanHostTools } from '../../services/vortexApi';
 import { EmptyLine, ErrorLine, GhostButton, Section, StateBadge, asRecord, inputCls } from './common';
 
-export const Tools: React.FC = () => {
+export const Tools: React.FC<{ onDependencies: () => void }> = ({ onDependencies }) => {
   const [tools, setTools] = useState<JsonRecord[]>([]);
   const [host, setHost] = useState<JsonRecord | null>(null);
   const [filter, setFilter] = useState('');
@@ -61,6 +61,7 @@ export const Tools: React.FC = () => {
         </GhostButton>
       </div>
 
+      <GhostButton onClick={onDependencies}>Missing dependencies</GhostButton>
       <ErrorLine message={error} />
 
       {host && (

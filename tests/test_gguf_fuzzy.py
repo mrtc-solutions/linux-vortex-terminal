@@ -176,7 +176,15 @@ class GgufPythonEngineTests(unittest.TestCase):
         import time
 
         stop = threading.Event()
-        self.addCleanup(stop.set)
+        def finish_worker():
+            stop.set()
+            # The timed-out worker is deliberately detached by production.
+            # Wait for its resource slot before the next test uses that slot.
+            acquired = gguf_provider._PYTHON_BUSY.acquire(timeout=5)
+            self.assertTrue(acquired, "detached test worker did not exit")
+            if acquired:
+                gguf_provider._PYTHON_BUSY.release()
+        self.addCleanup(finish_worker)
 
         def stuck(prompt, **kwargs):
             stop.wait(timeout=30)

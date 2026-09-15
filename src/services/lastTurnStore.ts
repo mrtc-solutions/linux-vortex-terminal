@@ -6,9 +6,9 @@ import { TurnResult } from './vortexApi';
 let lastTurn: TurnResult | null = null;
 let lastAt = '';
 
-export function setLastTurn(turn: TurnResult): void {
+export function setLastTurn(turn: TurnResult | null): void {
   lastTurn = turn;
-  lastAt = new Date().toLocaleTimeString();
+  lastAt = turn ? new Date().toLocaleTimeString() : '';
 }
 
 export function getLastTurn(): { turn: TurnResult | null; at: string } {

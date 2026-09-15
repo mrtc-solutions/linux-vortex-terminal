@@ -15,13 +15,14 @@ import {
 } from 'lucide-react';
 import {
   ApiError, JsonRecord, OperationDocument, TurnResult,
-  getModels, getSystemHealth, stopAll,
+  getModels, getSystemHealth, stopAll, getConversation, getTask, getOperation,
 } from '../services/vortexApi';
-import { startTurn, watchOperation } from '../services/turnRunner';
+import { startTurn, watchOperation, persistConversationId } from '../services/turnRunner';
 import { setLastTurn } from '../services/lastTurnStore';
 import { advisorySummary, guardianSummary, toFuzzyConsensus } from '../services/realFuzzyAdapter';
 
 interface TerminalViewProps {
+  selectionRef: React.MutableRefObject<(id: string) => Promise<void>>;
   onInspectFuzzy: (consensus: FuzzyConsensusResult) => void;
   onNavigateToOut: () => void;
   onNavigateToMap: () => void;
@@ -84,6 +85,7 @@ function commandOutput(operation: OperationDocument): { text: string; exitCode: 
 }
 
 export const TerminalView: React.FC<TerminalViewProps> = ({
+  selectionRef,
   onInspectFuzzy,
   onNavigateToOut,
   onNavigateToMap,
@@ -118,6 +120,66 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const appendLines = (lines: TerminalLine[]) => {
     setHistory((prev) => [...prev, ...lines].slice(-400));
   };
+
+  useEffect(() => {
+    selectionRef.current = async (id: string) => {
+      if (busyRef.current) throw new Error('Wait for the active operation before switching conversations.');
+      busyRef.current = true;
+      setIsProcessing(true);
+      try {
+        const payload = await getConversation(id);
+        if (asRecord(payload.conversation).id !== id || !Array.isArray(payload.messages)) throw new Error('Invalid conversation response.');
+        const messages = payload.messages.map(asRecord).filter(message => !message.superseded_by).slice(-400);
+        const lines: TerminalLine[] = [];
+        const operations = new Map<string, OperationDocument>();
+        // Restore retained evidence, not a new execution. Four concurrent message
+        // lookups bound API pressure for long saved conversations.
+        for (let offset = 0; offset < messages.length; offset += 4) {
+          const restored = await Promise.all(messages.slice(offset, offset + 4).map(async (message, index) => {
+            const line: TerminalLine = { id: String(message.id || `message-${offset + index}`), timestamp: String(message.created_at || ''),
+              type: message.role === 'user' ? 'input' : 'output', content: String(message.content || '') };
+            const result = [line];
+            const meta = asRecord(message.meta);
+            if (message.role === 'user' || (!meta.operation_id && !meta.task_id)) return result;
+            try {
+              let operationId = String(meta.operation_id || '');
+              if (!operationId && meta.task_id) {
+                const task = asRecord((await getTask(String(meta.task_id))).task);
+                operationId = String(task.operation_id || '');
+              }
+              if (operationId) {
+                let operation = operations.get(operationId);
+                if (!operation) {
+                  operation = (await getOperation(operationId)).operation;
+                  if (!operation) throw new Error('Saved operation not found.');
+                  operations.set(operationId, operation);
+                }
+                const rendered = commandOutput(operation);
+                result.push({ id: `${line.id}-evidence`, timestamp: line.timestamp,
+                  type: rendered.exitCode === 0 ? 'output' : 'error', content: rendered.text,
+                  tableData: rendered.table, meta: { modelName: `Saved operation ${operationId}`, exitCode: rendered.exitCode } });
+              }
+            } catch (err) {
+              result.push({ id: `${line.id}-warning`, timestamp: line.timestamp, type: 'warning',
+                content: `Saved message loaded, but evidence could not be restored: ${err instanceof Error ? err.message : String(err)}` });
+            }
+            return result;
+          }));
+          lines.push(...restored.flat());
+        }
+        persistConversationId(id);
+        if (localStorage.getItem('vortex.conversationId') !== id) throw new Error('Unable to save conversation selection.');
+        setHistory(lines.slice(-400));
+        setLastTurn(null);
+        setInputValue('');
+        setCommandHistory([]);
+        setHistoryIndex(-1);
+      } finally {
+        busyRef.current = false;
+        setIsProcessing(false);
+      }
+    };
+  }, [selectionRef]);
 
   // Boot: real sidecar handshake, then a greeting built from live facts.
   // Also reused by the `retry` command after a failed handshake.
@@ -374,7 +436,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       setInputValue('');
       return;
     }
-    for (const popup of ['tasks', 'scope', 'tools', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
+    for (const popup of ['agent', 'tasks', 'scope', 'tools', 'dependencies', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
       if (trimmed === popup) {
         appendLines([{ id: `input-${Date.now()}`, timestamp: timeStr, type: 'input', content: trimmed }]);
         onOpenPopup(popup, {});

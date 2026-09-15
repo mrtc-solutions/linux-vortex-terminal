@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('vortexWindow', Object.freeze({
   getState: () => ipcRenderer.invoke('vortex-window-state').then(safeWindowState),
   onStateChange: callback => {
     if (typeof callback !== 'function') return;
-    ipcRenderer.on('vortex-window-state', (_event, state) => callback(safeWindowState(state)));
+    const listener = (_event, state) => callback(safeWindowState(state));
+    ipcRenderer.on('vortex-window-state', listener);
+    return () => ipcRenderer.removeListener('vortex-window-state', listener);
   }
 }));

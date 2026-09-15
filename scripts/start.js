@@ -24,6 +24,12 @@ function main() {
     process.exit(1);
   }
 
+  // Build before launching; otherwise a fresh checkout silently shows the old UI.
+  const build = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: ROOT, stdio: 'inherit' });
+  if (build.error || build.status !== 0) {
+    process.stderr.write('[vortex-start] React build failed; desktop launch cancelled.\n');
+    process.exit(1);
+  }
   if (!ensureElectron()) {
     // ensureElectron already printed exact remediation; preview is the
     // zero-Electron way to test the workbench on this host.
