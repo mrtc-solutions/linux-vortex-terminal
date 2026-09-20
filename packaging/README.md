@@ -47,13 +47,13 @@ vortex desktop repo            # refuses to overwrite; add --replace to rebuild
 #      ssh webhost 'mv /srv/apt/vortex /srv/apt/vortex-prev && mv /srv/apt/vortex-new /srv/apt/vortex'
 #    (Local-directory installs just copy the tree; there is no live reader.)
 
-# 3. On the target machine, register the repository (as root). Signed by
-#    default; --trust-unsigned is for a local repo you built yourself.
-#    (Path below is from a checkout; on an installed machine the script is
-#    at /usr/share/vortex/packaging/deb/install-repo.sh.)
-sudo packaging/deb/install-repo.sh --repo-url https://<host>/vortex --key <copied-dir>/vortex-archive-key.asc
-# local-directory shortcut (testing only):
-# sudo packaging/deb/install-repo.sh --repo-path /path/to/copied/repo --trust-unsigned
+# 3. On the target machine, from inside the copied directory (the repo ships
+#    its own installer plus NEXT-STEPS.txt), register it as root:
+cd /path/to/copied/repo
+sudo ./install-repo.sh --repo-path . --trust-unsigned   # local testing only
+# -- or, for a signed repo served over https (any checkout also carries the
+#    script at packaging/deb/install-repo.sh):
+# sudo ./install-repo.sh --repo-url https://<host>/vortex --key ./vortex-archive-key.asc
 
 # 4. Install, upgrade, and repair by package name.
 sudo apt install linux-vortex-terminal

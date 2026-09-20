@@ -411,11 +411,15 @@ def _verify_repo(tree: Path, codename: str, component: str) -> dict[str, Any]:
             shipped.append({"filename": payload.name, "version": fields["Version"], "sha256": fields["SHA256"]})
     if not shipped:
         raise RuntimeError("repo carries no installable packages")
+    installer = tree / "install-repo.sh"
+    if not installer.is_file() or installer.is_symlink() or not os.access(installer, os.X_OK):
+        raise RuntimeError("repo is missing its executable installer (install-repo.sh)")
     return {
         "packages": shipped,
         "release_sha256": _sha256_file(release),
         "signed": (dists / "InRelease").is_file() and (dists / "Release.gpg").is_file(),
         "key_shipped": (tree / "vortex-archive-key.asc").is_file(),
+        "installer": True,
     }
 
 
@@ -505,14 +509,14 @@ def _build_repo(
             os.rename(staged, target)
     if verified["signed"] and verified["key_shipped"]:
         hint = (
-            f"APT repository ready at {target}. Serve it over https (or copy the directory), then on the target machine: "
-            "sudo packaging/deb/install-repo.sh --repo-url https://<host>/vortex --key <copied-dir>/vortex-archive-key.asc "
+            f"APT repository ready at {target}. Serve it over https (or copy the directory), then on the target machine, "
+            "from inside the copied directory: sudo ./install-repo.sh --repo-url https://<host>/vortex --key ./vortex-archive-key.asc "
             "&& sudo apt install linux-vortex-terminal"
         )
     else:
         hint = (
-            f"Unsigned APT repository ready at {target} (local testing only). On the target machine: "
-            "copy the directory, then sudo packaging/deb/install-repo.sh --repo-path <copied-dir> --trust-unsigned "
+            f"Unsigned APT repository ready at {target} (local testing only). On the target machine, "
+            "copy the directory, then from inside it: sudo ./install-repo.sh --repo-path . --trust-unsigned "
             "&& sudo apt install linux-vortex-terminal"
         )
     return {
@@ -526,6 +530,7 @@ def _build_repo(
         "release_sha256": verified["release_sha256"],
         "signed": verified["signed"],
         "key_shipped": verified["key_shipped"],
+        "installer": verified["installer"],
         "package": PACKAGE,
         "license": "MIT",
         "message": hint,

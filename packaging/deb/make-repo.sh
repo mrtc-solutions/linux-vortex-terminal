@@ -85,6 +85,14 @@ if [[ -n "$sign_key" ]]; then
     exit 2
   fi
 fi
+# The published repo must be self-contained: whoever copies the directory
+# gets the installer with it. Refuse to publish without it.
+script_dir=$(cd "$(dirname "$0")" && pwd)
+installer="$script_dir/install-repo.sh"
+if [[ ! -f "$installer" ]]; then
+  echo "install-repo.sh not found next to make-repo.sh ($script_dir); cannot publish a self-contained repository" >&2
+  exit 2
+fi
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -227,6 +235,31 @@ if [[ -n "$sign_key" ]]; then
 else
   signed="no (unsigned local repository)"
 fi
+
+# Self-contained publish: the installer ships inside the repo so one copied
+# directory is everything the target machine needs, plus the exact commands.
+cp "$installer" "$stage/install-repo.sh"
+chmod 0755 "$stage/install-repo.sh"
+if [[ -n "$sign_key" ]]; then
+  register="sudo ./install-repo.sh --repo-url https://<host>/vortex --key ./vortex-archive-key.asc"
+else
+  register="sudo ./install-repo.sh --repo-path . --trust-unsigned   # local testing only"
+fi
+cat > "$stage/NEXT-STEPS.txt" <<STEPS
+Vortex APT repository (suite $codename, component $component, ${#debs[@]} package(s), signed: $signed).
+
+On the target machine, from this directory:
+  $register
+  sudo apt install linux-vortex-terminal
+
+Upgrade / repair later with:
+  sudo apt upgrade linux-vortex-terminal
+  sudo apt install --reinstall linux-vortex-terminal
+
+Restart any running 'vortex serve' after an upgrade so it never mixes
+old code with newly installed modules.
+STEPS
+chmod 0644 "$stage/NEXT-STEPS.txt"
 
 mkdir -p "$(dirname "$out")"
 mv "$stage" "$out"

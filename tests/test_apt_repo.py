@@ -40,8 +40,8 @@ FAKE_ARMOR = (
 )
 
 
-def _run(*args: str, env: dict | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(list(args), capture_output=True, text=True, check=False, env=env, timeout=timeout)
+def _run(*args: str, env: dict | None = None, timeout: int = 120, cwd: str | Path | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(list(args), capture_output=True, text=True, check=False, env=env, timeout=timeout, cwd=cwd)
 
 
 def _sha256(path: Path) -> str:
@@ -422,6 +422,22 @@ class InstalledPayloadTests(_DebCase):
         self.assertNotIn("Traceback", proc.stderr)
 
 
+    def test_extracted_first_run_doctor_reports_facts(self):
+        import sys
+
+        tree = self.home / "installed-doctor"
+        tree.mkdir()
+        proc = _run(self.dpkg_deb, "--extract", str(self._build()), str(tree))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        entry = tree / "usr" / "share" / "vortex" / "cli" / "vortex.py"
+        proc = _run(sys.executable, str(entry), "doctor", "--json",
+                    env=_contained_env(self.home / "doctor-home"), timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertIn("doctor", payload)
+        self.assertIn("architecture", payload["doctor"])
+
+
 class DpkgRootTests(_DebCase):
     """Real dpkg install/upgrade/remove transactions in an unprivileged --root.
 
@@ -664,6 +680,39 @@ class MakeRepoTests(_DebCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertFalse(repo.exists(), "a failed sign must not publish a half-signed repo")
 
+    def test_repo_ships_installer_and_next_steps(self):
+        deb = self._build()
+        repo = self._make_repo(deb, extra=["--codename", "legacy", "--component", "apps"])
+        shipped = repo / "install-repo.sh"
+        self.assertTrue(shipped.is_file())
+        self.assertTrue(shipped.stat().st_mode & 0o111, "shipped installer must stay executable")
+        self.assertEqual(shipped.read_bytes(), INSTALL_REPO.read_bytes())
+        steps = (repo / "NEXT-STEPS.txt").read_text(encoding="utf-8")
+        self.assertIn("suite legacy, component apps", steps)
+        self.assertIn("sudo ./install-repo.sh --repo-path . --trust-unsigned", steps)
+        self.assertIn("sudo apt install linux-vortex-terminal", steps)
+        self.assertIn("Restart any running 'vortex serve'", steps)
+
+    def test_signed_repo_next_steps_point_at_shipped_key(self):
+        deb = self._build()
+        stub = _write_gpg_stub(self.home)
+        env = dict(os.environ)
+        env["VORTEX_GPG"] = str(stub)
+        repo = self._make_repo(deb, env=env, extra=["--sign", "testkey"])
+        steps = (repo / "NEXT-STEPS.txt").read_text(encoding="utf-8")
+        self.assertIn("--key ./vortex-archive-key.asc", steps)
+        self.assertNotIn("--trust-unsigned", steps)
+
+    def test_make_repo_without_installer_nearby_refuses(self):
+        lone = self.home / "lone"
+        lone.mkdir()
+        shutil.copy(MAKE_REPO, lone / "make-repo.sh")
+        deb = self._build()
+        proc = _run("bash", str(lone / "make-repo.sh"), "--output", str(self.home / "nope"), "--deb", str(deb))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("install-repo.sh", proc.stderr)
+        self.assertFalse((self.home / "nope").exists())
+
     def test_real_apt_resolves_package_by_name_and_picks_newest(self):
         apt_get = shutil.which("apt-get")
         apt_cache = shutil.which("apt-cache")
@@ -742,6 +791,75 @@ class MakeRepoTests(_DebCase):
         self.assertIn(f"Inst {PACKAGE} [0.2.0] ({APP_VERSION}", upgrade)
         repair = simulate(APP_VERSION, "--reinstall")
         self.assertIn(f"Inst {PACKAGE} [{APP_VERSION}] ({APP_VERSION}", repair)
+
+    def test_user_keystrokes_from_copied_dir_to_apt_candidate(self):
+        apt_get = shutil.which("apt-get")
+        apt_cache = shutil.which("apt-cache")
+        if apt_get is None or apt_cache is None:
+            self.skipTest("apt is required for the keystroke proof")
+        repo = self._make_repo(self._build())
+        usb = self.home / "usb-copy"
+        shutil.copytree(repo, usb)
+        staged = self.home / "staged"
+        proc = _run("bash", "./install-repo.sh", "--repo-path", ".", "--trust-unsigned",
+                    "--root", str(staged), cwd=usb, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        sources = (staged / "etc" / "apt" / "sources.list.d" / "vortex.sources").read_text(encoding="utf-8")
+        self.assertIn(f"URIs: file://{usb.resolve()}", sources)
+        apt_dir = self.home / "apt"
+        (apt_dir / "lists" / "partial").mkdir(parents=True)
+        (apt_dir / "archives" / "partial").mkdir(parents=True)
+        (apt_dir / "sources.list").write_text(f"deb [trusted=yes] file://{usb.resolve()} stable main\n", encoding="utf-8")
+        base = [
+            f"-o=Dir::Etc::sourcelist={apt_dir / 'sources.list'}",
+            "-o=Dir::Etc::sourceparts=/dev/null",
+            f"-o=Dir::State::Lists={apt_dir / 'lists'}",
+            f"-o=Dir::Cache::archives={apt_dir / 'archives'}",
+            "-o=Debug::NoLocking=1",
+        ]
+        update = _run(apt_get, *base, "update", timeout=180)
+        self.assertEqual(update.returncode, 0, update.stderr)
+        policy = _run(apt_cache, *base, "policy", PACKAGE, timeout=60)
+        self.assertEqual(policy.returncode, 0, policy.stderr)
+        self.assertIn(f"Candidate: {APP_VERSION}", policy.stdout)
+
+    def test_repo_upgrade_resolves_newest_whatever_it_is(self):
+        apt_get = shutil.which("apt-get")
+        if apt_get is None:
+            self.skipTest("apt is required for the upgrade proof")
+        current = self._build()
+        env = dict(os.environ)
+        env["VORTEX_VERSION"] = "0.4.0"
+        new_out = self.home / "new-deb"
+        proc = _run("bash", str(BUILD_SH), str(new_out), env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        new = next(new_out.glob(f"{PACKAGE}_0.4.0_all.deb"))
+        repo = self._make_repo(current, new)
+        apt_dir = self.home / "apt"
+        (apt_dir / "lists" / "partial").mkdir(parents=True)
+        (apt_dir / "archives" / "partial").mkdir(parents=True)
+        (apt_dir / "sources.list").write_text(f"deb [trusted=yes] file://{repo} stable main\n", encoding="utf-8")
+        status = apt_dir / "status"
+        status.write_text(
+            f"Package: {PACKAGE}\nStatus: install ok installed\nPriority: optional\nSection: utils\n"
+            f"Maintainer: mrtc-solutions\nArchitecture: all\nVersion: {APP_VERSION}\nDescription: Linux Vortex Terminal\n\n"
+            "Package: python3\nStatus: install ok installed\nPriority: important\nSection: python\n"
+            "Maintainer: test\nArchitecture: amd64\nVersion: 3.99.0-1\nDescription: python3\n",
+            encoding="utf-8",
+        )
+        base = [
+            f"-o=Dir::Etc::sourcelist={apt_dir / 'sources.list'}",
+            "-o=Dir::Etc::sourceparts=/dev/null",
+            f"-o=Dir::State::Lists={apt_dir / 'lists'}",
+            f"-o=Dir::Cache::archives={apt_dir / 'archives'}",
+            f"-o=Dir::State::status={status}",
+            "-o=Debug::NoLocking=1",
+        ]
+        update = _run(apt_get, *base, "update", timeout=180)
+        self.assertEqual(update.returncode, 0, update.stderr)
+        upgrade = _run(apt_get, *base, "-s", "install", PACKAGE, timeout=180)
+        self.assertEqual(upgrade.returncode, 0, upgrade.stderr)
+        self.assertIn(f"Inst {PACKAGE} [{APP_VERSION}] (0.4.0", upgrade.stdout)
 
 
 class InstallRepoTests(unittest.TestCase):
@@ -925,6 +1043,7 @@ class BackendRepoTests(unittest.TestCase):
         self.assertEqual(result["packages"][0]["version"], APP_VERSION)
         self.assertEqual(result["packages"][0]["sha256"], built["sha256"])
         self.assertFalse(result["signed"])
+        self.assertTrue(result["installer"])
         tree = Path(result["path"])
         self.assertTrue((tree / "dists" / "stable" / "Release").is_file())
         self.assertIn("sudo apt install linux-vortex-terminal", result["message"])
@@ -1046,7 +1165,17 @@ class BackendRepoTests(unittest.TestCase):
             result = build_repo(output_dir=self.home / "signed", sign_key="testkey")
         self.assertTrue(result["signed"])
         self.assertTrue(result["key_shipped"])
-        self.assertIn("--key <copied-dir>/vortex-archive-key.asc", result["message"])
+        self.assertIn("--key ./vortex-archive-key.asc", result["message"])
+
+
+    def test_verification_rejects_missing_installer(self):
+        from backend.debbuild import _verify_repo
+
+        build_deb()
+        tree = Path(build_repo()["path"])
+        (tree / "install-repo.sh").unlink()
+        with self.assertRaisesRegex(RuntimeError, "executable installer"):
+            _verify_repo(tree, "stable", "main")
 
 
 class CliRepoTests(unittest.TestCase):
@@ -1087,6 +1216,41 @@ class CliRepoTests(unittest.TestCase):
         run = _run("sh", str(launcher), "--version", env=self.env, timeout=60)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(run.stdout.strip(), f"vortex {APP_VERSION}")
+
+
+    def test_desktop_help_lists_deb_and_repo(self):
+        proc = _run("python3", str(ROOT / "cli" / "vortex.py"), "desktop", "--help", env=self.env, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("{deb,repo}", proc.stdout)
+        self.assertIn("--replace", proc.stdout)
+        self.assertIn("--sign", proc.stdout)
+
+
+class DocsTests(unittest.TestCase):
+    def _complete(self, words: list[str], index: int) -> list[str]:
+        driver = (
+            f"source {ROOT / 'assets' / 'completions' / 'vortex.bash'}; "
+            f"COMP_WORDS=({' '.join(words)}); COMP_CWORD={index}; COMPREPLY=(); "
+            "_vortex_completions; printf '%s\\n' \"${COMPREPLY[@]}\""
+        )
+        proc = _run("bash", "-c", driver, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return [line for line in proc.stdout.splitlines() if line]
+
+    def test_bash_completes_desktop_action(self):
+        self.assertIn("desktop", self._complete(["vortex", ""], 1))
+        self.assertEqual(sorted(self._complete(["vortex", "desktop", ""], 2)), ["deb", "repo"])
+
+    def test_all_completions_list_desktop(self):
+        for name in ("vortex.bash", "vortex.zsh", "vortex.fish"):
+            text = (ROOT / "assets" / "completions" / name).read_text(encoding="utf-8")
+            self.assertIn("desktop", text, name)
+            self.assertIn("deb repo", text, name)
+
+    def test_man_page_documents_desktop(self):
+        page = (ROOT / "packaging" / "deb" / "vortex.1").read_text(encoding="utf-8")
+        self.assertIn(".BR desktop", page)
+        self.assertIn("APT repository", page)
 
 
 if __name__ == "__main__":

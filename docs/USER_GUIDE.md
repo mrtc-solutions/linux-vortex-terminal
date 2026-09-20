@@ -121,11 +121,12 @@ cleanly replaces every installed file on upgrade or
 vortex desktop deb
 vortex desktop repo
 # 2. Copy the repo directory to the target machine, or serve it over https.
-# 3. On the target machine, as root (signed by default; --trust-unsigned is
-#    for a local repo you built yourself):
-sudo packaging/deb/install-repo.sh --repo-url https://<host>/vortex --key <copied-dir>/vortex-archive-key.asc
-# (on an installed machine the script is at
-# /usr/share/vortex/packaging/deb/install-repo.sh)
+# 3. On the target machine, from inside the copied directory (it ships its
+#    own installer plus NEXT-STEPS.txt), as root:
+cd /path/to/copied/repo
+sudo ./install-repo.sh --repo-path . --trust-unsigned   # local testing only
+# (signed repos served over https: ./install-repo.sh --repo-url <url>
+# --key ./vortex-archive-key.asc)
 # 4. Install, upgrade, and repair by package name.
 sudo apt install linux-vortex-terminal
 sudo apt upgrade linux-vortex-terminal

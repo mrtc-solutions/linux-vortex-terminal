@@ -45,8 +45,19 @@
   non-ASCII output (proven with a hostile-locale run that fails without the
   flag). The sidecar also boots and serves with an empty PATH, repo
   registration is idempotent, `install-repo.sh` checks for apt-get before
-  writing, and the docs cover atomic publishing plus uninstall
-  (suite is now 616 Python + 10 JS).
+  writing, and the docs cover atomic publishing plus uninstall.
+- **Self-contained repo round.** `make-repo.sh` now ships `install-repo.sh`
+  (byte-identical, executable) plus a generated `NEXT-STEPS.txt` inside every
+  repository, so one copied directory is everything the target machine needs;
+  publishing without the installer alongside is refused. `build_repo()`
+  requires the executable installer during verification and reports it, the
+  man page documents `desktop deb/repo`, all three shell completions list
+  `desktop` with `deb`/`repo` actions (bash completion executes for real in
+  tests), and the flow is proven end to end: copy tree → run its own
+  installer from `.` → real `apt update` → candidate by name. Also covered:
+  first-run `doctor` from the installed payload, `desktop --help`, and a
+  0.3.0→0.4.0 upgrade simulation proving newest-pick is not version-specific
+  (suite is now 627 Python + 10 JS).
 
 - **`npm start` survives low-memory hosts.** The launcher now rebuilds
   `dist/` only when it is missing or older than the sources (`--rebuild`
