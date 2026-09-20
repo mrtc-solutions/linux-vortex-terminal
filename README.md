@@ -285,12 +285,17 @@ records that it does not know the host outcome rather than inferring success.
 
 ```bash
 npm run lint
-npm test                             # 642 python tests + 10 js suites
+npm test                             # 644 Python tests + 11 JS suites
 python3 scripts/final_gates.py       # the 10-gate release audit (10/10 required)
 ```
+
+For the real-only debugging sequence and the stricter browser/Electron/model/VNC
+release boundary, see [`docs/REAL_DEBUGGING_AND_ACCEPTANCE_PLAN.md`](docs/REAL_DEBUGGING_AND_ACCEPTANCE_PLAN.md).
 
 Optional desktop shell (Electron): `npm install && npm start` (Node 22.12+).
 The Electron binary downloads during `npm install`; if your network blocks
 GitHub release assets, set `ELECTRON_MIRROR`/`ELECTRON_CUSTOM_DIR` (see
 [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) §8) or test without Electron via
-`npm run preview`.
+`npm run preview`. The production React build is deliberately capped for a
+2-core/4-GB swapless Linux host; see the guide's **Build says `Killed`** section
+before raising `NODE_OPTIONS` manually.

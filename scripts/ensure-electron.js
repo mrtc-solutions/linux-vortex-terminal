@@ -58,23 +58,49 @@ function electronVersion() {
 }
 
 /**
- * Mirrors the checks in node_modules/electron/install.js and index.js:
- * dist/version must match the npm package version, and the executable
- * recorded in path.txt must exist.
+ * Resolve a usable Electron executable without importing `electron` itself.
+ * The package's index.js tries to download Electron if its binary is absent;
+ * callers that merely need an honest preflight (notably native acceptance)
+ * must never cause an accidental network retry. Mirrors the installer checks:
+ * dist/version must match the npm package version, and the path.txt target
+ * must be a contained existing file.
  */
-function isInstalled(version) {
-  const overrideDir = process.env.ELECTRON_OVERRIDE_DIST_PATH;
-  if (overrideDir) {
-    return fs.existsSync(path.join(overrideDir, process.platform === 'win32' ? 'electron.exe' : 'electron'));
-  }
+function electronExecutablePath(version, {
+  electronDir = ELECTRON_DIR,
+  env = process.env,
+  platform = process.platform,
+  exists = fs.existsSync,
+  readFile = fs.readFileSync,
+  stat = fs.statSync
+} = {}) {
   try {
-    const recorded = fs.readFileSync(path.join(ELECTRON_DIR, 'dist', 'version'), 'utf8').replace(/^v/, '').trim();
-    if (recorded !== version) return false;
-    const executable = fs.readFileSync(path.join(ELECTRON_DIR, 'path.txt'), 'utf8').trim();
-    return executable.length > 0 && fs.existsSync(path.join(ELECTRON_DIR, 'dist', executable));
+    const executableName = platform === 'win32' ? 'electron.exe' : 'electron';
+    const usableFile = candidate => {
+      if (!exists(candidate)) return false;
+      const details = stat(candidate);
+      return details.isFile() && (platform === 'win32' || (details.mode & 0o111) !== 0);
+    };
+    const overrideDir = env.ELECTRON_OVERRIDE_DIST_PATH;
+    if (overrideDir) {
+      const override = path.join(overrideDir, executableName);
+      return usableFile(override) ? override : null;
+    }
+    if (!version) return null;
+    const recordedVersion = String(readFile(path.join(electronDir, 'dist', 'version'), 'utf8')).replace(/^v/, '').trim();
+    if (recordedVersion !== version) return null;
+    const recordedPath = String(readFile(path.join(electronDir, 'path.txt'), 'utf8')).trim();
+    if (!recordedPath || path.isAbsolute(recordedPath) || recordedPath.split(/[\\/]+/).includes('..')) return null;
+    const distDir = path.resolve(electronDir, 'dist');
+    const executable = path.resolve(distDir, recordedPath);
+    if (executable === distDir || !executable.startsWith(`${distDir}${path.sep}`)) return null;
+    return usableFile(executable) ? executable : null;
   } catch (_) {
-    return false;
+    return null;
   }
+}
+
+function isInstalled(version, options) {
+  return electronExecutablePath(version, options) !== null;
 }
 
 /**
@@ -168,4 +194,4 @@ if (require.main === module) {
   if (!ok && required) process.exit(1);
 }
 
-module.exports = { ensureElectron, isInstalled, electronVersion, ELECTRON_DIR, ROOT };
+module.exports = { ensureElectron, isInstalled, electronExecutablePath, electronVersion, ELECTRON_DIR, ROOT };

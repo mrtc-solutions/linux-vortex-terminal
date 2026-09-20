@@ -8,11 +8,13 @@
  */
 
 const assert = require('assert');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const start = require('../scripts/start.js');
+const ensureDist = require('../scripts/ensure-dist.js');
 
 function touch(file, mtimeMs, content = 'x') {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -133,31 +135,92 @@ function makeTree({ withDist, distMtime, srcMtime }) {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
 }
 
-// 3. Heap cap: bounded, proportional, never zero.
+// 3. The default heap stays small even when the machine is mostly free. A
+// 4-GB desktop must retain room for the OS/Electron rather than giving V8 60%.
 {
-  assert.strictEqual(start.heapCapMB(0), 1024);
-  assert.strictEqual(start.heapCapMB(-5), 1024);
-  assert.strictEqual(start.heapCapMB(NaN), 1024);
-  // 800 MB free -> floor of 512 (the bundle builds fine in 512 MB).
-  assert.strictEqual(start.heapCapMB(800 * 1048576), 512);
-  // 2 GB free -> 60% = 1228 (truncated).
-  assert.strictEqual(start.heapCapMB(2048 * 1048576), 1228);
-  // 16 GB free -> ceiling of 3072.
-  assert.strictEqual(start.heapCapMB(16 * 1073741824), 3072);
+  assert.strictEqual(start.DEFAULT_BUILD_HEAP_MB, 512);
+  for (const value of [0, -5, NaN, 800 * 1048576, 2048 * 1048576, 16 * 1073741824]) {
+    assert.strictEqual(start.heapCapMB(value), 512);
+  }
+  assert.strictEqual(start.OOM_RETRY_HEAP_MB, 384);
+  assert.ok(start.MIN_BUILD_AVAILABLE_BYTES >= 768 * 1048576);
 }
 
-// 4. buildEnv respects an explicit user heap setting.
+// 4. Linux memory accounting prefers MemAvailable and then the tighter cgroup
+// budget; malformed proc/cgroup input cannot crash the launcher.
+{
+  assert.strictEqual(start.parseMemAvailableBytes('MemTotal: 100 kB\nMemAvailable: 42 kB\n'), 42 * 1024);
+  assert.strictEqual(start.parseMemAvailableBytes('MemFree: 42 kB\n'), null);
+  assert.strictEqual(start.parseMemAvailableBytes('MemAvailable: nope kB\n'), null);
+
+  const v2 = {
+    '/sys/fs/cgroup/memory.max': '8192\n',
+    '/sys/fs/cgroup/memory.current': '2048\n'
+  };
+  const v2Reader = file => {
+    if (!(file in v2)) throw new Error('missing');
+    return v2[file];
+  };
+  assert.strictEqual(start.cgroupAvailableMemoryBytes(v2Reader), 6144);
+  const nestedV2 = {
+    // A colon is legal in a cgroup path, so parsing must preserve everything
+    // after the protocol's second colon delimiter.
+    '/proc/self/cgroup': '0::/user/vortex:blue\n',
+    '/sys/fs/cgroup/user/vortex:blue/memory.max': '12000\n',
+    '/sys/fs/cgroup/user/vortex:blue/memory.current': '3000\n',
+    // The nearest cgroup permits 9,000 bytes, but its parent only has 3,000
+    // left. The parent cap is still a real limit for this build process.
+    '/sys/fs/cgroup/user/memory.max': '8000\n',
+    '/sys/fs/cgroup/user/memory.current': '5000\n'
+  };
+  const nestedReader = file => {
+    if (!(file in nestedV2)) throw new Error('missing');
+    return nestedV2[file];
+  };
+  assert.strictEqual(start.cgroupAvailableMemoryBytes(nestedReader), 3000, 'must honor the tightest actual-cgroup ancestor budget');
+  assert.strictEqual(start.availableMemoryBytes({
+    platform: 'linux',
+    readFile: file => file === '/proc/meminfo' ? 'MemAvailable: 10 kB\n' : v2Reader(file),
+    freeMemory: () => 999999
+  }), 6144);
+  const exhaustedV2 = { ...v2, '/sys/fs/cgroup/memory.current': '8192\n' };
+  const exhaustedReader = file => {
+    if (!(file in exhaustedV2)) throw new Error('missing');
+    return exhaustedV2[file];
+  };
+  assert.strictEqual(start.availableMemoryBytes({
+    platform: 'linux',
+    readFile: file => file === '/proc/meminfo' ? 'MemAvailable: 999 kB\n' : exhaustedReader(file),
+    freeMemory: () => 999999
+  }), 0, 'a known exhausted cgroup must not be confused with unknown memory');
+  assert.strictEqual(start.availableMemoryBytes({ platform: 'darwin', freeMemory: () => 12345 }), 12345);
+  assert.strictEqual(
+    start.availableMemoryBytes({ platform: 'darwin', freeMemory: () => { throw new Error('unavailable'); } }),
+    null,
+    'unknown memory must stay distinguishable from a real zero-byte budget'
+  );
+}
+
+// 5. buildEnv applies the safe default/retry cap but respects an explicit user
+// heap setting, including Node's underscore spelling.
 {
   const before = process.env.NODE_OPTIONS;
-  process.env.NODE_OPTIONS = '--max-old-space-size=4096';
-  assert.strictEqual(start.buildEnv().NODE_OPTIONS, '--max-old-space-size=4096');
-  delete process.env.NODE_OPTIONS;
-  assert.match(start.buildEnv().NODE_OPTIONS || '', /--max-old-space-size=\d+/);
-  if (before === undefined) delete process.env.NODE_OPTIONS;
-  else process.env.NODE_OPTIONS = before;
+  try {
+    delete process.env.NODE_OPTIONS;
+    assert.match(start.buildEnv().NODE_OPTIONS || '', /--max-old-space-size=512/);
+    assert.match(start.buildEnv(start.OOM_RETRY_HEAP_MB).NODE_OPTIONS || '', /--max-old-space-size=384/);
+    process.env.NODE_OPTIONS = '--max-old-space-size=4096';
+    assert.strictEqual(start.buildEnv().NODE_OPTIONS, '--max-old-space-size=4096');
+    assert.strictEqual(start.hasExplicitHeapCap(), true);
+    process.env.NODE_OPTIONS = '--max_old_space_size=640';
+    assert.strictEqual(start.hasExplicitHeapCap(), true);
+  } finally {
+    if (before === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = before;
+  }
 }
 
-// 5. OOM diagnosis: signals and shell/markers, not plain exit codes.
+// 6. OOM diagnosis: signals and shell/markers, not plain exit codes.
 {
   assert.strictEqual(start.looksLikeOOM({ tail: '', signal: 'SIGKILL', status: null }), true);
   assert.strictEqual(start.looksLikeOOM({ tail: '', signal: null, status: 137 }), true);
@@ -167,12 +230,102 @@ function makeTree({ withDist, distMtime, srcMtime }) {
   assert.strictEqual(start.looksLikeOOM({ tail: '', signal: null, status: 0 }), false);
 }
 
-// 6. runBuild resolves after the pipes flush (`close`, not `exit`), so the
-// diagnosis tail contains the final build line.
+// 7. runBuild resolves after the pipes flush (`close`, not `exit`), so the
+// diagnosis tail contains the final build line. Exercise both the normal
+// low-RAM budget and the automatic-retry budget against the real bundle.
 async function main() {
+  // A real zero-byte cgroup budget must decline a build. Existing dist/ stays
+  // launchable; a first launch is cancelled rather than risking the desktop.
+  const lowMemoryOptions = { rebuild: true, skipBuild: false, help: false, forward: [] };
+  const desktopLogs = [];
+  let desktopBuildCalled = false;
+  const lowMemoryDependencies = exists => ({
+    distExistsFn: () => exists,
+    availableMemoryBytesFn: () => 0,
+    runBuildWithOOMRetryFn: async () => {
+      desktopBuildCalled = true;
+      return { ok: true };
+    },
+    stderrWrite: message => desktopLogs.push(String(message))
+  });
+  assert.strictEqual(await start.maybeBuild(lowMemoryOptions, lowMemoryDependencies(true)), true);
+  assert.strictEqual(await start.maybeBuild(lowMemoryOptions, lowMemoryDependencies(false)), false);
+  assert.strictEqual(desktopBuildCalled, false, 'desktop launcher must not start a build with a known exhausted budget');
+  assert.match(desktopLogs.join(''), /continuing with the existing dist\/ bundle/);
+  assert.match(desktopLogs.join(''), /desktop launch is cancelled/);
+
+  // Browser preview must share desktop launch's low-memory guard rather than
+  // attempting a risky rebuild just because it deliberately degrades to 0.
+  const stderrWrite = process.stderr.write;
+  const previewLog = [];
+  let previewBuildCalled = false;
+  try {
+    process.stderr.write = chunk => {
+      previewLog.push(String(chunk));
+      return true;
+    };
+    const previewCode = await ensureDist.main({
+      needsRebuildFn: () => true,
+      availableMemoryBytesFn: () => start.MIN_BUILD_AVAILABLE_BYTES - 1,
+      runBuildWithOOMRetryFn: async () => {
+        previewBuildCalled = true;
+        return { ok: true };
+      }
+    });
+    assert.strictEqual(previewCode, 0);
+    assert.strictEqual(previewBuildCalled, false, 'preview must not launch a build below the shared safety threshold');
+    assert.match(previewLog.join(''), /existing bundle or legacy UI/);
+  } finally {
+    process.stderr.write = stderrWrite;
+  }
+
   const result = await start.runBuild();
   assert.strictEqual(result.ok, true, `vite build must succeed in a test checkout (tail: ${result.tail.slice(-300)})`);
   assert.match(result.tail, /built in/, 'runBuild must capture the full log tail');
+  const retryBudget = await start.runBuild(start.OOM_RETRY_HEAP_MB);
+  assert.strictEqual(retryBudget.ok, true, `384 MiB retry build must succeed (tail: ${retryBudget.tail.slice(-300)})`);
+
+  // Simulate the exact shell symptom from an OOM kill, then let the second
+  // invocation run the real npm/Vite build. This verifies npm start continues
+  // rather than merely printing recovery advice.
+  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'vortex-start-fake-npm-'));
+  const state = path.join(fakeBin, 'state');
+  const log = path.join(fakeBin, 'calls');
+  const fakeNpm = path.join(fakeBin, 'npm');
+  const realNpm = execFileSync('which', ['npm'], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(fakeNpm, [
+    '#!/bin/sh',
+    'printf "call\\n" >> "$VORTEX_TEST_NPM_LOG"',
+    'if [ ! -e "$VORTEX_TEST_NPM_STATE" ]; then',
+    '  : > "$VORTEX_TEST_NPM_STATE"',
+    '  printf "transforming (1) src/main.tsxKilled\\n" >&2',
+    '  exit 137',
+    'fi',
+    'exec "$VORTEX_TEST_REAL_NPM" "$@"'
+  ].join('\n'), { mode: 0o755 });
+  const old = {
+    NODE_OPTIONS: process.env.NODE_OPTIONS,
+    PATH: process.env.PATH,
+    VORTEX_TEST_NPM_LOG: process.env.VORTEX_TEST_NPM_LOG,
+    VORTEX_TEST_NPM_STATE: process.env.VORTEX_TEST_NPM_STATE,
+    VORTEX_TEST_REAL_NPM: process.env.VORTEX_TEST_REAL_NPM
+  };
+  try {
+    delete process.env.NODE_OPTIONS;
+    process.env.PATH = `${fakeBin}${path.delimiter}${old.PATH || ''}`;
+    process.env.VORTEX_TEST_NPM_LOG = log;
+    process.env.VORTEX_TEST_NPM_STATE = state;
+    process.env.VORTEX_TEST_REAL_NPM = realNpm;
+    const automaticRetry = await start.runBuildWithOOMRetry();
+    assert.strictEqual(automaticRetry.ok, true, `automatic low-heap retry must recover (tail: ${automaticRetry.tail.slice(-300)})`);
+    assert.strictEqual(fs.readFileSync(log, 'utf8').trim().split(/\r?\n/).length, 2, 'OOM retry must invoke npm exactly twice');
+  } finally {
+    for (const [key, value] of Object.entries(old)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(fakeBin, { recursive: true, force: true });
+  }
   console.log('launcher start tests: PASS');
 }
 

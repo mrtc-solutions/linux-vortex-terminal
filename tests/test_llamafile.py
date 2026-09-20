@@ -307,6 +307,7 @@ class LlamafileTests(unittest.TestCase):
         started = llamafile.server_start(source.name, {"ai_enabled": True, "llamafile_model": source.name}, timeout=30)
         self.assertEqual(started["state"], "running")
         self.assertTrue(started["endpoint"].startswith("http://127.0.0.1:"))
+        self.assertIn(started["pid"], llamafile._SERVER_PROCESSES, "the launching process must retain/reap its Popen child")
         self.addCleanup(llamafile.server_stop)
         state = llamafile.server_state({"ai_enabled": True})
         self.assertEqual(state["state"], "running")
@@ -315,8 +316,47 @@ class LlamafileTests(unittest.TestCase):
         self.assertEqual(again["pid"], started["pid"])
         stopped = llamafile.server_stop()
         self.assertEqual(stopped["state"], "stopped")
+        self.assertNotIn(started["pid"], llamafile._SERVER_PROCESSES, "server_stop must reap and release its Popen child")
+        self.assertFalse(llamafile._process_alive(started["pid"]), "server_stop must not leave a running/zombie child")
         state = llamafile.server_state({"ai_enabled": True})
         self.assertEqual(state["state"], "stopped")
+
+    def test_graceful_interpreter_exit_reaps_owned_server_children(self):
+        # Retaining Popen prevents premature garbage collection while a server
+        # is active; the registered exit hook must then terminate/reap it when
+        # the owning sidecar exits. Use a subprocess to exercise real atexit
+        # ordering and warning behavior, not a direct helper call.
+        script = """
+from backend.models import llamafile
+import subprocess
+proc = subprocess.Popen(['/bin/sleep', '30'])
+llamafile._SERVER_PROCESSES[proc.pid] = proc
+print(proc.pid, flush=True)
+"""
+        result = subprocess.run(
+            [sys.executable, "-Werror::ResourceWarning", "-c", script],
+            cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("ResourceWarning", result.stderr)
+        pid = int(result.stdout.strip())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
+    def test_server_start_timeout_reaps_the_new_child(self):
+        # `exec` makes the Popen child the sleeper itself, so this covers the
+        # real timeout cleanup path without leaving a shell descendant behind.
+        silent = Path(self.tmp.name) / "silent-llamafile"
+        silent.write_text("#!/bin/sh\nexec /bin/sleep 30\n", encoding="utf-8")
+        silent.chmod(0o755)
+        llamafile.set_test_binary(str(silent))
+        source = self._write_gguf("timeout.gguf")
+        llamafile.import_model(str(source))
+        llamafile.activate_model(source.name)
+        with self.assertRaisesRegex(PolicyError, "did not answer within the startup window"):
+            llamafile.server_start(source.name, {"ai_enabled": True, "llamafile_model": source.name}, timeout=5)
+        self.assertFalse(llamafile._SERVER_PROCESSES, "a timed-out launch must be terminated and reaped")
+        self.assertFalse(llamafile._pid_path().exists(), "a timed-out launch must not leave a live PID record")
 
     def test_server_start_without_model_is_honest(self):
         llamafile.set_test_binary(str(self._write_stub_runner()))

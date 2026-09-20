@@ -132,34 +132,62 @@ class SidecarHarness:
         self.log = open(Path(self.tmp.name) / "sidecar.log", "w")  # noqa: SIM115 - closed in stop()
 
     def start(self) -> None:
-        self.process = subprocess.Popen(
-            [sys.executable, str(ROOT / "backend/vortex_backend.py"), "--host", "127.0.0.1", "--port", "0"],
-            cwd=ROOT, env=self.env, stdout=subprocess.PIPE, stderr=self.log, text=True, start_new_session=True,
-        )
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            line = self.process.stdout.readline()
-            if not line:
-                break
+        try:
+            self.process = subprocess.Popen(
+                [sys.executable, str(ROOT / "backend/vortex_backend.py"), "--host", "127.0.0.1", "--port", "0"],
+                cwd=ROOT, env=self.env, stdout=subprocess.PIPE, stderr=self.log, text=True, start_new_session=True,
+            )
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                line = self.process.stdout.readline()
+                if not line:
+                    break
+                try:
+                    payload = json.loads(line)
+                except ValueError:
+                    continue
+                if payload.get("backend") == "online":
+                    self.port = int(payload["port"])
+                    return
+            raise RuntimeError("sidecar did not report readiness")
+        except BaseException:
+            # setUpClass does not guarantee tearDownClass after a failed
+            # readiness check, so clean the child and its PIPE on this path too.
             try:
-                payload = json.loads(line)
-            except ValueError:
-                continue
-            if payload.get("backend") == "online":
-                self.port = int(payload["port"])
-                return
-        raise RuntimeError("sidecar did not report readiness")
+                self.stop()
+            except Exception:
+                pass
+            raise
 
     def stop(self) -> None:
-        if self.process and self.process.poll() is None:
-            os.killpg(self.process.pid, 15)
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, 9)
-                self.process.wait(timeout=5)
-        self.log.close()
-        self.tmp.cleanup()
+        process = self.process
+        try:
+            if process and process.poll() is None:
+                try:
+                    os.killpg(process.pid, 15)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, 9)
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=5)
+        finally:
+            # Popen does not close a parent-owned stdout PIPE after wait().
+            # Closing it explicitly prevents an interpreter-shutdown
+            # ResourceWarning and proves the integration harness leaves no
+            # descriptors behind between test modules.
+            if process and process.stdout:
+                try:
+                    process.stdout.close()
+                except OSError:
+                    pass
+            self.process = None
+            self.log.close()
+            self.tmp.cleanup()
 
     # ---- HTTP helpers (real requests, real responses) ----
 
