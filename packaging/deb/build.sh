@@ -10,7 +10,15 @@ export PATH
 # emits a placeholder artifact. Run this on a Linux builder with dpkg-deb.
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out="${1:-$root/dist/deb}"
-version="${VORTEX_VERSION:-0.3.0}"
+# Single source of truth: backend/vortex_backend.py APP_VERSION. VORTEX_VERSION
+# (set by backend.debbuild) wins when present; the literal is a last-resort
+# fallback if the source tree is damaged. The regex below still bounds it.
+if [[ -z "${VORTEX_VERSION:-}" ]]; then
+  version=$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' "$root/backend/vortex_backend.py" | head -n 1)
+  version="${version:-0.3.0}"
+else
+  version="$VORTEX_VERSION"
+fi
 package="linux-vortex-terminal"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -18,6 +26,15 @@ cd "$root"
 
 if [[ ! "$version" =~ ^[0-9][0-9A-Za-z.+:~_-]{0,63}$ ]]; then
   echo "VORTEX_VERSION is not a valid bounded Debian version" >&2
+  exit 2
+fi
+# The control file is written through an expanding heredoc, so a crafted
+# VORTEX_HOMEPAGE could inject control fields. Bound it to one plain URL.
+# (The pattern lives in a variable because an unquoted & is a syntax error
+# inside [[ =~ ]].)
+homepage_re='^https?://[A-Za-z0-9./_~:?#@!$&'"'"'()*+,;=%-]{1,200}$'
+if [[ -n "${VORTEX_HOMEPAGE:-}" && ! "$VORTEX_HOMEPAGE" =~ $homepage_re ]]; then
+  echo "VORTEX_HOMEPAGE is not a valid bounded URL" >&2
   exit 2
 fi
 dpkg_deb="${VORTEX_DPKG_DEB:-}"
@@ -86,9 +103,9 @@ done
 for source in README.md LICENSE LICENSES.md NOTICE SECURITY.md; do
   install -D -m 0644 "$root/$source" "$stage/usr/share/vortex/$source"
 done
-for source in build.sh vortex.1 vortex.desktop; do
+for source in build.sh make-repo.sh install-repo.sh vortex.1 vortex.desktop; do
   mode=0644
-  [[ "$source" == "build.sh" ]] && mode=0755
+  [[ "$source" == *.sh ]] && mode=0755
   install -D -m "$mode" "$root/packaging/deb/$source" "$stage/usr/share/vortex/packaging/deb/$source"
 done
 # Defense in depth if the source allowlist is expanded in the future.
@@ -119,6 +136,7 @@ Architecture: all
 Depends: python3 (>= 3.11)
 Recommends: zstd
 Maintainer: mrtc-solutions
+Homepage: ${VORTEX_HOMEPAGE:-https://github.com/mrtc-solutions/linux-vortex-terminal}
 Description: Linux Vortex Terminal
  Local-first Linux cybersecurity and operations workbench with a real
  shell-free execution authority, typed plans, local audit, and factual tools.

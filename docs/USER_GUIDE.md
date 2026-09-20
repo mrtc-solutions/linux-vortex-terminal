@@ -103,13 +103,35 @@ Remove that directory if you also want history, tasks, and the audit DB gone.
 ### Optional Debian package (unsigned)
 
 ```bash
-# requires dpkg-deb on a Linux builder (defaults to the current 0.3.0 version)
+# requires dpkg-deb on a Linux builder (version defaults to APP_VERSION)
 packaging/deb/build.sh
 # then, as an administrator of that machine:
-# sudo dpkg -i dist/deb/linux-vortex-terminal_0.3.0_all.deb
+# sudo apt install ./dist/deb/linux-vortex-terminal_<version>_all.deb
 ```
 
 The package does not start a daemon, create user data, or install agents.
+It ships no maintainer scripts and no conffiles, so a newer version
+cleanly replaces every installed file on upgrade or
+`sudo apt install --reinstall`.
+
+### Optional APT repository (install by name)
+
+```bash
+# 1. Build the package, then the repository (refuses to overwrite; --replace rebuilds).
+vortex desktop deb
+vortex desktop repo
+# 2. Copy the repo directory to the target machine, or serve it over https.
+# 3. On the target machine, as root (signed by default; --trust-unsigned is
+#    for a local repo you built yourself):
+sudo ./install-repo.sh --repo-url https://<host>/vortex --key vortex-archive-key.asc
+# 4. Install, upgrade, and repair by package name.
+sudo apt install linux-vortex-terminal
+sudo apt upgrade linux-vortex-terminal
+```
+
+A repository carrying several versions resolves to the newest one. See
+`packaging/README.md` for the full flow, including the `make-repo.sh` /
+`install-repo.sh` shell equivalents and the `--sign` release path.
 
 ## 5. First-run health check
 

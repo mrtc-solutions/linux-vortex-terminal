@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **Install, upgrade, and repair by APT package name.** New
+  `packaging/deb/make-repo.sh` builds a deterministic APT repository from
+  one or more `.deb` files (pool, per-architecture indexes, hashed Release,
+  optional GPG signing with an exported key), new
+  `packaging/deb/install-repo.sh` registers it on a target machine as a
+  DEB822 source with `Signed-By` (unsigned repos are refused unless
+  `--trust-unsigned` is passed explicitly for local testing), and
+  `vortex desktop repo` orchestrates the flow from the app with the same
+  verify-before-publish discipline as the `.deb` builder (hash
+  re-verification of every index and payload, rebuilds require `--replace`,
+  failed rebuilds preserve the last verified repo). `sudo apt install
+  linux-vortex-terminal` now resolves by name; a repository carrying
+  several versions resolves to the newest, and because the package ships no
+  maintainer scripts and no conffiles, upgrades and `--reinstall` repairs
+  cleanly replace every installed file. The `.deb` now carries a `Homepage`
+  field, derives its default version from `APP_VERSION` (as does
+  `vortex --version`), and ships the repo tooling under
+  `/usr/share/vortex/packaging/deb/`. New `tests/test_apt_repo.py` (25
+  tests) proves the flow with real `apt-get`/`apt-cache` resolution, a
+  boot-and-serve smoke test of the extracted payload, and
+  tamper/replace/refusal cases (suite is now 593 Python + 10 JS).
+
 - **`npm start` survives low-memory hosts.** The launcher now rebuilds
   `dist/` only when it is missing or older than the sources (`--rebuild`
   forces, `--no-build` skips), sizes the build heap from free RAM without

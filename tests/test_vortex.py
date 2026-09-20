@@ -1196,7 +1196,11 @@ The following packages will be upgraded:
     def test_app_version_is_consistent_across_surfaces(self):
         root = Path(__file__).resolve().parent.parent
         self.assertEqual(vtx_backend.APP_VERSION, "0.3.0")
-        self.assertIn(f"version='vortex {vtx_backend.APP_VERSION}'", (root / "cli" / "vortex.py").read_text(encoding="utf-8"))
+        cli_source = (root / "cli" / "vortex.py").read_text(encoding="utf-8")
+        # The CLI version is single-sourced from APP_VERSION: a duplicated
+        # literal here would silently drift on the next release.
+        self.assertIn("version=f'vortex {APP_VERSION}'", cli_source)
+        self.assertNotIn(f"version='vortex {vtx_backend.APP_VERSION}'", cli_source)
         self.assertIn(f'"version": "{vtx_backend.APP_VERSION}"', (root / "package.json").read_text(encoding="utf-8"))
         html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
         self.assertIn(f"VORTEX TERMINAL {vtx_backend.APP_VERSION}", html)
