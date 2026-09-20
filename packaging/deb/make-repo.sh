@@ -74,9 +74,16 @@ for tool in sha256sum sha1sum md5sum stat gzip date; do
 done
 have_xz=0
 if command -v xz >/dev/null 2>&1; then have_xz=1; fi
-if [[ -n "$sign_key" ]] && ! command -v gpg >/dev/null 2>&1; then
-  echo "gpg is required for --sign (omit --sign for an unsigned local repository)" >&2
-  exit 2
+gpg_bin=""
+if [[ -n "$sign_key" ]]; then
+  gpg_bin="${VORTEX_GPG:-}"
+  if [[ -z "$gpg_bin" ]]; then
+    gpg_bin=$(command -v gpg || true)
+  fi
+  if [[ -z "$gpg_bin" || "$gpg_bin" != /* || ! -x "$gpg_bin" ]]; then
+    echo "gpg is required for --sign (omit --sign for an unsigned local repository)" >&2
+    exit 2
+  fi
 fi
 
 stage=$(mktemp -d)
@@ -127,6 +134,12 @@ for deb in "${debs[@]}"; do
   done
   seen+=("$key")
   base=$(basename "$deb")
+  # Whitespace in a pool filename breaks Release stanza parsing on the apt
+  # side (hash/size/path are whitespace-separated), so refuse it here.
+  if [[ "$base" == *[[:space:]]* ]]; then
+    echo "pool filename must not contain whitespace: $base (rename the input)" >&2
+    exit 2
+  fi
   if [[ -e "$pool/$base" ]]; then
     echo "filename collision in pool: $base (rename one input)" >&2
     exit 2
@@ -203,9 +216,9 @@ done
 } > "$index_dir/Release"
 
 if [[ -n "$sign_key" ]]; then
-  gpg --batch --yes --local-user "$sign_key" --clearsign -o "$index_dir/InRelease" "$index_dir/Release"
-  gpg --batch --yes --local-user "$sign_key" --detach-sign --armor -o "$index_dir/Release.gpg" "$index_dir/Release"
-  gpg --batch --yes --export --armor "$sign_key" > "$stage/vortex-archive-key.asc"
+  "$gpg_bin" --batch --yes --local-user "$sign_key" --clearsign -o "$index_dir/InRelease" "$index_dir/Release"
+  "$gpg_bin" --batch --yes --local-user "$sign_key" --detach-sign --armor -o "$index_dir/Release.gpg" "$index_dir/Release"
+  "$gpg_bin" --batch --yes --export --armor "$sign_key" > "$stage/vortex-archive-key.asc"
   if ! grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$stage/vortex-archive-key.asc"; then
     echo "gpg did not export a public key for '$sign_key'" >&2
     exit 2

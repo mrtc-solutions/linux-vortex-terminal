@@ -74,25 +74,34 @@ if [[ "$root" != /* ]]; then
 fi
 
 # Validate the repository BEFORE writing anything under /etc/apt.
+check_repo_tree() {
+  if [[ ! -f "$repo_path/dists/$codename/Release" ]]; then
+    echo "not a Vortex repository for suite '$codename': $repo_path (missing dists/$codename/Release; build it with make-repo.sh)" >&2
+    exit 2
+  fi
+  if [[ ! -d "$repo_path/dists/$codename/$component" ]]; then
+    echo "repository has no component '$component' for suite '$codename': $repo_path" >&2
+    exit 2
+  fi
+  if ! grep -qxF "Codename: $codename" "$repo_path/dists/$codename/Release"; then
+    echo "repository Release names a different suite (expected 'Codename: $codename'): $repo_path" >&2
+    exit 2
+  fi
+}
+
 if [[ -n "$repo_path" ]]; then
   if [[ ! -d "$repo_path" ]]; then
     echo "repository directory not found: $repo_path" >&2
     exit 2
   fi
   repo_path=$(cd "$repo_path" && pwd)
-  if [[ ! -f "$repo_path/dists/$codename/Release" ]]; then
-    echo "not a Vortex repository for suite '$codename': $repo_path (missing dists/$codename/Release; build it with make-repo.sh)" >&2
-    exit 2
-  fi
+  check_repo_tree
   url="file://$repo_path"
 else
   url="$repo_url"
   if [[ "$url" == file://* ]]; then
     repo_path="${url#file://}"
-    if [[ ! -f "$repo_path/dists/$codename/Release" ]]; then
-      echo "not a Vortex repository for suite '$codename': $repo_path" >&2
-      exit 2
-    fi
+    check_repo_tree
   elif [[ ! "$url" =~ ^https?://[^[:space:]]+$ ]]; then
     echo "invalid --repo-url (http(s):// or file://, no whitespace)" >&2
     exit 2
@@ -135,8 +144,8 @@ if [[ "$trust_unsigned" == "0" ]]; then
     echo "repository key has an invalid size ($key_bytes bytes)" >&2
     exit 2
   fi
-  if ! grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$key_file"; then
-    echo "repository key is not an ASCII-armored PGP public key: $key_file" >&2
+  if ! grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$key_file" || ! grep -q 'END PGP PUBLIC KEY BLOCK' "$key_file"; then
+    echo "repository key is not a complete ASCII-armored PGP public key (need BEGIN and END markers): $key_file" >&2
     exit 2
   fi
 fi

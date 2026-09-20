@@ -1,5 +1,9 @@
 # Linux packaging
 
+Supported distributions: Debian 12+, Ubuntu 22.04+, Linux Mint 21+,
+Kali rolling — anything with Python 3.10 or newer (the package Depends on
+`python3 (>= 3.10)` and nothing else at install time).
+
 ## The .deb
 
 `packaging/deb/build.sh` (or `vortex desktop deb`) builds a real, unsigned
@@ -40,9 +44,11 @@ vortex desktop repo            # refuses to overwrite; add --replace to rebuild
 
 # 3. On the target machine, register the repository (as root). Signed by
 #    default; --trust-unsigned is for a local repo you built yourself.
-sudo ./install-repo.sh --repo-url https://<host>/vortex --key vortex-archive-key.asc
+#    (Path below is from a checkout; on an installed machine the script is
+#    at /usr/share/vortex/packaging/deb/install-repo.sh.)
+sudo packaging/deb/install-repo.sh --repo-url https://<host>/vortex --key <copied-dir>/vortex-archive-key.asc
 # local-directory shortcut (testing only):
-# sudo ./install-repo.sh --repo-path /path/to/copied/repo --trust-unsigned
+# sudo packaging/deb/install-repo.sh --repo-path /path/to/copied/repo --trust-unsigned
 
 # 4. Install, upgrade, and repair by package name.
 sudo apt install linux-vortex-terminal

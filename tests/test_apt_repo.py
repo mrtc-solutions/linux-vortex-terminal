@@ -7,13 +7,17 @@ and the installed-layout smoke test (the extracted .deb must boot and serve).
 """
 from __future__ import annotations
 
+import contextlib
+import functools
 import hashlib
+import http.server
 import json
 import os
 import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 import urllib.request
@@ -101,6 +105,54 @@ def _free_port() -> int:
         sock.close()
 
 
+def _write_gpg_stub(directory: Path, *, fail: bool = False, log: Path | None = None) -> Path:
+    """Test double for gpg: emulates the clearsign/detach-sign/export interface.
+
+    Self-contained (key text and log path are embedded) because the backend
+    runs builders with a minimal environment. Only gpg's internal
+    cryptography stays trusted (correctly so); every byte of our signing
+    plumbing — argument passing, file placement, key export validation,
+    failure propagation — runs for real through VORTEX_GPG.
+    """
+    import sys as _sys
+
+    body = (
+        "import os, sys\n"
+        f"LOG = {str(log) if log else None!r}\n"
+        f"KEY = {FAKE_ARMOR!r}\n"
+        f"FAIL = {bool(fail)!r}\n"
+        "if LOG:\n"
+        '    open(LOG, "a", encoding="utf-8").write(" ".join(sys.argv[1:]) + "\\n")\n'
+        "if FAIL or os.environ.get('VORTEX_GPG_STUB_FAIL'):\n"
+        "    sys.exit(1)\n"
+        "args = sys.argv[1:]\n"
+        "if '--export' in args:\n"
+        "    sys.stdout.write(KEY)\n"
+        "    sys.exit(0)\n"
+        "out = args[args.index('-o') + 1]\n"
+        "body = open(args[-1], encoding='utf-8').read()\n"
+        "text = '-----BEGIN PGP SIGNED MESSAGE-----\\n\\n' + body if '--clearsign' in args else 'stub-detached-signature\\n'\n"
+        "open(out, 'w', encoding='utf-8').write(text)\n"
+    )
+    stub = directory / "gpg-stub"
+    stub.write_text("#!" + _sys.executable + "\n" + body, encoding="utf-8")
+    stub.chmod(0o755)
+    return stub
+
+
+@contextlib.contextmanager
+def _file_server(directory: Path):
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 class _DebCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -124,7 +176,7 @@ class ControlFieldsTests(_DebCase):
     def test_control_carries_identity_dependency_and_homepage(self):
         path = self._build()
         fields = {}
-        for name in ("Package", "Version", "Architecture", "Maintainer", "Depends", "Section", "Priority", "Homepage"):
+        for name in ("Package", "Version", "Architecture", "Maintainer", "Depends", "Section", "Priority", "Homepage", "Installed-Size"):
             proc = _run(self.dpkg_deb, "--field", str(path), name)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             fields[name] = proc.stdout.strip()
@@ -133,7 +185,10 @@ class ControlFieldsTests(_DebCase):
         self.assertEqual(fields["Architecture"], "all")
         self.assertEqual(fields["Maintainer"], "mrtc-solutions")
         self.assertEqual(fields["Homepage"], HOMEPAGE)
-        self.assertIn("python3", fields["Depends"])
+        # Python floor stays at 3.10 so Ubuntu 22.04 can install the package;
+        # the compatibility gate below keeps that promise honest.
+        self.assertIn("python3 (>= 3.10)", fields["Depends"])
+        self.assertTrue(fields["Installed-Size"].isdigit() and int(fields["Installed-Size"]) > 0)
 
     def test_no_conffiles_member_so_upgrades_replace_every_file(self):
         path = self._build()
@@ -158,6 +213,42 @@ class ControlFieldsTests(_DebCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("VORTEX_HOMEPAGE", proc.stderr or proc.stdout)
         self.assertEqual(list((self.home / "evil").glob("*.deb")) if (self.home / "evil").exists() else [], [])
+
+
+class ShippedPythonTests(_DebCase):
+    # Python 3.11/3.12-only constructs that must never appear in shipped code
+    # (the control Depends floor is 3.10 for Ubuntu 22.04). Grammar is gated
+    # by parsing, APIs by this sweep; extend both when the floor moves.
+    _FORBIDDEN_APIS = (
+        "assert_never", "LiteralString", "TypeVarTuple", "reveal_type", "typing.Self",
+        "typing.Never", "assert_type", "StrEnum", "ReprEnum", "TaskGroup",
+        "asyncio.timeout", "asyncio.Runner", "getasyncgenstate", "getasyncgenlocals",
+        "file_digest", "HTTPMethod", "contextlib.chdir", "getLevelNamesMapping",
+        "sys.exception(", "locale.getencoding", "operator.call", "math.cbrt",
+        "math.exp2", "datetime.UTC", "tomllib", "add_note", ".is_junction(",
+        "enum.nonmember", "enum.member", "enum.verify",
+    )
+
+    def test_shipped_code_runs_on_python_310(self):
+        import ast
+        import re
+
+        path = self._build()
+        extract = self.home / "compat"
+        extract.mkdir()
+        proc = _run(self.dpkg_deb, "--extract", str(path), str(extract))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        shipped = sorted((extract / "usr" / "share" / "vortex").rglob("*.py"))
+        self.assertGreater(len(shipped), 10, "compat gate must see the shipped modules")
+        forbidden = re.compile("|".join(re.escape(token) for token in self._FORBIDDEN_APIS))
+        for module in shipped:
+            source = module.read_text(encoding="utf-8")
+            try:
+                ast.parse(source, filename=str(module), feature_version=(3, 10))
+            except SyntaxError as exc:
+                self.fail(f"{module.name} needs newer grammar (line {exc.lineno}: {exc.msg})")
+            hit = forbidden.search(source)
+            self.assertIsNone(hit, f"{module.name} uses a post-3.10 API: {hit.group(0) if hit else ''}")
 
 
 class InstalledPayloadTests(_DebCase):
@@ -267,7 +358,10 @@ class MakeRepoTests(_DebCase):
         deb = self._build()
         first = self._make_repo(deb)
         second = self._make_repo(deb)
-        for name in ("Packages", "Packages.gz"):
+        names = ["Packages", "Packages.gz"]
+        if (first / "dists" / "stable" / "main" / "binary-all" / "Packages.xz").is_file():
+            names.append("Packages.xz")
+        for name in names:
             a = first / "dists" / "stable" / "main" / "binary-all" / name
             b = second / "dists" / "stable" / "main" / "binary-all" / name
             self.assertEqual(a.read_bytes(), b.read_bytes(), name)
@@ -315,6 +409,44 @@ class MakeRepoTests(_DebCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("gpg", proc.stderr)
 
+    def test_spaced_pool_filename_is_rejected(self):
+        deb = self._build()
+        spaced = self.home / "spaced name.deb"
+        shutil.copy(deb, spaced)
+        proc = _run("bash", str(MAKE_REPO), "--output", str(self.home / "spaced"), "--deb", str(spaced))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("whitespace", proc.stderr)
+        self.assertFalse((self.home / "spaced").exists())
+
+    def test_signing_plumbing_with_stub_gpg(self):
+        deb = self._build()
+        log = self.home / "gpg-args.log"
+        stub = _write_gpg_stub(self.home, log=log)
+        env = dict(os.environ)
+        env["VORTEX_GPG"] = str(stub)
+        repo = self.home / "signed-repo"
+        proc = _run("bash", str(MAKE_REPO), "--output", str(repo), "--deb", str(deb), "--sign", "testkey", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        dists = repo / "dists" / "stable"
+        inrelease = (dists / "InRelease").read_text(encoding="utf-8")
+        self.assertIn("BEGIN PGP SIGNED MESSAGE", inrelease)
+        self.assertIn("Codename: stable", inrelease)
+        self.assertTrue((dists / "Release.gpg").is_file())
+        self.assertEqual((repo / "vortex-archive-key.asc").read_text(encoding="utf-8"), FAKE_ARMOR)
+        calls = log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len([call for call in calls if "--local-user testkey" in call]), 2)
+        self.assertTrue(any(call.startswith("--batch") and "--export" in call for call in calls))
+
+    def test_signing_failure_leaves_no_output(self):
+        deb = self._build()
+        stub = _write_gpg_stub(self.home, fail=True)
+        env = dict(os.environ)
+        env["VORTEX_GPG"] = str(stub)
+        repo = self.home / "failed-repo"
+        proc = _run("bash", str(MAKE_REPO), "--output", str(repo), "--deb", str(deb), "--sign", "testkey", env=env)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertFalse(repo.exists(), "a failed sign must not publish a half-signed repo")
+
     def test_real_apt_resolves_package_by_name_and_picks_newest(self):
         apt_get = shutil.which("apt-get")
         apt_cache = shutil.which("apt-cache")
@@ -348,6 +480,51 @@ class MakeRepoTests(_DebCase):
         install = _run(apt_get, *base, "--download-only", "install", PACKAGE, timeout=180)
         self.assertEqual(install.returncode, 0, install.stderr)
         self.assertIn(f"{PACKAGE} all {APP_VERSION}", install.stdout)
+
+    def test_real_apt_upgrades_old_version_and_repairs_current(self):
+        apt_get = shutil.which("apt-get")
+        if apt_get is None:
+            self.skipTest("apt is required for the upgrade/repair proof")
+        current = self._build()
+        env = dict(os.environ)
+        env["VORTEX_VERSION"] = "0.2.0"
+        old_out = self.home / "old-deb"
+        proc = _run("bash", str(BUILD_SH), str(old_out), env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        old = next(old_out.glob(f"{PACKAGE}_0.2.0_all.deb"))
+        repo = self._make_repo(old, current)
+        apt_dir = self.home / "apt"
+        (apt_dir / "lists" / "partial").mkdir(parents=True)
+        (apt_dir / "archives" / "partial").mkdir(parents=True)
+        (apt_dir / "sources.list").write_text(f"deb [trusted=yes] file://{repo} stable main\n", encoding="utf-8")
+        status = apt_dir / "status"
+        base = [
+            f"-o=Dir::Etc::sourcelist={apt_dir / 'sources.list'}",
+            "-o=Dir::Etc::sourceparts=/dev/null",
+            f"-o=Dir::State::Lists={apt_dir / 'lists'}",
+            f"-o=Dir::Cache::archives={apt_dir / 'archives'}",
+            f"-o=Dir::State::status={status}",
+            "-o=Debug::NoLocking=1",
+        ]
+        update = _run(apt_get, *base, "update", timeout=180)
+        self.assertEqual(update.returncode, 0, update.stderr)
+
+        def simulate(installed: str, *extra: str) -> str:
+            status.write_text(
+                f"Package: {PACKAGE}\nStatus: install ok installed\nPriority: optional\nSection: utils\n"
+                f"Maintainer: mrtc-solutions\nArchitecture: all\nVersion: {installed}\nDescription: Linux Vortex Terminal\n\n"
+                "Package: python3\nStatus: install ok installed\nPriority: important\nSection: python\n"
+                "Maintainer: test\nArchitecture: amd64\nVersion: 3.99.0-1\nDescription: python3\n",
+                encoding="utf-8",
+            )
+            proc = _run(apt_get, *base, "-s", *extra, "install", PACKAGE, timeout=180)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return proc.stdout
+
+        upgrade = simulate("0.2.0")
+        self.assertIn(f"Inst {PACKAGE} [0.2.0] ({APP_VERSION}", upgrade)
+        repair = simulate(APP_VERSION, "--reinstall")
+        self.assertIn(f"Inst {PACKAGE} [{APP_VERSION}] ({APP_VERSION}", repair)
 
 
 class InstallRepoTests(unittest.TestCase):
@@ -418,6 +595,64 @@ class InstallRepoTests(unittest.TestCase):
         proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(self.repo), "--key", str(garbage), "--root", str(root))
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("ASCII-armored", proc.stderr)
+
+    def test_key_url_downloads_armor_over_http(self):
+        if shutil.which("curl") is None:
+            self.skipTest("curl is required for the --key-url download path")
+        served = self.home / "served"
+        served.mkdir()
+        (served / "key.asc").write_text(FAKE_ARMOR, encoding="utf-8")
+        with _file_server(served) as base_url:
+            root = self.home / "staged"
+            proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(self.repo),
+                        "--key-url", f"{base_url}/key.asc", "--root", str(root))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        keyring = root / "usr" / "share" / "keyrings" / "vortex-archive-keyring.asc"
+        self.assertEqual(keyring.read_bytes(), FAKE_ARMOR.encode("utf-8"))
+        sources = (root / "etc" / "apt" / "sources.list.d" / "vortex.sources").read_text(encoding="utf-8")
+        self.assertIn("Signed-By: /usr/share/keyrings/vortex-archive-keyring.asc", sources)
+
+    def test_truncated_key_is_rejected(self):
+        key = self.home / "truncated.asc"
+        key.write_text("-----BEGIN PGP PUBLIC KEY BLOCK-----\nAAAA\n", encoding="utf-8")
+        root = self.home / "staged"
+        proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(self.repo), "--key", str(key), "--root", str(root))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("BEGIN and END", proc.stderr)
+        self.assertFalse((root / "etc" / "apt" / "sources.list.d" / "vortex.sources").exists())
+
+    def test_suite_and_component_mismatch_are_rejected(self):
+        deb = next((self.home / "deb").glob("*.deb"))
+        other = self.home / "other-repo"
+        proc = _run("bash", str(MAKE_REPO), "--output", str(other), "--deb", str(deb), "--codename", "legacy")
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        root = self.home / "staged"
+        proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(other), "--trust-unsigned", "--root", str(root))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("missing dists/stable/Release", proc.stderr)
+        # A tree whose Release names another suite than its directory is
+        # corrupt (or hand-mixed): refuse it naming the mismatch.
+        mixed = self.home / "mixed-repo"
+        shutil.copytree(other, mixed)
+        (mixed / "dists" / "stable").mkdir(parents=True)
+        shutil.copytree(mixed / "dists" / "legacy", mixed / "dists" / "stable", dirs_exist_ok=True)
+        proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(mixed), "--trust-unsigned", "--root", str(root))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("different suite", proc.stderr)
+        proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(self.repo), "--trust-unsigned",
+                    "--component", "other", "--root", str(root))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("no component", proc.stderr)
+        self.assertFalse((root / "etc" / "apt" / "sources.list.d" / "vortex.sources").exists())
+
+    def test_system_root_requires_privileges(self):
+        if os.geteuid() == 0:
+            self.skipTest("refusal path only triggers unprivileged")
+        if Path("/etc/apt/sources.list.d/vortex.sources").exists():
+            self.skipTest("a Vortex source is already registered on this machine")
+        proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(self.repo), "--trust-unsigned")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("requires root", proc.stderr)
 
 
 class BackendRepoTests(unittest.TestCase):
@@ -523,6 +758,48 @@ class BackendRepoTests(unittest.TestCase):
         stray.write_text("stray", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "not covered by Release"):
             _verify_repo(tree, "stable", "main")
+
+
+    def test_empty_inputs_and_bad_output_are_rejected(self):
+        build_deb()
+        with self.assertRaisesRegex(ValueError, "at least one repo input"):
+            build_repo(debs=[])
+        with self.assertRaisesRegex(ValueError, "invalid repo output"):
+            build_repo(output_dir="/")
+        with self.assertRaisesRegex(ValueError, "invalid repo output"):
+            build_repo(output_dir=str(self.home / "sub" / ".."))
+
+    def test_symlink_output_is_rejected(self):
+        build_deb()
+        link = self.home / "repo-link"
+        link.symlink_to(self.home / "target")
+        with self.assertRaisesRegex(PermissionError, "cannot be a symlink"):
+            build_repo(output_dir=link)
+
+    def test_sign_without_trusted_gpg_is_an_honest_error(self):
+        if shutil.which("gpg") is not None:
+            self.skipTest("gpg is installed; the missing-gpg path cannot trigger here")
+        build_deb()
+        with self.assertRaisesRegex(RuntimeError, "trusted gpg"):
+            build_repo(sign_key="testkey")
+
+    def test_signed_repo_reports_key_hint(self):
+        import backend.debbuild as _debbuild
+
+        stub = _write_gpg_stub(self.home)
+        build_deb()
+        real_trusted = _debbuild._trusted_tool
+
+        def _stubbed(name: str) -> str:
+            if name == "gpg":
+                return str(stub)
+            return real_trusted(name)
+
+        with mock.patch("backend.debbuild._trusted_tool", side_effect=_stubbed):
+            result = build_repo(output_dir=self.home / "signed", sign_key="testkey")
+        self.assertTrue(result["signed"])
+        self.assertTrue(result["key_shipped"])
+        self.assertIn("--key <copied-dir>/vortex-archive-key.asc", result["message"])
 
 
 class CliRepoTests(unittest.TestCase):

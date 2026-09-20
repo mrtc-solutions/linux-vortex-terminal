@@ -22,7 +22,20 @@
   `/usr/share/vortex/packaging/deb/`. New `tests/test_apt_repo.py` (25
   tests) proves the flow with real `apt-get`/`apt-cache` resolution, a
   boot-and-serve smoke test of the extracted payload, and
-  tamper/replace/refusal cases (suite is now 593 Python + 10 JS).
+  tamper/replace/refusal cases.
+- **APT hardening round.** The `.deb` now Depends on `python3 (>= 3.10)`
+  (Ubuntu 22.04 unblocked; shipped code is grammar-gated and API-swept for
+  3.10 so the floor cannot silently rot) and carries `Installed-Size`;
+  `make-repo.sh` rejects pool filenames with whitespace and accepts a
+  `VORTEX_GPG` signer override; `install-repo.sh` requires complete armor
+  (BEGIN + END), verifies the suite/component of local repositories, and
+  refuses system roots unprivileged; `build_repo()` resolves symlinks and
+  containment strictly, validates outputs before locking, and trusts `gpg`
+  before staging. `tests/test_apt_repo.py` grows to 38 tests: stub-gpg
+  signing plumbing and failure atomicity, `--key-url` download over local
+  HTTP, real `apt-get -s` upgrade (`[0.2.0] (0.3.0)`) and repair
+  (`[0.3.0] (0.3.0)`) simulations, and output/suite/component refusal cases
+  (suite is now 606 Python + 10 JS).
 
 - **`npm start` survives low-memory hosts.** The launcher now rebuilds
   `dist/` only when it is missing or older than the sources (`--rebuild`

@@ -70,7 +70,7 @@ def _trusted_tool(name: str) -> str:
     _, _, probe_executable = _runtime_tools()
     identity = probe_executable(name, include_version=False)
     if identity.get("state") != "installed" or not identity.get("realpath"):
-        raise RuntimeError(f"A trusted {name} executable is required to build the desktop package.")
+        raise RuntimeError(f"A trusted {name} executable is required for packaging.")
     return str(identity["realpath"])
 
 
@@ -304,6 +304,8 @@ def _canonical_deb(path: Path, dpkg_deb: str, env: dict[str, Any]) -> dict[str, 
 
 
 def _resolve_repo_inputs(debs: list[str | Path] | None, dpkg_deb: str, env: dict[str, str]) -> list[dict[str, Any]]:
+    if debs is not None and len(debs) == 0:
+        raise ValueError("at least one repo input package is required")
     if debs:
         inputs = [_canonical_deb(Path(item).expanduser(), dpkg_deb, env) for item in debs]
     else:
@@ -322,6 +324,18 @@ def _resolve_repo_inputs(debs: list[str | Path] | None, dpkg_deb: str, env: dict
         seen.add(key)
         names.add(item["filename"])
     return inputs
+
+
+def _contained(root: Path, rel: str, label: str) -> Path:
+    """Resolve a repo-relative reference, refusing any directory escape."""
+    if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        raise RuntimeError(f"repo {label} escapes its directory: {rel}")
+    candidate = (root / rel).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError:
+        raise RuntimeError(f"repo {label} escapes its directory: {rel}")
+    return candidate
 
 
 def _verify_repo(tree: Path, codename: str, component: str) -> dict[str, Any]:
@@ -361,11 +375,7 @@ def _verify_repo(tree: Path, codename: str, component: str) -> dict[str, Any]:
         raise RuntimeError("repo Release carries no SHA256 entries")
     indexed: list[Path] = []
     for rel, (digest, size) in sorted(hashed.items()):
-        candidate = dists / rel
-        try:
-            candidate.relative_to(dists)
-        except ValueError:
-            raise RuntimeError(f"repo Release escapes its suite directory: {rel}")
+        candidate = _contained(dists, rel, "Release entry")
         if not candidate.is_file() or candidate.is_symlink():
             raise RuntimeError(f"repo Release lists a missing index: {rel}")
         if candidate.stat().st_size != size or _sha256_file(candidate) != digest:
@@ -391,9 +401,9 @@ def _verify_repo(tree: Path, codename: str, component: str) -> dict[str, Any]:
             for required in ("Package", "Version", "Filename", "Size", "SHA256"):
                 if not fields.get(required):
                     raise RuntimeError("repo Packages stanza is missing " + required)
-            if fields["Package"] != PACKAGE or ".." in Path(fields["Filename"]).parts or Path(fields["Filename"]).is_absolute():
-                raise RuntimeError(f"repo Packages stanza has an invalid payload reference: {fields['Filename']}")
-            payload = tree / fields["Filename"]
+            if fields["Package"] != PACKAGE:
+                raise RuntimeError(f"repo Packages stanza names a foreign package: {fields['Package']}")
+            payload = _contained(tree, fields["Filename"], "payload reference")
             if not payload.is_file() or payload.is_symlink():
                 raise RuntimeError(f"repo payload is missing: {fields['Filename']}")
             if str(payload.stat().st_size) != fields["Size"] or _sha256_file(payload) != fields["SHA256"]:
@@ -407,6 +417,18 @@ def _verify_repo(tree: Path, codename: str, component: str) -> dict[str, Any]:
         "signed": (dists / "InRelease").is_file() and (dists / "Release.gpg").is_file(),
         "key_shipped": (tree / "vortex-archive-key.asc").is_file(),
     }
+
+
+def _repo_target(output_dir: str | Path | None) -> Path:
+    """Resolve the repo output path, rejecting names that cannot be a target.
+
+    Runs before any lock or directory is touched so a bad output can never
+    plant lock files or directories (e.g. under /) as a side effect.
+    """
+    out = Path(output_dir).expanduser() if output_dir else desktop_dir() / "repo"
+    if not out.name or out.name in (".", ".."):
+        raise ValueError(f"invalid repo output directory: {output_dir!r}")
+    return out
 
 
 def _build_repo(
@@ -424,23 +446,28 @@ def _build_repo(
         raise ValueError("invalid repo signing key id")
     dpkg_deb = _trusted_tool("dpkg-deb")
     bash = _trusted_tool("bash")
+    # Trusted before staging: a signing request without a real gpg must fail
+    # here, not after a repository was already generated.
+    gpg = _trusted_tool("gpg") if sign_key else None
     script = repo_script()
     if not script.is_file():
         raise RuntimeError("packaging/deb/make-repo.sh is missing from this installation.")
     _, minimal_env, _ = _runtime_tools()
     env = minimal_env(False)
     env["VORTEX_DPKG_DEB"] = dpkg_deb
+    if gpg:
+        env["VORTEX_GPG"] = gpg
     inputs = _resolve_repo_inputs(debs, dpkg_deb, env)
-    out = Path(output_dir).expanduser() if output_dir else desktop_dir() / "repo"
+    out = _repo_target(output_dir)
     out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     parent = out.parent.resolve(strict=True)
     if os.geteuid() != 0 and parent.stat().st_uid != os.geteuid():
         raise PermissionError("repo output directory is not operator-owned")
     target = parent / out.name
-    if os.path.lexists(target) and not replace:
-        raise RuntimeError(f"a repository already exists at {target}; pass replace=True to rebuild it")
     if os.path.lexists(target) and target.is_symlink():
         raise PermissionError("repo output cannot be a symlink")
+    if os.path.lexists(target) and not replace:
+        raise RuntimeError(f"a repository already exists at {target}; pass replace=True to rebuild it")
     with tempfile.TemporaryDirectory(prefix=".vortex-repo-build-", dir=str(parent)) as build_raw:
         build_dir = Path(build_raw)
         staged = build_dir / "repo"
@@ -470,19 +497,22 @@ def _build_repo(
                 except OSError:
                     pass
                 raise
-            shutil.rmtree(backup, ignore_errors=False)
+            try:
+                shutil.rmtree(backup, ignore_errors=False)
+            except OSError as exc:
+                raise RuntimeError(f"repo published but the stale backup could not be removed: {backup} ({exc})")
         else:
             os.rename(staged, target)
     if verified["signed"] and verified["key_shipped"]:
         hint = (
             f"APT repository ready at {target}. Serve it over https (or copy the directory), then on the target machine: "
-            f"sudo ./install-repo.sh --repo-url https://<host>/vortex --key {target.name}/vortex-archive-key.asc "
+            "sudo packaging/deb/install-repo.sh --repo-url https://<host>/vortex --key <copied-dir>/vortex-archive-key.asc "
             "&& sudo apt install linux-vortex-terminal"
         )
     else:
         hint = (
             f"Unsigned APT repository ready at {target} (local testing only). On the target machine: "
-            f"copy the directory, then sudo ./install-repo.sh --repo-path <copied-dir> --trust-unsigned "
+            "copy the directory, then sudo packaging/deb/install-repo.sh --repo-path <copied-dir> --trust-unsigned "
             "&& sudo apt install linux-vortex-terminal"
         )
     return {
@@ -512,8 +542,7 @@ def build_repo(
 ) -> dict[str, Any]:
     """Serialize repository staging and publication across threads/processes."""
     with _REPO_BUILD_LOCK:
-        lock_root = Path(output_dir).expanduser() if output_dir is not None else desktop_dir() / "repo"
-        lock_root = lock_root.parent if output_dir is not None else lock_root.parent
+        lock_root = _repo_target(output_dir).parent
         lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         with exclusive_file_lock(lock_root / ".repo-build"):
             return _build_repo(debs, output_dir, codename, component, sign_key, replace)

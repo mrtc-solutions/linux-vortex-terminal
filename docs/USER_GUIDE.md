@@ -18,7 +18,7 @@ when you are ready.
 
 | Requirement | Why |
 |---|---|
-| Linux (Debian/Ubuntu/Kali recommended) | Only supported platform |
+| Linux: Debian 12+, Ubuntu 22.04+, Mint 21+, Kali rolling | Only supported platforms (Python 3.10+) |
 | Python 3.11+ | Core CLI and sidecar; **no pip packages required** |
 | `git` | Clone the repository |
 | Optional: Node 20+ + Electron | Desktop window |
@@ -123,7 +123,9 @@ vortex desktop repo
 # 2. Copy the repo directory to the target machine, or serve it over https.
 # 3. On the target machine, as root (signed by default; --trust-unsigned is
 #    for a local repo you built yourself):
-sudo ./install-repo.sh --repo-url https://<host>/vortex --key vortex-archive-key.asc
+sudo packaging/deb/install-repo.sh --repo-url https://<host>/vortex --key <copied-dir>/vortex-archive-key.asc
+# (on an installed machine the script is at
+# /usr/share/vortex/packaging/deb/install-repo.sh)
 # 4. Install, upgrade, and repair by package name.
 sudo apt install linux-vortex-terminal
 sudo apt upgrade linux-vortex-terminal

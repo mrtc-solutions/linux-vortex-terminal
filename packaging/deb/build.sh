@@ -127,13 +127,22 @@ cat > "$stage/usr/bin/vortex" <<'WRAPPER'
 exec /usr/bin/python3 /usr/share/vortex/cli/vortex.py "$@"
 WRAPPER
 chmod 0755 "$stage/usr/bin/vortex"
+# Floor is 3.10 (Ubuntu 22.04 ships 3.10): shipped code is grammar-gated and
+# API-swept for 3.10 in tests/test_apt_repo.py, so no 3.11-only construct can
+# slip back in. Re-verify before ever raising this bound.
+installed_kb=$(du -sk --exclude=DEBIAN "$stage" | cut -f1)
+if [[ ! "$installed_kb" =~ ^[0-9]{1,12}$ ]]; then
+  echo "could not measure the installed payload size" >&2
+  exit 2
+fi
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: $package
 Version: $version
 Section: utils
 Priority: optional
 Architecture: all
-Depends: python3 (>= 3.11)
+Installed-Size: $installed_kb
+Depends: python3 (>= 3.10)
 Recommends: zstd
 Maintainer: mrtc-solutions
 Homepage: ${VORTEX_HOMEPAGE:-https://github.com/mrtc-solutions/linux-vortex-terminal}
