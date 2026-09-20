@@ -2,6 +2,92 @@
 
 ## Unreleased
 
+- **Install, upgrade, and repair by APT package name.** New
+  `packaging/deb/make-repo.sh` builds a deterministic APT repository from
+  one or more `.deb` files (pool, per-architecture indexes, hashed Release,
+  optional GPG signing with an exported key), new
+  `packaging/deb/install-repo.sh` registers it on a target machine as a
+  DEB822 source with `Signed-By` (unsigned repos are refused unless
+  `--trust-unsigned` is passed explicitly for local testing), and
+  `vortex desktop repo` orchestrates the flow from the app with the same
+  verify-before-publish discipline as the `.deb` builder (hash
+  re-verification of every index and payload, rebuilds require `--replace`,
+  failed rebuilds preserve the last verified repo). `sudo apt install
+  linux-vortex-terminal` now resolves by name; a repository carrying
+  several versions resolves to the newest, and because the package ships no
+  maintainer scripts and no conffiles, upgrades and `--reinstall` repairs
+  cleanly replace every installed file. The `.deb` now carries a `Homepage`
+  field, derives its default version from `APP_VERSION` (as does
+  `vortex --version`), and ships the repo tooling under
+  `/usr/share/vortex/packaging/deb/`. New `tests/test_apt_repo.py` (25
+  tests) proves the flow with real `apt-get`/`apt-cache` resolution, a
+  boot-and-serve smoke test of the extracted payload, and
+  tamper/replace/refusal cases.
+- **APT hardening round.** The `.deb` now Depends on `python3 (>= 3.10)`
+  (Ubuntu 22.04 unblocked; shipped code is grammar-gated and API-swept for
+  3.10 so the floor cannot silently rot) and carries `Installed-Size`;
+  `make-repo.sh` rejects pool filenames with whitespace and accepts a
+  `VORTEX_GPG` signer override; `install-repo.sh` requires complete armor
+  (BEGIN + END), verifies the suite/component of local repositories, and
+  refuses system roots unprivileged; `build_repo()` resolves symlinks and
+  containment strictly, validates outputs before locking, and trusts `gpg`
+  before staging. `tests/test_apt_repo.py` grows to 38 tests: stub-gpg
+  signing plumbing and failure atomicity, `--key-url` download over local
+  HTTP, real `apt-get -s` upgrade (`[0.2.0] (0.3.0)`) and repair
+  (`[0.3.0] (0.3.0)`) simulations, and output/suite/component refusal cases.
+- **Real-transaction round.** `tests/test_apt_repo.py` (48 tests) now drives
+  genuine `dpkg --install/--status/--remove` transactions in an unprivileged
+  `--root`: clean configure with no recorded scripts/conffiles, upgrade
+  from 0.2.0 restoring a deliberately damaged file to packaged bytes, and
+  removal leaving no packaged files. `vortex serve` rebinds past TIME_WAIT,
+  names the address plus the way out on port conflicts (both entry points),
+  and both launchers pin `python3 -X utf8` so C-locale machines cannot crash
+  non-ASCII output (proven with a hostile-locale run that fails without the
+  flag). The sidecar also boots and serves with an empty PATH, repo
+  registration is idempotent, `install-repo.sh` checks for apt-get before
+  writing, and the docs cover atomic publishing plus uninstall.
+- **Self-contained repo round.** `make-repo.sh` now ships `install-repo.sh`
+  (byte-identical, executable) plus a generated `NEXT-STEPS.txt` inside every
+  repository, so one copied directory is everything the target machine needs;
+  publishing without the installer alongside is refused. `build_repo()`
+  requires the executable installer during verification and reports it, the
+  man page documents `desktop deb/repo`, all three shell completions list
+  `desktop` with `deb`/`repo` actions (bash completion executes for real in
+  tests), and the flow is proven end to end: copy tree → run its own
+  installer from `.` → real `apt update` → candidate by name. Also covered:
+  first-run `doctor` from the installed payload, `desktop --help`, and a
+  0.3.0→0.4.0 upgrade simulation proving newest-pick is not version-specific
+  (suite is now 627 Python + 10 JS).
+
+- **`npm start` survives low-memory hosts.** The launcher now rebuilds
+  `dist/` only when it is missing or older than the sources (`--rebuild`
+  forces, `--no-build` skips), sizes the build heap from free RAM without
+  overriding an explicit `NODE_OPTIONS`, warns when free memory is too low
+  to compile, and tells an OOM-`Killed` build apart from a real compile
+  error — continuing into the app on the last good bundle after a kill
+  instead of stranding the operator. Freshness is tracked by a build
+  manifest (`dist/.vortex-build.json`, written by the new `npm run build`
+  wrapper): added/removed sources invalidate by set difference rather than
+  by directory mtimes, which some filesystems quantize too coarsely to
+  trust, and `package.json` is fingerprinted by dependency content so
+  script-only edits never force a rebuild. New `npm run start:no-build`
+  alias and `tests/test_start.js` pin the flag parsing, freshness check,
+  heap cap, and OOM diagnosis (suite is now 568 Python + 10 JS).
+  `npm run preview` shares the same incremental check and, unlike the old
+  unconditional pre-build, still serves (legacy UI fallback) when a rebuild
+  cannot run.
+- **Leaner production build.** `vite.config.ts` disables sourcemaps and the
+  gzip-size pass the singlefile bundle never needed, cutting build time and
+  peak memory on small Kali VMs.
+- **Cheaper background effects.** The matrix rain canvas pauses when the tab
+  is hidden or the window blurs, rebuilds its columns on resize (maximizing
+  used to leave the right side dry), hoists per-frame style work out of the
+  loop, and degrades from ~30fps to ~20fps under software rendering instead
+  of stacking frames. Rain/CRT toggles now persist across restarts and the
+  rain defaults off when the OS prefers reduced motion.
+- **Prompt-bar scrollbar fix.** `QuickPromptBar` referenced a `no-scrollbar`
+  utility that did not exist; it is now defined, so the chip bar no longer
+  shows a scroll rail.
 - **Agent Mode (v1).** Goal-directed runs with a visible transcript:
   think → plan → Guardian → execute → observe, looping until the goal is
   verified or a budget stops the run. Thinking rides the local stack

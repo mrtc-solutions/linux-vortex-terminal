@@ -23,6 +23,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS: list[tuple[str, bool, str]] = []
+sys.path.insert(0, str(ROOT))
+from backend.vortex_backend import APP_VERSION  # noqa: E402  (single-sourced version assertions)
 
 
 def gate(name: str, ok: bool, evidence: str) -> None:
@@ -55,7 +57,8 @@ def gate_lint() -> None:
     proc = run([sys.executable, "-m", "compileall", "-q", "backend", "cli"])
     files = ["frontend/app.js", "frontend/terminal.js", "frontend/windows.js", "frontend/workspace.js",
              "frontend/models.js", "frontend/aiops.js", "frontend/agent.js", "frontend/hud.js", "desktop/main.js", "desktop/preload.js",
-             "desktop/security.js", "desktop/window-controls.js"]
+             "desktop/security.js", "desktop/window-controls.js", "scripts/start.js", "scripts/ensure-dist.js",
+             "scripts/build.js", "scripts/ensure-electron.js", "tests/test_start.js"]
     bad = []
     for name in files:
         check = run(["node", "--check", name], timeout=60)
@@ -68,13 +71,13 @@ def gate_lint() -> None:
 def gate_js_suites() -> None:
     names = ["test_terminal", "test_windows", "test_frontend", "test_frontend_runtime",
              "test_frontend_auth", "test_agents_local_ai", "test_hud", "test_responsive",
-             "test_agent"]
+             "test_agent", "test_start"]
     failed = []
     for name in names:
-        proc = run(["node", f"tests/{name}.js"], timeout=120)
+        proc = run(["node", f"tests/{name}.js"], timeout=180)
         if proc.returncode != 0:
             failed.append(name)
-    gate("3/10 js suites (9 files)", not failed, f"failed={failed or 'none'}")
+    gate("3/10 js suites (10 files)", not failed, f"failed={failed or 'none'}")
 
 
 def gate_gguf_chain() -> None:
@@ -298,8 +301,13 @@ def gate_cli() -> None:
             results["db"] = proc.returncode == 0 and "integrity" in json.loads(proc.stdout)
         except ValueError:
             results["db"] = False
+        proc = run([sys.executable, "cli/vortex.py", "--version"], env=env, timeout=60)
+        results["version"] = proc.returncode == 0 and proc.stdout.strip() == f"vortex {APP_VERSION}"
+        repo_scripts = [ROOT / "packaging" / "deb" / name for name in ("build.sh", "make-repo.sh", "install-repo.sh")]
+        syntax = {script.name: run(["bash", "-n", str(script)], timeout=60).returncode == 0 and (script.stat().st_mode & 0o111) != 0 for script in repo_scripts}
+        results["repo-scripts"] = all(syntax.values())
         ok = all(results.values())
-        gate("9/10 cli smoke (model/palette/explain/db)", ok, f"checks={results}")
+        gate("9/10 cli smoke (model/palette/explain/db/version/repo-scripts)", ok, f"checks={results}")
     finally:
         tmp.cleanup()
 

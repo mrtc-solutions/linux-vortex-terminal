@@ -16,6 +16,16 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  // Lean production build: no sourcemaps and no gzip-size pass, so the
+  // singlefile bundle compiles fast on small Kali VMs without OOM pressure.
+  // (The 649 KB inlined dist/index.html is intentional.)
+  build: {
+    sourcemap: false,
+    reportCompressedSize: false,
+    chunkSizeWarningLimit: 1500,
+    minify: "esbuild",
+    assetsInlineLimit: 100 * 1024 * 1024,
+  },
   // Dev/preview ergonomics: listen on all interfaces (sandbox previews),
   // accept the preview host, and proxy /api to a local sidecar so
   // `npm run dev` against `./vortex serve` just works.

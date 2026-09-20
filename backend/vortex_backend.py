@@ -5772,6 +5772,11 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
     request_queue_size = 64
+    # A loopback workbench is restarted often (upgrades, repairs, second
+    # clicks on the menu entry): allow rebinding past TIME_WAIT instead of
+    # failing with EADDRINUSE for a minute after every restart. Two live
+    # servers still conflict — only dead sockets are recycled.
+    allow_reuse_address = True
 
     def __init__(self, *args: Any, max_request_threads: int = 64, **kwargs: Any):
         self._request_slots = threading.BoundedSemaphore(max(1, min(int(max_request_threads), 256)))
@@ -5822,7 +5827,15 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None, f
             handler.workspace.reconcile_orphaned_tasks()
         except (OSError, sqlite3.Error):
             pass
-        server = BoundedThreadingHTTPServer((host, port), handler)
+        try:
+            server = BoundedThreadingHTTPServer((host, port), handler)
+        except OSError as exc:
+            # Name the address and the way out: a bare "[Errno 98]" strands
+            # operators who double-clicked the menu entry while already
+            # running. The raw strerror stays in the message for greppability.
+            hint = (f"cannot serve on {host}:{port}: {exc.strerror or exc}. "
+                    "Is another Vortex Terminal already running? Use --bind-port to choose a free port.")
+            raise OSError(exc.errno, hint) from exc
 
         def stop_on_term(_signum: int, _frame: Any) -> None:
             raise KeyboardInterrupt
@@ -5866,5 +5879,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         serve(args.host, args.port, args.token, frame_hosts=args.allow_frame_host or None)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         parser.error(str(exc))

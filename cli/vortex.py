@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.artifacts import analyze_path
 from backend.fileio import read_owner_text
-from backend.vortex_backend import (ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, build_undo_plan, detect_context, now_iso, probe_executable, command_spec, report_markdown, runtime_root, trusted_privilege_broker, validate_cwd, plan_digest)
+from backend.vortex_backend import (APP_VERSION, ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, build_undo_plan, detect_context, now_iso, probe_executable, command_spec, report_markdown, runtime_root, trusted_privilege_broker, validate_cwd, plan_digest)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps({"schema_version": 1, **value}, sort_keys=True, indent=2))
@@ -105,7 +105,7 @@ def install_user(prefix=None, user=True):
     dest_dir = Path(prefix).expanduser() if prefix else Path.home() / ".local" / "bin"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "vortex"
-    dest.write_text(f'#!/usr/bin/env sh\nexec python3 "{root / "cli" / "vortex.py"}" "$@"\n', encoding="utf-8")
+    dest.write_text(f'#!/usr/bin/env sh\nexec python3 -X utf8 "{root / "cli" / "vortex.py"}" "$@"\n', encoding="utf-8")
     dest.chmod(0o755)
     return {
         "ok": True,
@@ -361,14 +361,14 @@ def main(argv=None):
     parser.add_argument('--yes', action='store_true', help='skip the interactive prompt only for a policy-valid plan')
     parser.add_argument('--format', choices=('text', 'json', 'md'), default='text', help='output format')
     parser.add_argument('--profile', choices=('safe', 'standard', 'expert'), default='safe', help='policy friction profile')
-    parser.add_argument('--version', action='version', version='vortex 0.3.0')
+    parser.add_argument('--version', action='version', version=f'vortex {APP_VERSION}')
     sub = parser.add_subparsers(dest='subcommand')
     for name in ('ask', 'plan'):
         p = sub.add_parser(name); p.add_argument('request')
     sub.add_parser('doctor')
     ht = sub.add_parser('host-tools'); ht.add_argument('action', choices=['list', 'rescan'], nargs='?', default='list')
     mob = sub.add_parser('mobile'); mob.add_argument('action', choices=['apk'], nargs='?', default='apk'); mob.add_argument('--sidecar-url')
-    desk = sub.add_parser('desktop'); desk.add_argument('action', choices=['deb'], nargs='?', default='deb'); desk.add_argument('--output', help='output directory for the .deb (default: Vortex Terminal data dir)')
+    desk = sub.add_parser('desktop'); desk.add_argument('action', choices=['deb', 'repo'], nargs='?', default='deb'); desk.add_argument('--output', help='output directory for the .deb (default: Vortex Terminal data dir)'); desk.add_argument('--deb', action='append', default=None, help='repo input package (repeatable; default: latest built .deb)'); desk.add_argument('--codename', default='stable', help='APT suite name for desktop repo (default: stable)'); desk.add_argument('--component', default='main', help='APT component for desktop repo (default: main)'); desk.add_argument('--sign', default=None, help='GPG key id to sign the repo Release files with'); desk.add_argument('--replace', action='store_true', help='replace an existing repo output directory')
     sub.add_parser('tools')
     sub.add_parser('adapters')
     sub.add_parser('health')
@@ -551,6 +551,11 @@ def main(argv=None):
             emit({'apk': result}, args.as_json)
             return 0 if result.get('ok') else EXIT_CODES['failure']
         if args.subcommand == 'desktop':
+            if (getattr(args, 'action', 'deb') or 'deb') == 'repo':
+                from backend.debbuild import build_repo
+                result = build_repo(debs=getattr(args, 'deb', None), output_dir=getattr(args, 'output', None), codename=getattr(args, 'codename', 'stable') or 'stable', component=getattr(args, 'component', 'main') or 'main', sign_key=getattr(args, 'sign', None), replace=bool(getattr(args, 'replace', False)))
+                emit({'repo': result}, args.as_json)
+                return 0 if result.get('ok') else EXIT_CODES['failure']
             from backend.debbuild import build_deb
             out = getattr(args, 'output', None)
             result = build_deb(output_dir=out)

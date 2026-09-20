@@ -18,7 +18,7 @@ when you are ready.
 
 | Requirement | Why |
 |---|---|
-| Linux (Debian/Ubuntu/Kali recommended) | Only supported platform |
+| Linux: Debian 12+, Ubuntu 22.04+, Mint 21+, Kali rolling | Only supported platforms (Python 3.10+) |
 | Python 3.11+ | Core CLI and sidecar; **no pip packages required** |
 | `git` | Clone the repository |
 | Optional: Node 20+ + Electron | Desktop window |
@@ -103,13 +103,38 @@ Remove that directory if you also want history, tasks, and the audit DB gone.
 ### Optional Debian package (unsigned)
 
 ```bash
-# requires dpkg-deb on a Linux builder (defaults to the current 0.3.0 version)
+# requires dpkg-deb on a Linux builder (version defaults to APP_VERSION)
 packaging/deb/build.sh
 # then, as an administrator of that machine:
-# sudo dpkg -i dist/deb/linux-vortex-terminal_0.3.0_all.deb
+# sudo apt install ./dist/deb/linux-vortex-terminal_<version>_all.deb
 ```
 
 The package does not start a daemon, create user data, or install agents.
+It ships no maintainer scripts and no conffiles, so a newer version
+cleanly replaces every installed file on upgrade or
+`sudo apt install --reinstall`.
+
+### Optional APT repository (install by name)
+
+```bash
+# 1. Build the package, then the repository (refuses to overwrite; --replace rebuilds).
+vortex desktop deb
+vortex desktop repo
+# 2. Copy the repo directory to the target machine, or serve it over https.
+# 3. On the target machine, from inside the copied directory (it ships its
+#    own installer plus NEXT-STEPS.txt), as root:
+cd /path/to/copied/repo
+sudo ./install-repo.sh --repo-path . --trust-unsigned   # local testing only
+# (signed repos served over https: ./install-repo.sh --repo-url <url>
+# --key ./vortex-archive-key.asc)
+# 4. Install, upgrade, and repair by package name.
+sudo apt install linux-vortex-terminal
+sudo apt upgrade linux-vortex-terminal
+```
+
+A repository carrying several versions resolves to the newest one. See
+`packaging/README.md` for the full flow, including the `make-repo.sh` /
+`install-repo.sh` shell equivalents and the `--sign` release path.
 
 ## 5. First-run health check
 
@@ -214,6 +239,8 @@ Local-only (recommended on your machine):
 ```bash
 vortex serve --bind-host 127.0.0.1 --bind-port 8765
 # open http://127.0.0.1:8765/
+# "cannot serve on …" means another copy is already running; stop it or
+# pick a free port with --bind-port.
 ```
 
 Preview bind (local loopback; `make preview` and `npm run preview` agree):
@@ -296,6 +323,26 @@ Headless host with no `$DISPLAY`: `xvfb-run -a npm start`, or skip Electron
 entirely and test the identical workbench in a browser with
 `npm run preview` (serves on `http://127.0.0.1:4173`). `npm run
 start:electron` bypasses the wrapper and invokes Electron directly.
+
+### Build says `Killed` on a small VM (out of memory, not a bug)
+
+`transforming (...) src/main.tsx Killed` means the Linux OOM-killer shot the
+compiler: the box had less than ~0.5 GB free while Vite ran. The code is
+fine — the starter also sizes the build heap from free RAM and says so
+explicitly. Fix one of:
+
+1. Free RAM: close browser tabs and heavy apps, then check `free -h`.
+2. Reuse the last good bundle instead of rebuilding: `npm run start:no-build`
+   (an OOM-kill with an existing `dist/` now continues into the app
+   automatically and says so).
+3. Skip the desktop shell: `npm run preview` rebuilds only when `dist/` is
+   stale and serves the legacy UI instead of failing when a build cannot run.
+4. Give a 2 GB VM some headroom: add a 2 GB swapfile or raise its memory.
+5. Build once with a small heap, then start without rebuilding:
+   `NODE_OPTIONS=--max-old-space-size=768 npm run build && npm run start:no-build`.
+
+A genuine compile error (TypeScript/JSX mistake) still cancels the launch and
+points at the error in the build output above — that path is unchanged.
 
 Electron starts the Python sidecar on `127.0.0.1` with a random capability
 token. The renderer cannot spawn processes: every API call travels over

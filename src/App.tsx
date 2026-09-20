@@ -43,11 +43,42 @@ function asJsonRecord(value: unknown): JsonRecord {
   return (value && typeof value === 'object' ? value : {}) as JsonRecord;
 }
 
+function readEffectPref(key: string, fallback: boolean): boolean {
+  try {
+    const stored = localStorage.getItem(key);
+    return stored === null ? fallback : stored === '1';
+  } catch {
+    return fallback;
+  }
+}
+
+function writeEffectPref(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? '1' : '0');
+  } catch {
+    /* storage unavailable — the toggle still works for this session */
+  }
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
   const [activeTab, setActiveTab] = useState<'terminal' | 'map' | 'out' | 'report' | 'fuzzy' | 'agent-reach'>('terminal');
   const [theme, setTheme] = useState<ThemeMode>('matrix');
-  const [crtEnabled, setCrtEnabled] = useState<boolean>(true);
-  const [matrixRainEnabled, setMatrixRainEnabled] = useState<boolean>(true);
+  // Effect toggles persist across restarts. Operators who ask the OS for
+  // reduced motion get a still background by default; one click re-enables it.
+  const [crtEnabled, setCrtEnabled] = useState<boolean>(() => readEffectPref('vortex.crt', true));
+  const [matrixRainEnabled, setMatrixRainEnabled] = useState<boolean>(
+    () => readEffectPref('vortex.rain', !prefersReducedMotion()),
+  );
+  useEffect(() => { writeEffectPref('vortex.crt', crtEnabled); }, [crtEnabled]);
+  useEffect(() => { writeEffectPref('vortex.rain', matrixRainEnabled); }, [matrixRainEnabled]);
   const [soundMuted, setSoundMuted] = useState<boolean>(sound.getMuted());
   const [artifactCount, setArtifactCount] = useState<number>(0);
   const [inspectingFuzzy, setInspectingFuzzy] = useState<FuzzyConsensusResult | null>(null);
