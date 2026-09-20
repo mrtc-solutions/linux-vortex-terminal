@@ -214,6 +214,15 @@ class ControlFieldsTests(_DebCase):
         self.assertIn("VORTEX_HOMEPAGE", proc.stderr or proc.stdout)
         self.assertEqual(list((self.home / "evil").glob("*.deb")) if (self.home / "evil").exists() else [], [])
 
+    def test_version_override_rejects_non_debian_underscore_before_building(self):
+        env = dict(os.environ)
+        env["VORTEX_VERSION"] = "0.3_bad"
+        output = self.home / "bad-version"
+        proc = _run("bash", str(BUILD_SH), str(output), env=env)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("VORTEX_VERSION", proc.stderr or proc.stdout)
+        self.assertEqual(list(output.glob("*.deb")) if output.exists() else [], [])
+
 
 class ShippedPythonTests(_DebCase):
     # Python 3.11/3.12-only constructs that must never appear in shipped code

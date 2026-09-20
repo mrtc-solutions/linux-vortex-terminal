@@ -2,6 +2,7 @@ import http.server
 import json
 import os
 import shutil
+import socket
 import sqlite3
 import subprocess
 import tempfile
@@ -545,11 +546,25 @@ class VortexCoreTests(unittest.TestCase):
     def test_non_loopback_bind_requires_strong_capability(self):
         vtx_backend.validate_bind_security("127.0.0.1", None)
         vtx_backend.validate_bind_security("localhost", None)
+        vtx_backend.validate_bind_security("::1", None)
         vtx_backend.validate_bind_security("0.0.0.0", "x" * 32)
         with self.assertRaises(ValueError):
             vtx_backend.validate_bind_security("0.0.0.0", None)
         with self.assertRaises(ValueError):
             vtx_backend.validate_bind_security("192.0.2.10", "short")
+
+    def test_ipv6_loopback_uses_ipv6_socket_family(self):
+        if not socket.has_ipv6:
+            self.skipTest("platform has no IPv6 support")
+        try:
+            server = vtx_backend.sidecar_server("::1", 0, vtx_backend.VortexHandler)
+        except OSError as exc:
+            self.skipTest(f"IPv6 loopback is unavailable: {exc}")
+        try:
+            self.assertEqual(server.address_family, socket.AF_INET6)
+            self.assertEqual(server.server_address[0], "::1")
+        finally:
+            server.server_close()
 
     def test_completed_session_releases_all_live_runtime_buffers(self):
         sessions = SessionManager(self.store, idle_seconds=120)

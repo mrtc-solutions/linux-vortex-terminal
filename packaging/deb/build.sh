@@ -24,7 +24,11 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 cd "$root"
 
-if [[ ! "$version" =~ ^[0-9][0-9A-Za-z.+:~_-]{0,63}$ ]]; then
+# Debian versions use letters, digits, and ``.+:~-`` after their mandatory
+# leading digit.  In particular, an underscore is *not* legal; accepting one
+# here used to defer a clear operator-input error to dpkg-deb after staging the
+# entire payload.
+if [[ ! "$version" =~ ^[0-9][0-9A-Za-z.+:~-]{0,63}$ ]]; then
   echo "VORTEX_VERSION is not a valid bounded Debian version" >&2
   exit 2
 fi
