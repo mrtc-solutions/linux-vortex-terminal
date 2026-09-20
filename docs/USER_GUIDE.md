@@ -297,6 +297,26 @@ entirely and test the identical workbench in a browser with
 `npm run preview` (serves on `http://127.0.0.1:4173`). `npm run
 start:electron` bypasses the wrapper and invokes Electron directly.
 
+### Build says `Killed` on a small VM (out of memory, not a bug)
+
+`transforming (...) src/main.tsx Killed` means the Linux OOM-killer shot the
+compiler: the box had less than ~0.5 GB free while Vite ran. The code is
+fine — the starter also sizes the build heap from free RAM and says so
+explicitly. Fix one of:
+
+1. Free RAM: close browser tabs and heavy apps, then check `free -h`.
+2. Reuse the last good bundle instead of rebuilding: `npm run start:no-build`
+   (an OOM-kill with an existing `dist/` now continues into the app
+   automatically and says so).
+3. Skip the desktop shell: `npm run preview` rebuilds only when `dist/` is
+   stale and serves the legacy UI instead of failing when a build cannot run.
+4. Give a 2 GB VM some headroom: add a 2 GB swapfile or raise its memory.
+5. Build once with a small heap, then start without rebuilding:
+   `NODE_OPTIONS=--max-old-space-size=768 npm run build && npm run start:no-build`.
+
+A genuine compile error (TypeScript/JSX mistake) still cancels the launch and
+points at the error in the build output above — that path is unchanged.
+
 Electron starts the Python sidecar on `127.0.0.1` with a random capability
 token. The renderer cannot spawn processes: every API call travels over
 authenticated main-process IPC (route-allowlisted), while the shell bundle,

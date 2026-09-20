@@ -77,6 +77,15 @@ body {
   background: rgba(var(--theme-primary-rgb), 0.65);
 }
 
+/* Hide the scroll rail on horizontal chip bars (used by QuickPromptBar). */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Terminal Cursor */
 .terminal-cursor {
   display: inline-block;

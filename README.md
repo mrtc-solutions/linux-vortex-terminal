@@ -25,6 +25,12 @@ trusted. Nothing is fabricated to make the UI look complete.
 
 Requires Linux and Python 3.11+. Core use has no pip dependency.
 
+Run every command below from the repository root (`cd linux-vortex-terminal`
+after cloning) — `npm` and `./vortex` only resolve inside the checkout, so
+`npm start` from `$HOME` fails with `ENOENT ... open '/home/kali/package.json'`
+by design. After `./vortex install --user`, the bare `vortex` command works
+from any directory.
+
 ```bash
 # Verify
 python3 -m unittest discover -s tests -q

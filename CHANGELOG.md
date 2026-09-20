@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **`npm start` survives low-memory hosts.** The launcher now rebuilds
+  `dist/` only when it is missing or older than the sources (`--rebuild`
+  forces, `--no-build` skips), sizes the build heap from free RAM without
+  overriding an explicit `NODE_OPTIONS`, warns when free memory is too low
+  to compile, and tells an OOM-`Killed` build apart from a real compile
+  error — continuing into the app on the last good bundle after a kill
+  instead of stranding the operator. New `npm run start:no-build` alias and
+  `tests/test_start.js` pin the flag parsing, freshness check, heap cap,
+  and OOM diagnosis (suite is now 568 Python + 10 JS). `npm run preview`
+  shares the same incremental check and, unlike the old unconditional
+  pre-build, still serves (legacy UI fallback) when a rebuild cannot run.
+- **Leaner production build.** `vite.config.ts` disables sourcemaps and the
+  gzip-size pass the singlefile bundle never needed, cutting build time and
+  peak memory on small Kali VMs.
+- **Cheaper background effects.** The matrix rain canvas pauses when the tab
+  is hidden or the window blurs, rebuilds its columns on resize (maximizing
+  used to leave the right side dry), hoists per-frame style work out of the
+  loop, and degrades from ~30fps to ~20fps under software rendering instead
+  of stacking frames. Rain/CRT toggles now persist across restarts and the
+  rain defaults off when the OS prefers reduced motion.
+- **Prompt-bar scrollbar fix.** `QuickPromptBar` referenced a `no-scrollbar`
+  utility that did not exist; it is now defined, so the chip bar no longer
+  shows a scroll rail.
 - **Agent Mode (v1).** Goal-directed runs with a visible transcript:
   think → plan → Guardian → execute → observe, looping until the goal is
   verified or a budget stops the run. Thinking rides the local stack
