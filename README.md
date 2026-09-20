@@ -285,9 +285,12 @@ records that it does not know the host outcome rather than inferring success.
 
 ```bash
 npm run lint
-npm test                             # 644 Python tests + 10 JS suites
+npm test                             # 644 Python tests + 11 JS suites
 python3 scripts/final_gates.py       # the 10-gate release audit (10/10 required)
 ```
+
+For the real-only debugging sequence and the stricter browser/Electron/model/VNC
+release boundary, see [`docs/REAL_DEBUGGING_AND_ACCEPTANCE_PLAN.md`](docs/REAL_DEBUGGING_AND_ACCEPTANCE_PLAN.md).
 
 Optional desktop shell (Electron): `npm install && npm start` (Node 22.12+).
 The Electron binary downloads during `npm install`; if your network blocks

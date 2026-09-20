@@ -9,10 +9,14 @@ window-control, frontend smoke, frontend auth, and frontend runtime smoke suites
 
 ## Current validation — 2026-09-20
 
+See [`REAL_DEBUGGING_AND_ACCEPTANCE_PLAN.md`](REAL_DEBUGGING_AND_ACCEPTANCE_PLAN.md)
+for the real-only ten-domain acceptance plan, exact evidence boundary, and
+remaining prerequisite gates.
+
 The current low-memory launcher and lifecycle pass was validated on a target-like
 2-core / 3.8-GiB / no-swap Linux sandbox:
 
-- `npm test` → **PASS**: 644 Python tests plus all 10 JavaScript suites.
+- `npm test` → **PASS**: 644 Python tests plus all 11 JavaScript suites.
 - `python3 scripts/final_gates.py` → **PASS**: `FINAL: 10/10 (100%)`.
 - A warning-instrumented full Python run → **PASS**: 644 tests, zero
   `ResourceWarning`s, and zero tracked open file/Popen handles at shutdown.
@@ -22,7 +26,8 @@ The current low-memory launcher and lifecycle pass was validated on a target-lik
   also completed through the real desktop-launch contract using the available
   test runtime.
 - Production preview served the React shell and representative health,
-  capability, dashboard, model, and settings endpoints successfully.
+  capability, dashboard, model, and settings endpoints successfully. A fresh
+  Vite development server also proxied those real sidecar APIs successfully.
 - A fresh Debian package was built and SHA-256-verified. Its extracted payload
   served the production shell plus health/capability/dashboard endpoints, and
   its CLI payload passed `doctor`, `health`, and database-integrity checks.

@@ -5,13 +5,28 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const assert = require('assert/strict');
+const { electronExecutablePath, electronVersion } = require('../scripts/ensure-electron');
+
+function requireRealElectronBinary() {
+  const version = electronVersion();
+  const executable = electronExecutablePath(version);
+  if (executable) return executable;
+  throw new Error(
+    '[native acceptance] A real Electron binary is required and is not installed. ' +
+    'Run `node scripts/ensure-electron.js --required` on a host with an approved source, ' +
+    'or set ELECTRON_OVERRIDE_DIST_PATH to a real system Electron directory. ' +
+    'This test intentionally does not import electron/package index.js because that would retry a download.'
+  );
+}
 
 (async () => {
   const root = path.resolve(__dirname, '..');
+  const electronExecutable = requireRealElectronBinary();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vortex-native-'));
   let app;
   try {
     app = await electron.launch({
+      executablePath: electronExecutable,
       args: [path.join(root, 'desktop/main.js'), '--no-sandbox'],
       env: { ...process.env, VORTEX_DATA_DIR: path.join(tmp, 'data'), VORTEX_CONFIG_DIR: path.join(tmp, 'config'), VORTEX_RUNTIME_DIR: path.join(tmp, 'runtime'), VORTEX_UI: '' },
       timeout: 60000,

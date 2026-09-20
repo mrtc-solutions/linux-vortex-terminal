@@ -148,7 +148,10 @@
   running, release after stop, timeout cleanup, and clean interpreter exit.
 - **Test-harness cleanup.** The real remote-desktop sidecar harness now closes
   its parent-owned stdout pipe on normal and failed readiness shutdown, leaving
-  the full warning-instrumented suite with no dangling descriptors.
+  the full warning-instrumented suite with no dangling descriptors. Native
+  Electron acceptance now preflights the installed binary without importing the
+  Electron package loader, so a missing runtime fails immediately and honestly
+  instead of silently launching another network download attempt.
 - **Leaner production build.** `vite.config.ts` disables sourcemaps and the
   gzip-size pass the singlefile bundle never needed, cutting build time and
   peak memory on small Kali VMs.
