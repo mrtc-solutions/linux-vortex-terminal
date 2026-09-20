@@ -105,7 +105,7 @@ def install_user(prefix=None, user=True):
     dest_dir = Path(prefix).expanduser() if prefix else Path.home() / ".local" / "bin"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "vortex"
-    dest.write_text(f'#!/usr/bin/env sh\nexec python3 "{root / "cli" / "vortex.py"}" "$@"\n', encoding="utf-8")
+    dest.write_text(f'#!/usr/bin/env sh\nexec python3 -X utf8 "{root / "cli" / "vortex.py"}" "$@"\n', encoding="utf-8")
     dest.chmod(0o755)
     return {
         "ok": True,

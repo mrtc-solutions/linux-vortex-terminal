@@ -124,7 +124,9 @@ cp "$root/assets/hooded-researcher.svg" "$stage/usr/share/icons/hicolor/scalable
 
 cat > "$stage/usr/bin/vortex" <<'WRAPPER'
 #!/bin/sh
-exec /usr/bin/python3 /usr/share/vortex/cli/vortex.py "$@"
+# -X utf8 pins the interpreter to UTF-8 mode so C-locale machines (or
+# PYTHONCOERCECLOCALE=0 environments) cannot crash non-ASCII output.
+exec /usr/bin/python3 -X utf8 /usr/share/vortex/cli/vortex.py "$@"
 WRAPPER
 chmod 0755 "$stage/usr/bin/vortex"
 # Floor is 3.10 (Ubuntu 22.04 ships 3.10): shipped code is grammar-gated and

@@ -266,7 +266,7 @@ class InstalledPayloadTests(_DebCase):
         # The FHS wrapper only resolves after dpkg installs it, so prove the
         # mapping statically and execute the extracted entry point directly.
         wrapper = (tree / "usr" / "bin" / "vortex").read_text(encoding="utf-8")
-        self.assertIn('exec /usr/bin/python3 /usr/share/vortex/cli/vortex.py "$@"', wrapper)
+        self.assertIn('exec /usr/bin/python3 -X utf8 /usr/share/vortex/cli/vortex.py "$@"', wrapper)
         entry = tree / "usr" / "share" / "vortex" / "cli" / "vortex.py"
         self.assertTrue(entry.is_file())
         proc = _run(sys.executable, str(entry), "--version", env=_contained_env(self.home / "cli-home"))
@@ -312,6 +312,223 @@ class InstalledPayloadTests(_DebCase):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=15)
+
+    def test_extracted_payload_boots_with_no_host_tools_on_path(self):
+        import sys
+
+        tree = self.home / "installed-min"
+        tree.mkdir()
+        proc = _run(self.dpkg_deb, "--extract", str(self._build()), str(tree))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        entry = tree / "usr" / "share" / "vortex" / "cli" / "vortex.py"
+        port = _free_port()
+        env = _contained_env(self.home / "minimal-home")
+        # A bare user PC may lack curl, git, ss, and friends: the sidecar must
+        # boot and serve with every host-tool probe reporting absent.
+        env["PATH"] = str(self.home / "empty-path")
+        Path(env["PATH"]).mkdir()
+        proc = subprocess.Popen(
+            [sys.executable, str(entry), "serve", "--bind-host", "127.0.0.1", "--bind-port", str(port)],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            health = None
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    self.fail(f"sidecar with empty PATH exited early with status {proc.returncode}")
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5) as response:
+                        if response.status == 200:
+                            health = json.loads(response.read().decode("utf-8"))
+                            break
+                except Exception:
+                    time.sleep(0.5)
+            self.assertIsNotNone(health, "sidecar with empty PATH never answered /api/health")
+            assert health is not None
+            self.assertEqual(health.get("version"), APP_VERSION)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=15)
+
+
+    def test_serve_names_the_conflict_when_port_is_taken(self):
+        import sys
+
+        tree = self.home / "installed-busy"
+        tree.mkdir()
+        proc = _run(self.dpkg_deb, "--extract", str(self._build()), str(tree))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        entry = tree / "usr" / "share" / "vortex" / "cli" / "vortex.py"
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        port = holder.getsockname()[1]
+        try:
+            env = _contained_env(self.home / "busy-home")
+            proc = _run(sys.executable, str(entry), "serve", "--bind-host", "127.0.0.1",
+                        "--bind-port", str(port), env=env, timeout=120)
+        finally:
+            holder.close()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn(f"cannot serve on 127.0.0.1:{port}", proc.stderr)
+        self.assertIn("already running", proc.stderr)
+        self.assertIn("--bind-port", proc.stderr)
+        self.assertIn("Address already in use", proc.stderr)
+
+
+    def test_utf8_mode_survives_hostile_locale(self):
+        import sys
+
+        tree = self.home / "installed-locale"
+        tree.mkdir()
+        proc = _run(self.dpkg_deb, "--extract", str(self._build()), str(tree))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        entry = tree / "usr" / "share" / "vortex" / "cli" / "vortex.py"
+        env = _contained_env(self.home / "locale-home")
+        env["LC_ALL"] = "C"
+        env["PYTHONCOERCECLOCALE"] = "0"
+        env["PYTHONUTF8"] = "0"
+        pinned = _run(sys.executable, "-X", "utf8", str(entry), "plan", "hello", env=env, timeout=120)
+        self.assertEqual(pinned.returncode, 0, pinned.stderr)
+        self.assertIn("…", pinned.stdout)
+        bare = _run(sys.executable, str(entry), "plan", "hello", env=env, timeout=120)
+        self.assertNotEqual(bare.returncode, 0, "without -X utf8 the hostile locale must still bite (proves the wrapper flag is load-bearing)")
+
+
+    def test_direct_module_serve_reports_conflict_cleanly(self):
+        import sys
+
+        tree = self.home / "installed-direct"
+        tree.mkdir()
+        proc = _run(self.dpkg_deb, "--extract", str(self._build()), str(tree))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        module = tree / "usr" / "share" / "vortex" / "backend" / "vortex_backend.py"
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        port = holder.getsockname()[1]
+        try:
+            env = _contained_env(self.home / "direct-home")
+            proc = _run(sys.executable, str(module), "--port", str(port), env=env, timeout=120)
+        finally:
+            holder.close()
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn(f"cannot serve on 127.0.0.1:{port}", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+
+class DpkgRootTests(_DebCase):
+    """Real dpkg install/upgrade/remove transactions in an unprivileged --root.
+
+    dpkg refuses to run without its root helpers present, so the tests provide
+    logging stubs for ldconfig/start-stop-daemon and then assert the stubs were
+    never invoked: this package ships no libraries, triggers, or maintainer
+    scripts, so real dpkg must never need them. Failure modes dpkg itself
+    would hit on a user PC (malformed archive, unmet dependency, conffile
+    prompts) fail here the same way.
+    """
+
+    def _dpkg_root(self) -> tuple:
+        dpkg = shutil.which("dpkg")
+        if dpkg is None:
+            self.skipTest("dpkg is required for install-transaction tests")
+        native = _run(dpkg, "--print-architecture")
+        self.assertEqual(native.returncode, 0, native.stderr)
+        root = self.home / f"fakeroot-{len(list(self.home.glob('fakeroot-*')))}"
+        (root / "var" / "lib" / "dpkg").mkdir(parents=True)
+        (root / "var" / "lib" / "dpkg" / "status").write_text(
+            "Package: python3\nStatus: install ok installed\nPriority: important\nSection: python\n"
+            f"Installed-Size: 100\nMaintainer: test\nArchitecture: {native.stdout.strip()}\nVersion: 3.99.0-1\nDescription: python3\n",
+            encoding="utf-8",
+        )
+        stub = self.home / "dpkgstub"
+        stub.mkdir(exist_ok=True)
+        log = self.home / "helper-calls.log"
+        if log.exists():
+            log.unlink()
+        for helper in ("ldconfig", "start-stop-daemon"):
+            (stub / helper).write_text(f"#!/bin/sh\necho {helper} >> {log}\nexit 0\n", encoding="utf-8")
+            (stub / helper).chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{stub}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        self._dpkg = dpkg
+        self._dpkg_log = log
+        return root, env
+
+    def _install(self, root: Path, env: dict, deb: Path) -> None:
+        proc = _run(self._dpkg, "--force-not-root", f"--root={root}", "--install", str(deb), env=env, timeout=180)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+
+    def _status_fields(self, root: Path, env: dict) -> dict:
+        proc = _run(self._dpkg, "--force-not-root", f"--root={root}", "--status", PACKAGE, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        fields: dict[str, str] = {}
+        for line in proc.stdout.splitlines():
+            if line and not line.startswith(" ") and ":" in line:
+                key, _, value = line.partition(":")
+                fields[key.strip()] = value.strip()
+        return fields
+
+    def test_real_dpkg_install_configures_cleanly(self):
+        import sys
+
+        root, env = self._dpkg_root()
+        deb = self._build()
+        self._install(root, env, deb)
+        status = self._status_fields(root, env)
+        self.assertEqual(status["Status"], "install ok installed")
+        self.assertEqual(status["Version"], APP_VERSION)
+        info = root / "var" / "lib" / "dpkg" / "info"
+        scripts = [path.name for path in info.glob(f"{PACKAGE}.*")
+                   if path.suffix in (".conffiles", ".postinst", ".preinst", ".prerm", ".postrm", ".triggers")]
+        self.assertEqual(scripts, [], "dpkg must record no scripts, triggers, or conffiles")
+        self.assertFalse(self._dpkg_log.exists(), "dpkg must never invoke root helpers for this package")
+        self.assertTrue((root / "usr" / "bin" / "vortex").is_file())
+        proc = _run(sys.executable, str(root / "usr" / "share" / "vortex" / "cli" / "vortex.py"),
+                    "--version", env=_contained_env(self.home / "rt-home"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), f"vortex {APP_VERSION}")
+
+    def test_real_dpkg_upgrade_repairs_damaged_files(self):
+        root, env = self._dpkg_root()
+        current = self._build()
+        build_env = dict(os.environ)
+        build_env["VORTEX_VERSION"] = "0.2.0"
+        old_out = self.home / "old-deb"
+        proc = _run("bash", str(BUILD_SH), str(old_out), env=build_env)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        old = next(old_out.glob(f"{PACKAGE}_0.2.0_all.deb"))
+        self._install(root, env, old)
+        self.assertEqual(self._status_fields(root, env)["Version"], "0.2.0")
+        victim = root / "usr" / "share" / "vortex" / "frontend" / "index.html"
+        victim.write_bytes(victim.read_bytes() + b"<!-- damaged -->\n")
+        self._install(root, env, current)
+        status = self._status_fields(root, env)
+        self.assertEqual(status["Version"], APP_VERSION)
+        self.assertEqual(status["Status"], "install ok installed")
+        pristine = self.home / "pristine"
+        pristine.mkdir()
+        proc = _run(shutil.which("dpkg-deb"), "--extract", str(current), str(pristine))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(victim.read_bytes(),
+                         (pristine / "usr" / "share" / "vortex" / "frontend" / "index.html").read_bytes(),
+                         "upgrade must restore the damaged file to packaged bytes")
+        self.assertFalse(self._dpkg_log.exists())
+
+    def test_real_dpkg_remove_leaves_no_packaged_files(self):
+        root, env = self._dpkg_root()
+        self._install(root, env, self._build())
+        proc = _run(self._dpkg, "--force-not-root", f"--root={root}", "--remove", PACKAGE, env=env, timeout=180)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertFalse((root / "usr" / "bin" / "vortex").exists())
+        self.assertFalse((root / "usr" / "share" / "vortex").exists())
+        gone = _run(self._dpkg, "--force-not-root", f"--root={root}", "--status", PACKAGE, env=env)
+        self.assertNotEqual(gone.returncode, 0, "no conffiles means nothing to remember after remove")
 
 
 class MakeRepoTests(_DebCase):
@@ -654,6 +871,36 @@ class InstallRepoTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("requires root", proc.stderr)
 
+    def test_registration_is_idempotent(self):
+        root = self.home / "staged"
+        first = _run("bash", str(INSTALL_REPO), "--repo-path", str(self.repo), "--trust-unsigned", "--root", str(root))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        sources = root / "etc" / "apt" / "sources.list.d" / "vortex.sources"
+        before = sources.read_bytes()
+        second = _run("bash", str(INSTALL_REPO), "--repo-path", str(self.repo), "--trust-unsigned", "--root", str(root))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(sources.read_bytes(), before)
+
+    def test_missing_apt_get_fails_before_any_write(self):
+        if os.geteuid() == 0:
+            self.skipTest("shadow technique only proves the unprivileged path")
+        if Path("/etc/apt/sources.list.d/vortex.sources").exists():
+            self.skipTest("a Vortex source is already registered on this machine")
+        driver = self.home / "shadow-driver.sh"
+        driver.write_text(
+            "#!/usr/bin/env bash\n"
+            'command() { if [[ "${1:-}" == "-v" && "${2:-}" == "apt-get" ]]; then return 1; fi; builtin command "$@"; }\n'
+            "id() { echo 0; }\n"
+            "export -f command id\n"
+            f'exec bash "{INSTALL_REPO}" "$@"\n',
+            encoding="utf-8",
+        )
+        driver.chmod(0o755)
+        proc = _run("bash", str(driver), "--repo-path", str(self.repo), "--trust-unsigned", timeout=120)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("apt-get not found", proc.stderr)
+        self.assertFalse(Path("/etc/apt/sources.list.d/vortex.sources").exists())
+
 
 class BackendRepoTests(unittest.TestCase):
     def setUp(self):
@@ -828,6 +1075,18 @@ class CliRepoTests(unittest.TestCase):
         again = _run("python3", str(ROOT / "cli" / "vortex.py"), "desktop", "repo", "--json", env=self.env, timeout=300)
         self.assertNotEqual(again.returncode, 0)
         self.assertIn("replace", again.stderr)
+
+
+    def test_user_launcher_is_valid_and_pinned_to_utf8(self):
+        prefix = self.home / "bin"
+        proc = _run("python3", str(ROOT / "cli" / "vortex.py"), "install", "--user", "--prefix", str(prefix),
+                    env=self.env, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        launcher = prefix / "vortex"
+        self.assertIn("-X utf8", launcher.read_text(encoding="utf-8"))
+        run = _run("sh", str(launcher), "--version", env=self.env, timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout.strip(), f"vortex {APP_VERSION}")
 
 
 if __name__ == "__main__":

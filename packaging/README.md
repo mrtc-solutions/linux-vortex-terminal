@@ -39,8 +39,13 @@ vortex desktop repo            # refuses to overwrite; add --replace to rebuild
 # shell equivalent:
 # packaging/deb/make-repo.sh --output ./vortex-apt --deb <file>.deb [--deb ...] [--sign KEYID]
 
-# 2. Publish: copy the repo directory to the target machine, or serve it
-#    over https from any static web server.
+# 2. Publish ATOMICALLY: stage the new tree next to the served path, then
+#    rename it over the old one. Never rsync/cp INTO the live directory —
+#    apt clients must never see a half-written Release/Packages pair.
+#    Example for a web root:
+#      rsync -a ./vortex-apt/ webhost:/srv/apt/vortex-new/
+#      ssh webhost 'mv /srv/apt/vortex /srv/apt/vortex-prev && mv /srv/apt/vortex-new /srv/apt/vortex'
+#    (Local-directory installs just copy the tree; there is no live reader.)
 
 # 3. On the target machine, register the repository (as root). Signed by
 #    default; --trust-unsigned is for a local repo you built yourself.
@@ -54,6 +59,15 @@ sudo packaging/deb/install-repo.sh --repo-url https://<host>/vortex --key <copie
 sudo apt install linux-vortex-terminal
 sudo apt upgrade linux-vortex-terminal              # newer version replaces the old one
 sudo apt install --reinstall linux-vortex-terminal  # repair a damaged install
+```
+
+## Uninstall
+
+```bash
+sudo apt remove linux-vortex-terminal
+# purge is identical (the package keeps no conffiles). User data lives
+# outside dpkg in ~/.local/share/vortex — remove it for a clean slate:
+rm -rf ~/.local/share/vortex
 ```
 
 The `.deb` also ships this tooling under

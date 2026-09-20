@@ -34,8 +34,19 @@
   before staging. `tests/test_apt_repo.py` grows to 38 tests: stub-gpg
   signing plumbing and failure atomicity, `--key-url` download over local
   HTTP, real `apt-get -s` upgrade (`[0.2.0] (0.3.0)`) and repair
-  (`[0.3.0] (0.3.0)`) simulations, and output/suite/component refusal cases
-  (suite is now 606 Python + 10 JS).
+  (`[0.3.0] (0.3.0)`) simulations, and output/suite/component refusal cases.
+- **Real-transaction round.** `tests/test_apt_repo.py` (48 tests) now drives
+  genuine `dpkg --install/--status/--remove` transactions in an unprivileged
+  `--root`: clean configure with no recorded scripts/conffiles, upgrade
+  from 0.2.0 restoring a deliberately damaged file to packaged bytes, and
+  removal leaving no packaged files. `vortex serve` rebinds past TIME_WAIT,
+  names the address plus the way out on port conflicts (both entry points),
+  and both launchers pin `python3 -X utf8` so C-locale machines cannot crash
+  non-ASCII output (proven with a hostile-locale run that fails without the
+  flag). The sidecar also boots and serves with an empty PATH, repo
+  registration is idempotent, `install-repo.sh` checks for apt-get before
+  writing, and the docs cover atomic publishing plus uninstall
+  (suite is now 616 Python + 10 JS).
 
 - **`npm start` survives low-memory hosts.** The launcher now rebuilds
   `dist/` only when it is missing or older than the sources (`--rebuild`

@@ -154,6 +154,12 @@ if [[ "$root" == "/" && "$(id -u)" -ne 0 ]]; then
   echo "writing /etc/apt requires root; re-run with sudo." >&2
   exit 2
 fi
+# Validate before mutating: if we intend to refresh the index, apt-get must
+# exist before the first file is written (the later check stays as a guard).
+if [[ "$root" == "/" && "$no_update" == "0" ]] && ! command -v apt-get >/dev/null 2>&1; then
+  echo "apt-get not found; cannot refresh the package index (use --no-update to register only)" >&2
+  exit 2
+fi
 
 mkdir -p "$root/etc/apt/sources.list.d" "$root/usr/share/keyrings"
 sources="$root/etc/apt/sources.list.d/vortex.sources"

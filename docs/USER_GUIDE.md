@@ -238,6 +238,8 @@ Local-only (recommended on your machine):
 ```bash
 vortex serve --bind-host 127.0.0.1 --bind-port 8765
 # open http://127.0.0.1:8765/
+# "cannot serve on …" means another copy is already running; stop it or
+# pick a free port with --bind-port.
 ```
 
 Preview bind (local loopback; `make preview` and `npm run preview` agree):
