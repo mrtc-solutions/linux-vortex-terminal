@@ -17,6 +17,23 @@ The exact all-surface procedure, evidence standard, and prerequisite boundary
 are maintained in
 [`docs/REAL_DEBUGGING_AND_ACCEPTANCE_PLAN.md`](REAL_DEBUGGING_AND_ACCEPTANCE_PLAN.md).
 
+## Recorded real-release result
+
+The [2026-09-20 pull-request run 35510507043](https://github.com/mrtc-solutions/linux-vortex-terminal/actions/runs/35510507043)
+for commit `b135b0c321b38cfe6f5ca2d1a599c197f18ce997` passed both jobs:
+
+- `browser` passed after provisioned Chromium ran the build, browser tests, and
+  production/dev live UI checks.
+- `release-acceptance` passed after provisioning Chromium, Electron, Xvfb,
+  Openbox, VNC tooling, the CPU GGUF engine, and a non-fixture GGUF model. Its
+  required **All eleven release gates, no skipped checks** step succeeded.
+
+`release_gates.py` returns success only when all eleven gates pass, so this
+successful job is the recorded `FINAL RELEASE CHECKS: 11/11 (100%)` result.
+The job also uploaded the remote-desktop acceptance report artifact. The
+sandbox may still lack those downloadable runtimes locally; use this
+provisioned workflow rather than calling an unavailable local runtime a pass.
+
 ## Local fast regression equivalent
 
 Run these from the repository root when the graphical/model dependencies are
