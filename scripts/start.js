@@ -23,6 +23,7 @@
  */
 
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -31,19 +32,21 @@ const { ensureElectron, ELECTRON_DIR, ROOT } = require('./ensure-electron');
 const APP_ENTRY = path.join(ROOT, 'desktop', 'main.js');
 const CLI_JS = path.join(ELECTRON_DIR, 'cli.js');
 const DIST_INDEX = path.join(ROOT, 'dist', 'index.html');
+const BUILD_META_NAME = '.vortex-build.json';
+const BUILD_META_VERSION = 1;
 
-// Files whose mtime invalidates the bundle, plus everything under src/.
+// Loose files whose mtime invalidates the bundle, plus everything under src/.
+// package.json / package-lock.json are NOT here: they are fingerprinted by
+// dependency content instead, so script-only edits never force a rebuild.
 const BUILD_INPUT_FILES = [
   'index.html',
   'vite.config.ts',
-  'package.json',
-  'package-lock.json',
   'tsconfig.json'
 ];
 const BUILD_INPUT_DIRS = ['src'];
 
 // Bounded tail kept from the build log for failure diagnosis.
-const BUILD_LOG_TAIL_BYTES = 200 * 1024;
+const BUILD_LOG_TAIL_CHARS = 200 * 1024;
 // Below this much free RAM the build is likely to be OOM-killed on a
 // desktop host, so warn up front instead of after the kill.
 const LOW_MEMORY_WARN_BYTES = 700 * 1024 * 1024;
@@ -62,39 +65,126 @@ function parseArgs(argv) {
   return options;
 }
 
-function walkMtimes(root, newest) {
+/** Dependency subset of package.json that can change the bundle. */
+function hashManifestDeps(pkgFile) {
   try {
-    // The directory's own mtime moves on add/delete/rename, so removed or
-    // added sources invalidate the bundle even when no surviving file changed.
-    const dirMtime = fs.statSync(root).mtimeMs;
-    if (dirMtime > newest) newest = dirMtime;
+    const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
+    const subset = {
+      dependencies: pkg.dependencies || {},
+      devDependencies: pkg.devDependencies || {},
+      peerDependencies: pkg.peerDependencies || {},
+      overrides: pkg.overrides || {}
+    };
+    return `sha1:${crypto.createHash('sha1').update(JSON.stringify(subset)).digest('hex')}`;
   } catch (_) {
-    return newest;
+    return null;
   }
-  let entries;
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch (_) {
-    return newest;
-  }
-  for (const entry of entries) {
-    // Dependency trees and caches never invalidate the bundle; descending
-    // into them would also make the check slow on big checkouts.
-    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
-    const full = path.join(root, entry.name);
-    let stat;
-    try {
-      stat = fs.statSync(full);
-    } catch (_) {
-      continue;
-    }
-    if (stat.mtimeMs > newest) newest = stat.mtimeMs;
-    if (entry.isDirectory()) newest = walkMtimes(full, newest);
-  }
-  return newest;
 }
 
-/** True when the bundle must be rebuilt (missing, stale, or unreadable). */
+function hashFileContents(file) {
+  try {
+    return `sha1:${crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex')}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+function collectInputFiles(rootDir, newest) {
+  const files = [];
+  const visit = dir => {
+    let entries;
+    try {
+      entries = fs.readdirSync(path.join(rootDir, dir), { withFileTypes: true });
+    } catch (_) {
+      return newest;
+    }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+      const rel = path.join(dir, entry.name);
+      let stat;
+      try {
+        stat = fs.statSync(path.join(rootDir, rel));
+      } catch (_) {
+        continue;
+      }
+      if (stat.mtimeMs > newest) newest = stat.mtimeMs;
+      if (entry.isDirectory()) {
+        newest = visit(rel);
+      } else {
+        files.push(rel);
+      }
+    }
+    return newest;
+  };
+  for (const dir of BUILD_INPUT_DIRS) newest = visit(dir);
+  for (const file of BUILD_INPUT_FILES) {
+    try {
+      const mtime = fs.statSync(path.join(rootDir, file)).mtimeMs;
+      if (mtime > newest) newest = mtime;
+      files.push(file);
+    } catch (_) {
+      // A missing loose input is simply absent from the set; the build
+      // itself reports it, and its absence still invalidates the manifest.
+    }
+  }
+  files.sort();
+  return { files, newest };
+}
+
+function collectInputs(rootDir) {
+  const { files, newest } = collectInputFiles(rootDir, -1);
+  return {
+    files,
+    newest,
+    manifests: {
+      package: hashManifestDeps(path.join(rootDir, 'package.json')),
+      lock: hashFileContents(path.join(rootDir, 'package-lock.json'))
+    }
+  };
+}
+
+function readBuildMeta(rootDir) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(rootDir, 'dist', BUILD_META_NAME), 'utf8'));
+    if (!meta || meta.version !== BUILD_META_VERSION || !Array.isArray(meta.files) ||
+        typeof meta.newest !== 'number' || !meta.manifests || typeof meta.manifests !== 'object') {
+      return null;
+    }
+    return meta;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Record what a successful managed build was built from. Best-effort: a
+ *  missing manifest only falls back to the legacy mtime rule. */
+function writeBuildMeta(rootDir = ROOT) {
+  try {
+    const current = collectInputs(rootDir);
+    fs.mkdirSync(path.join(rootDir, 'dist'), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, 'dist', BUILD_META_NAME),
+      JSON.stringify({ version: BUILD_META_VERSION, ...current })
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function sameStringArrays(a, b) {
+  return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** True when the bundle must be rebuilt (missing, stale, or unreadable).
+ *
+ * A build manifest (`dist/.vortex-build.json`) records the exact input file
+ * set, newest input mtime, and dependency fingerprints of the last managed
+ * build, so added/removed sources are detected by SET DIFFERENCE — not by
+ * directory mtimes, which some filesystems quantize too coarsely to trust.
+ * A bare `vite build` (no manifest update) is still honored: when dist/ is
+ * newer than every current input and the set matches, the build covered it.
+ */
 function needsRebuild(rootDir = ROOT) {
   let distMtime = -1;
   try {
@@ -102,19 +192,29 @@ function needsRebuild(rootDir = ROOT) {
   } catch (_) {
     return true;
   }
-  let newestInput = -1;
-  for (const file of BUILD_INPUT_FILES) {
-    try {
-      const mtime = fs.statSync(path.join(rootDir, file)).mtimeMs;
-      if (mtime > newestInput) newestInput = mtime;
-    } catch (_) {
-      // A missing input is not a reason to rebuild; the build itself reports it.
+  const current = collectInputs(rootDir);
+  const meta = readBuildMeta(rootDir);
+  if (!meta) {
+    // No manifest (bare `vite build`, older launcher, wiped meta): legacy
+    // mtime rule, including the manifest FILES' own mtimes.
+    let newest = current.newest;
+    for (const file of ['package.json', 'package-lock.json']) {
+      try {
+        const mtime = fs.statSync(path.join(rootDir, file)).mtimeMs;
+        if (mtime > newest) newest = mtime;
+      } catch (_) {
+        // Missing manifests cannot invalidate by mtime; the build reports them.
+      }
     }
+    return newest >= distMtime;
   }
-  for (const dir of BUILD_INPUT_DIRS) {
-    newestInput = walkMtimes(path.join(rootDir, dir), newestInput);
-  }
-  return newestInput >= distMtime;
+  const setsEqual = sameStringArrays(current.files, meta.files);
+  const contentChanged = current.newest > meta.newest;
+  const manifestsChanged = JSON.stringify(current.manifests) !== JSON.stringify(meta.manifests);
+  if (setsEqual && !contentChanged && !manifestsChanged) return false;
+  if (!setsEqual || manifestsChanged) return true;
+  // Only mtimes moved: a bare build newer than every input already covered it.
+  return distMtime < current.newest;
 }
 
 /**
@@ -186,17 +286,28 @@ function runBuild() {
       env: buildEnv()
     });
     let tail = '';
+    let settled = false;
     const tee = chunk => {
       const text = chunk.toString('utf8');
       process.stdout.write(chunk);
       tail += text;
-      if (tail.length > BUILD_LOG_TAIL_BYTES) tail = tail.slice(tail.length - BUILD_LOG_TAIL_BYTES);
+      if (tail.length > BUILD_LOG_TAIL_CHARS) tail = tail.slice(tail.length - BUILD_LOG_TAIL_CHARS);
     };
     child.stdout.on('data', tee);
     child.stderr.on('data', tee);
-    child.on('error', error => resolve({ ok: false, tail, signal: null, status: null, error }));
-    child.on('exit', (code, signal) => {
-      resolve({ ok: code === 0 && !signal, tail, signal: signal || null, status: code, error: null });
+    child.on('error', error => {
+      if (settled) return;
+      settled = true;
+      resolve({ ok: false, tail, signal: null, status: null, error });
+    });
+    // `close`, not `exit`: the final error line can still be in the pipes
+    // when the process exits, and the OOM diagnosis needs that tail.
+    child.on('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      const ok = code === 0 && !signal;
+      if (ok) writeBuildMeta();
+      resolve({ ok, tail, signal: signal || null, status: code, error: null });
     });
   });
 }
@@ -299,7 +410,7 @@ async function main() {
   return result.status === null ? 1 : result.status;
 }
 
-module.exports = { parseArgs, needsRebuild, heapCapMB, buildEnv, looksLikeOOM, runBuild };
+module.exports = { parseArgs, needsRebuild, heapCapMB, buildEnv, looksLikeOOM, runBuild, writeBuildMeta, collectInputs, readBuildMeta, ROOT };
 
 if (require.main === module) {
   main().then(

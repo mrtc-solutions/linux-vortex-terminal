@@ -55,7 +55,8 @@ def gate_lint() -> None:
     proc = run([sys.executable, "-m", "compileall", "-q", "backend", "cli"])
     files = ["frontend/app.js", "frontend/terminal.js", "frontend/windows.js", "frontend/workspace.js",
              "frontend/models.js", "frontend/aiops.js", "frontend/agent.js", "frontend/hud.js", "desktop/main.js", "desktop/preload.js",
-             "desktop/security.js", "desktop/window-controls.js"]
+             "desktop/security.js", "desktop/window-controls.js", "scripts/start.js", "scripts/ensure-dist.js",
+             "scripts/build.js", "scripts/ensure-electron.js", "tests/test_start.js"]
     bad = []
     for name in files:
         check = run(["node", "--check", name], timeout=60)
@@ -68,13 +69,13 @@ def gate_lint() -> None:
 def gate_js_suites() -> None:
     names = ["test_terminal", "test_windows", "test_frontend", "test_frontend_runtime",
              "test_frontend_auth", "test_agents_local_ai", "test_hud", "test_responsive",
-             "test_agent"]
+             "test_agent", "test_start"]
     failed = []
     for name in names:
-        proc = run(["node", f"tests/{name}.js"], timeout=120)
+        proc = run(["node", f"tests/{name}.js"], timeout=180)
         if proc.returncode != 0:
             failed.append(name)
-    gate("3/10 js suites (9 files)", not failed, f"failed={failed or 'none'}")
+    gate("3/10 js suites (10 files)", not failed, f"failed={failed or 'none'}")
 
 
 def gate_gguf_chain() -> None:

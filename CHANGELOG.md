@@ -8,11 +8,17 @@
   overriding an explicit `NODE_OPTIONS`, warns when free memory is too low
   to compile, and tells an OOM-`Killed` build apart from a real compile
   error — continuing into the app on the last good bundle after a kill
-  instead of stranding the operator. New `npm run start:no-build` alias and
-  `tests/test_start.js` pin the flag parsing, freshness check, heap cap,
-  and OOM diagnosis (suite is now 568 Python + 10 JS). `npm run preview`
-  shares the same incremental check and, unlike the old unconditional
-  pre-build, still serves (legacy UI fallback) when a rebuild cannot run.
+  instead of stranding the operator. Freshness is tracked by a build
+  manifest (`dist/.vortex-build.json`, written by the new `npm run build`
+  wrapper): added/removed sources invalidate by set difference rather than
+  by directory mtimes, which some filesystems quantize too coarsely to
+  trust, and `package.json` is fingerprinted by dependency content so
+  script-only edits never force a rebuild. New `npm run start:no-build`
+  alias and `tests/test_start.js` pin the flag parsing, freshness check,
+  heap cap, and OOM diagnosis (suite is now 568 Python + 10 JS).
+  `npm run preview` shares the same incremental check and, unlike the old
+  unconditional pre-build, still serves (legacy UI fallback) when a rebuild
+  cannot run.
 - **Leaner production build.** `vite.config.ts` disables sourcemaps and the
   gzip-size pass the singlefile bundle never needed, cutting build time and
   peak memory on small Kali VMs.
