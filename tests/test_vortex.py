@@ -96,6 +96,33 @@ class VortexCoreTests(unittest.TestCase):
                                "--digest", "wrong", "--approval-token", "wrong"])
             self.assertEqual(rc, vtx_backend.EXIT_CODES["policy_denied"])
 
+    def test_cli_exits_quietly_when_the_output_pipe_closes_early(self):
+        # `vortex tools | head` must not print "Exception ignored ...
+        # BrokenPipeError" and must keep a meaningful exit code. The reader is
+        # closed before the CLI writes anything, which fails the write with
+        # EPIPE both for small (flushed at exit) and large (flushed inline) output.
+        import sys
+        root = Path(__file__).resolve().parents[1]
+        env = {
+            **os.environ,
+            "VORTEX_CONFIG_DIR": str(Path(self.tmp.name) / "pipe-cfg"),
+            "VORTEX_DATA_DIR": str(Path(self.tmp.name) / "pipe-data"),
+            "VORTEX_RUNTIME_DIR": str(Path(self.tmp.name) / "pipe-runtime"),
+        }
+        for argv in (["tools", "--json"], ["doctor", "--json"], ["completion", "bash"]):
+            with self.subTest(argv=argv):
+                proc = subprocess.Popen([sys.executable, str(root / "cli" / "vortex.py"), *argv], cwd=str(root), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                proc.stdout.close()
+                _, stderr = proc.communicate(timeout=120)
+                self.assertNotIn(b"BrokenPipe", stderr)
+                self.assertNotIn(b"Traceback", stderr)
+                self.assertNotIn(b"Exception ignored", stderr)
+                self.assertIn(proc.returncode, (0, vtx_backend.EXIT_CODES["interrupted"]))
+        # Sanity: the same commands succeed with a connected reader.
+        proc = subprocess.run([sys.executable, str(root / "cli" / "vortex.py"), "tools", "--json"], cwd=str(root), env=env, capture_output=True, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["schema_version"], 1)
+
     def test_cli_remote_request_rejects_non_loopback_before_network(self):
         from cli import vortex as cli
         with patch.object(cli.urllib.request, "build_opener") as opener:

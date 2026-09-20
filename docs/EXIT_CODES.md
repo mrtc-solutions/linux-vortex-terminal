@@ -1,8 +1,12 @@
 # CLI and JSON contract
 
-Every JSON response contains `schema_version: 1`. JSON data is written to
+Every JSON response (`--json` / `--format json` on the CLI, every `/api/`
+body from the sidecar) contains `schema_version: 1`. JSON data is written to
 stdout; diagnostics and interactive prompts are written to stderr. No progress
-or ANSI output is mixed into JSON.
+or ANSI output is mixed into JSON. Without `--json` the CLI prints a
+human-oriented rendering (pretty JSON or text) that is not part of the
+contract. When the reader closes the pipe early (`vortex tools | head`) the
+CLI exits quietly with `interrupted` instead of a Python traceback.
 
 | Code | Name | Meaning |
 |---:|---|---|

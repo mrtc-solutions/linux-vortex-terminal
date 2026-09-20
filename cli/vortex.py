@@ -787,6 +787,7 @@ def main(argv=None):
         else: print(f"[{op['status'].upper()}] operation {op['id']}")
         return {'succeeded': EXIT_CODES['success'], 'cancelled': EXIT_CODES['interrupted'], 'interrupted': EXIT_CODES['interrupted'], 'timed_out': EXIT_CODES['timeout'], 'unavailable': EXIT_CODES['unavailable']}.get(op['status'], EXIT_CODES['command_failed'])
     except KeyboardInterrupt: return EXIT_CODES['interrupted']
+    except BrokenPipeError: return EXIT_CODES['interrupted']
     except PermissionError as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['confirmation_required']
     except Exception as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['failure']
     finally:
@@ -796,4 +797,26 @@ def main(argv=None):
             except (OSError, RuntimeError, sqlite3.Error):
                 pass
 
-if __name__ == '__main__': raise SystemExit(main())
+
+def exit_code_after_flush(code):
+    """Flush stdout and keep the exit code honest when the reader went away.
+
+    ``vortex tools | head`` closes the pipe early. Without this, Python reports
+    "Exception ignored ... BrokenPipeError" on stderr while flushing at exit
+    and the meaningful exit code is lost. Redirecting the closed descriptor to
+    /dev/null lets the interpreter shut down quietly; the operator sees the
+    interrupted code, never a traceback.
+    """
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except OSError:
+            pass
+        return EXIT_CODES['interrupted']
+    return code
+
+
+if __name__ == '__main__': raise SystemExit(exit_code_after_flush(main()))

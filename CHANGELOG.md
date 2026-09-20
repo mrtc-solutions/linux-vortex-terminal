@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **Fix: a concurrent `vortex` CLI marked the sidecar's live operation as
+  crashed — and could kill it.** The sidecar and every CLI process share one
+  SQLite store, but `ExecutionManager.__init__` reconciled *every*
+  `started`/`running` row to `unknown_after_crash` on the assumption that it
+  was the only execution authority. Reproduced on a real host: process A ran
+  an approved `sleep 25`; a `vortex run -- true` started 1.5 s later flipped
+  A's row to `unknown_after_crash` with a false `sidecar_restart` reason and
+  a permanent `operations_reconciled_after_restart` audit event; A's waiting
+  CLI then returned exit 6 ("the sidecar stopped before this operation
+  reached a terminal state") and its shutdown killed the still-running
+  command. Operations now carry the owning process identity (`authority`:
+  pid + kernel start time), and reconciliation closes only rows whose owner
+  is dead, a zombie, recycled, or unrecorded. Same scenario after the fix:
+  A stays `running`, finishes `succeeded`, exit 0, no false audit event.
+  Regression tests cover live owner (same process and another process),
+  owner death, pid reuse, malformed identities, and legacy rows.
+- **Fix: `vortex … | head` printed a `BrokenPipeError` traceback.** The CLI
+  now exits quietly with the `interrupted` code when the reader closes the
+  pipe early; regression test drives real subprocesses with a closed reader.
+- **Docs match the shipped code again.** README/STATUS still said remote
+  graphical sessions were "not implemented" and that "no session code
+  exists" although the VNC/RFB remote desktop (bridge, UI window, real-VNC
+  CI gate) shipped in 0.3.0; the feature table, the not-claimed list, the
+  test-suite counts (636 Python tests, 10 JS suites), the STATUS version
+  header, the crash-recovery ADR, and the `schema_version` contract wording
+  in `docs/EXIT_CODES.md` are corrected.
 - **Fix: published APT repositories were unreadable to apt.** `make-repo.sh`
   staged the tree with `mktemp -d` and published it as-is, so the repository
   root was mode 0700. apt runs its acquire methods as the unprivileged

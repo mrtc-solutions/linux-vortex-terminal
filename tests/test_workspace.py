@@ -985,6 +985,98 @@ class CrashRecoveryTests(unittest.TestCase):
         self.assertEqual(self.store.get_operation("op-orphan")["status"], "succeeded")
         self.assertEqual(self.workspace.reconcile_orphaned_tasks(), [])
 
+    # -- ownership: the store is shared by the sidecar and every CLI process --
+
+    def _audit_types(self):
+        with self.store.connect() as db:
+            return [row["event_type"] for row in db.execute("SELECT event_type FROM audit_events ORDER BY sequence")]
+
+    def _owned_orphan(self, authority):
+        self._orphan()
+        operation = self.store.get_operation("op-orphan")
+        operation["authority"] = authority
+        self.store.update_operation(operation)
+        return operation
+
+    def test_reconcile_leaves_operations_owned_by_a_live_process_running(self):
+        from backend.vortex_backend import process_identity
+        # Owned by this very process (a second ExecutionManager in the same CLI).
+        self._owned_orphan(process_identity())
+        self.assertEqual(self.store.reconcile_stale_operations(), 0)
+        self.assertEqual(self.store.get_operation("op-orphan")["status"], "running")
+        # Owned by another live process (the desktop sidecar while a CLI starts).
+        import subprocess
+        child = subprocess.Popen(["/bin/sleep", "30"])
+        try:
+            self._owned_orphan(process_identity(child.pid))
+            self.assertEqual(self.store.reconcile_stale_operations(), 0)
+            ExecutionManager(self.store)
+            self.assertEqual(self.store.get_operation("op-orphan")["status"], "running")
+            self.assertNotIn("operations_reconciled_after_restart", self._audit_types())
+        finally:
+            child.kill()
+            child.wait()
+        # Once that owner is really gone the very same row is closed honestly.
+        self.assertEqual(self.store.reconcile_stale_operations(), 1)
+        closed = self.store.get_operation("op-orphan")
+        self.assertEqual(closed["status"], "unknown_after_crash")
+        self.assertEqual(closed["termination_reason"], "sidecar_restart")
+        self.assertTrue(self.store.verify_audit()["valid"])
+
+    def test_reconcile_closes_operations_whose_owner_pid_was_recycled(self):
+        from backend.vortex_backend import process_identity
+        mine = process_identity()
+        self.assertIsInstance(mine["start_ticks"], int)
+        # Same pid, different kernel start time: the original owner is dead and
+        # an unrelated process now wears its pid.
+        self._owned_orphan({"pid": mine["pid"], "start_ticks": mine["start_ticks"] + 1})
+        self.assertEqual(self.store.reconcile_stale_operations(), 1)
+        self.assertEqual(self.store.get_operation("op-orphan")["status"], "unknown_after_crash")
+
+    def test_reconcile_treats_missing_or_malformed_authority_as_abandoned(self):
+        for authority in (None, "garbage", {}, {"pid": True}, {"pid": 0}, {"pid": -5}, {"pid": 2 ** 22 + 7}, {"pid": "12"}):
+            with self.subTest(authority=authority):
+                self._owned_orphan(authority)
+                self.assertEqual(self.store.reconcile_stale_operations(), 1)
+                self.assertEqual(self.store.get_operation("op-orphan")["status"], "unknown_after_crash")
+
+    def test_execution_manager_stamps_operations_with_its_own_identity(self):
+        from backend.vortex_backend import process_identity
+        cwd = Path(self.tmp.name)
+        spec = command_spec("/bin/sleep", ["/bin/sleep", "2"], cwd, timeout=30)
+        plan = {
+            "schema_version": 1, "id": "plan-owned", "created_at": "2026-08-25T00:00:00+00:00",
+            "expires_at": "2099-08-25T00:00:00+00:00", "request": "ownership test", "cwd": str(cwd),
+            "status": "planned", "kind": "test", "risk": "low", "authorization": "local",
+            "commands": [spec], "notes": [], "missing_tools": [], "scope": {"cwd": str(cwd)},
+            "workers": [], "approval_required": True, "approval_phrase": "APPROVE", "source": "deterministic",
+            "policy_version": "safe-v1", "knowledge_version": "builtin-v1", "approval_token": "owned-token",
+        }
+        plan["digest"] = plan_digest(plan)
+        self.store.save_plan(plan)
+        manager = ExecutionManager(self.store)
+        op = manager.start(plan, True, "owned-token", allow_root=ALLOW_ROOT)
+        try:
+            stored = self.store.get_operation(op["id"])
+            self.assertEqual(stored["authority"], {"pid": os.getpid(), "start_ticks": process_identity()["start_ticks"]})
+            # The exact defect: a second authority (another CLI invocation or a
+            # sidecar start) sharing the store must not declare this live,
+            # approved operation crashed, nor kill it by proxy.
+            time.sleep(0.2)
+            other = ExecutionManager(self.store)
+            self.assertIn(self.store.get_operation(op["id"])["status"], ("started", "running"))
+            other.shutdown()
+            for _ in range(300):
+                result = self.store.get_operation(op["id"])
+                if result["status"] not in ("started", "running"):
+                    break
+                time.sleep(0.02)
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(result["commands"][0]["exit_code"], 0)
+            self.assertNotIn("operations_reconciled_after_restart", self._audit_types())
+        finally:
+            manager.shutdown()
+
 
 class ReplanBudgetTests(unittest.TestCase):
     """Automatic follow-ups must be bounded across executor thread boundaries."""
