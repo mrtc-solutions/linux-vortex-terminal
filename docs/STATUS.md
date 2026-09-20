@@ -7,6 +7,29 @@ controlled tests.
 **Automated validation is passing:** the Python unittest suite plus JS terminal,
 window-control, frontend smoke, frontend auth, and frontend runtime smoke suites.
 
+## Current validation — 2026-09-20
+
+The current low-memory launcher and lifecycle pass was validated on a target-like
+2-core / 3.8-GiB / no-swap Linux sandbox:
+
+- `npm test` → **PASS**: 644 Python tests plus all 10 JavaScript suites.
+- `python3 scripts/final_gates.py` → **PASS**: `FINAL: 10/10 (100%)`.
+- A warning-instrumented full Python run → **PASS**: 644 tests, zero
+  `ResourceWarning`s, and zero tracked open file/Popen handles at shutdown.
+- The production React bundle repeatedly builds with the automatic **512 MiB**
+  V8 cap and with the **384 MiB** OOM-retry cap. A controlled
+  `transforming … Killed` first attempt retries and completes; `npm start`
+  also completed through the real desktop-launch contract using the available
+  test runtime.
+- Production preview served the React shell and representative health,
+  capability, dashboard, model, and settings endpoints successfully.
+
+Actual Electron GUI rendering and Playwright browser execution remain **not
+runnable in this sandbox** because their downloadable browser binaries fail
+before TLS setup (`ECONNRESET` / connection reset). This is an environment
+limitation, not presented as a passed GUI test; all runnable release gates are
+green.
+
 ## 0.3.x — full-surface review, owner-aware crash recovery
 
 - The desktop sidecar and every `vortex` CLI process share one SQLite store.
@@ -166,7 +189,7 @@ each action uses an existing endpoint — no duplicate data or invented state.
 "Explain"/"Analyze" remain the reviewed local planner and analysis surfaces
 already provided by the pipeline.
 
-## Latest validation summary
+## Historical validation summary
 
 - `python3 -m unittest discover -s tests` → PASS (`Ran 431 tests ... OK`)
 - `npm test` → PASS (431 Python tests + terminal emulator/window control/frontend

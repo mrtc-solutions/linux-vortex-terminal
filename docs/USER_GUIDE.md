@@ -278,7 +278,9 @@ In the React shell:
 5. Mutation plans pause a second time at a **preflight review** — CONFIRM
    MUTATION is a separate, explicit click; nothing auto-continues past it.
 6. For free local AI, open **Models**: install llamafile (confirmed download),
-   drop a `.gguf` file into `models/`, then start the loopback server.
+   drop a `.gguf` file into `models/`, then start the loopback server. Use
+   **STOP SERVER** to release its RAM immediately; a graceful owning-sidecar
+   shutdown also terminates and reaps the managed server it started.
 7. If the sidecar was started with `--token`, open the shell once with
    `#vortex-token=PASTE` appended to the URL (token printed at startup);
    the shell exchanges it for a session cookie and strips it from the address bar.
@@ -327,22 +329,30 @@ entirely and test the identical workbench in a browser with
 `npm run preview` (serves on `http://127.0.0.1:4173`). `npm run
 start:electron` bypasses the wrapper and invokes Electron directly.
 
-### Build says `Killed` on a small VM (out of memory, not a bug)
+### Build says `Killed` on a small VM (out of memory, not a code error)
 
-`transforming (...) src/main.tsx Killed` means the Linux OOM-killer shot the
-compiler: the box had less than ~0.5 GB free while Vite ran. The code is
-fine — the starter also sizes the build heap from free RAM and says so
-explicitly. Fix one of:
+`transforming (...) src/main.tsx Killed` means the Linux OOM-killer terminated
+the compiler. It is not a TypeScript/JSX diagnostic. To protect a 2-core,
+4-GB, swapless desktop, the launcher deliberately gives Vite a fixed **512 MiB
+V8 old-space limit** rather than scaling its heap up with all free RAM. It reads
+Linux `MemAvailable` and a cgroup limit when one exists, refuses a new build
+below **768 MiB available**, and automatically retries one OOM-killed `npm
+start` build at **384 MiB** unless you supplied your own `NODE_OPTIONS` heap
+setting. The current production bundle is regression-tested at both caps.
+
+Fix or recover in this order:
 
 1. Free RAM: close browser tabs and heavy apps, then check `free -h`.
 2. Reuse the last good bundle instead of rebuilding: `npm run start:no-build`
-   (an OOM-kill with an existing `dist/` now continues into the app
-   automatically and says so).
+   (when memory is too low and `dist/` exists, plain `npm start` also continues
+   with that bundle and says so).
 3. Skip the desktop shell: `npm run preview` rebuilds only when `dist/` is
-   stale and serves the legacy UI instead of failing when a build cannot run.
-4. Give a 2 GB VM some headroom: add a 2 GB swapfile or raise its memory.
-5. Build once with a small heap, then start without rebuilding:
-   `NODE_OPTIONS=--max-old-space-size=768 npm run build && npm run start:no-build`.
+   stale **and at least 768 MiB is available**, then serves the existing bundle
+   when one is present (otherwise the legacy UI) instead of failing when a
+   build cannot run.
+4. Give a low-RAM VM headroom: add a 2 GB swapfile or raise its memory.
+5. Force the smallest tested heap for a one-time build, then start without
+   rebuilding: `NODE_OPTIONS=--max-old-space-size=384 npm run build && npm run start:no-build`.
 
 A genuine compile error (TypeScript/JSX mistake) still cancels the launch and
 points at the error in the build output above — that path is unchanged.

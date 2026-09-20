@@ -26,6 +26,7 @@ Safety invariants (mirroring ``models.manager``):
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
@@ -79,6 +80,13 @@ _INSTALL: dict[str, Any] = {
     "thread": None,
 }
 _TEST: dict[str, Any] = {"binary": None, "chat": None}
+
+# A pid file lets a later CLI/sidecar process discover a server it did not
+# launch. In the process that *did* launch it, retain the Popen object as well:
+# otherwise Python can garbage-collect it while the child is still running,
+# emit a ResourceWarning, and leave a zombie unreaped after server_stop(). A
+# graceful owning-sidecar shutdown also stops/reaps every retained child.
+_SERVER_PROCESSES: dict[int, Any] = {}
 
 
 def set_test_binary(path: str | None) -> None:
@@ -692,6 +700,58 @@ def _process_alive(pid: Any) -> bool:
     return True
 
 
+def _tracked_process(pid: Any) -> Any | None:
+    try:
+        number = int(pid)
+    except (TypeError, ValueError):
+        return None
+    with _LOCK:
+        return _SERVER_PROCESSES.get(number)
+
+
+def _forget_process(pid: Any, expected: Any | None = None) -> None:
+    try:
+        number = int(pid)
+    except (TypeError, ValueError):
+        return
+    with _LOCK:
+        current = _SERVER_PROCESSES.get(number)
+        if current is not None and (expected is None or current is expected):
+            _SERVER_PROCESSES.pop(number, None)
+
+
+def _stop_tracked_process(proc: Any, *, timeout: float = 10.0) -> bool:
+    """Terminate and reap a child launched by this process, exactly once."""
+    try:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+        try:
+            proc.wait(timeout=max(0.1, float(timeout)))
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            proc.wait(timeout=2.0)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        # `poll()` reaps an exited child. Do not drop a still-running process:
+        # retaining it remains necessary for a later stop/reap attempt.
+        try:
+            if proc.poll() is not None:
+                _forget_process(proc.pid, proc)
+        except (AttributeError, OSError, subprocess.SubprocessError):
+            pass
+    try:
+        return proc.returncode is not None
+    except AttributeError:
+        return False
+
+
 def server_state(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """Current managed-server state: running only when the PID lives AND answers."""
     settings = _effective_settings(settings)
@@ -700,7 +760,14 @@ def server_state(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     endpoint = str(record.get("endpoint") or "")
     model = str(record.get("model") or "")
     if pid and endpoint:
-        if _process_alive(pid):
+        tracked = _tracked_process(pid)
+        try:
+            tracked_exited = tracked is not None and tracked.poll() is not None
+        except (AttributeError, OSError, subprocess.SubprocessError):
+            tracked_exited = False
+        if tracked_exited:
+            _forget_process(pid, tracked)
+        if not tracked_exited and _process_alive(pid):
             health = probe(endpoint)
             if health.get("ok"):
                 return {"state": "running", "pid": int(pid), "endpoint": endpoint,
@@ -781,8 +848,13 @@ def server_start(model: str | None = None, settings: dict[str, Any] | None = Non
                 )
             except OSError as exc:
                 raise PolicyError(f"llamafile server failed to start: {exc.strerror or exc}")
-            _write_json(_pid_path(), {"pid": proc.pid, "endpoint": endpoint, "model": resolved["name"],
-                                      "kind": resolved["kind"], "started_at": now_iso()})
+            _SERVER_PROCESSES[proc.pid] = proc
+            try:
+                _write_json(_pid_path(), {"pid": proc.pid, "endpoint": endpoint, "model": resolved["name"],
+                                          "kind": resolved["kind"], "started_at": now_iso()})
+            except OSError as exc:
+                _stop_tracked_process(proc)
+                raise PolicyError(f"could not record llamafile server: {exc.strerror or exc}") from exc
             fresh = {"proc": proc, "endpoint": endpoint, "resolved": resolved}
     window = max(5.0, min(float(timeout or _START_TIMEOUT_SECONDS), 600.0))
     if wait_for is not None:
@@ -809,6 +881,7 @@ def server_start(model: str | None = None, settings: dict[str, Any] | None = Non
     last_reason = "server is loading the model"
     while time.monotonic() < deadline:
         if proc.poll() is not None:
+            _forget_process(proc.pid, proc)
             try:
                 _pid_path().unlink()
             except OSError:
@@ -820,6 +893,17 @@ def server_start(model: str | None = None, settings: dict[str, Any] | None = Non
                     "pid": proc.pid, "served_models": health.get("models") or []}
         last_reason = str(health.get("reason") or last_reason)
         time.sleep(1.0)
+    if not _stop_tracked_process(proc):
+        # Keep both the retained Popen and PID record intact so a later STOP
+        # request can retry instead of orphaning an unresponsive child.
+        raise PolicyError(
+            f"llamafile server did not answer within the startup window: {last_reason}; "
+            f"managed PID {proc.pid} could not be reaped"
+        )
+    try:
+        _pid_path().unlink()
+    except OSError:
+        pass
     raise PolicyError(f"llamafile server did not answer within the startup window: {last_reason}")
 
 
@@ -860,33 +944,86 @@ def server_stop() -> dict[str, Any]:
         except OSError:
             pass
         return {"state": "stopped", "reason": "stale server record cleared"}
-    if _process_alive(number) and not _pid_is_managed(number, record):
+
+    tracked = _tracked_process(number)
+    try:
+        tracked_exited = tracked is not None and tracked.poll() is not None
+    except (AttributeError, OSError, subprocess.SubprocessError):
+        tracked_exited = False
+    if tracked_exited:
+        _forget_process(number, tracked)
+        try:
+            _pid_path().unlink()
+        except OSError:
+            pass
+        return {"state": "stopped", "pid": number}
+    # A retained Popen is a stronger identity proof than a PID record: it is
+    # the child this interpreter spawned, and wait()/terminate() will reap it.
+    # A record discovered after a restart still needs the defensive cmdline
+    # check before it is signalled.
+    if not tracked_exited and _process_alive(number) and tracked is None and not _pid_is_managed(number, record):
         try:
             _pid_path().unlink()
         except OSError:
             pass
         return {"state": "stopped", "reason": "stale server record cleared; PID is not the managed server"}
-    try:
-        os.kill(number, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    except OSError as exc:
-        return {"state": "unknown", "reason": f"could not signal server PID {number}: {exc.strerror or exc}"}
-    deadline = time.monotonic() + 10.0
-    while time.monotonic() < deadline:
-        if not _process_alive(number):
-            break
-        time.sleep(0.2)
+
+    if tracked is not None and not tracked_exited:
+        if not _stop_tracked_process(tracked):
+            return {"state": "unknown", "reason": f"could not stop managed server PID {number}"}
     else:
         try:
-            os.kill(number, signal.SIGKILL)
-        except OSError:
+            os.kill(number, signal.SIGTERM)
+        except ProcessLookupError:
             pass
+        except OSError as exc:
+            return {"state": "unknown", "reason": f"could not signal server PID {number}: {exc.strerror or exc}"}
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if not _process_alive(number):
+                break
+            time.sleep(0.2)
+        else:
+            try:
+                os.kill(number, signal.SIGKILL)
+            except OSError:
+                pass
+    _forget_process(number, tracked)
     try:
         _pid_path().unlink()
     except OSError:
         pass
     return {"state": "stopped", "pid": number}
+
+
+def _shutdown_owned_servers() -> None:
+    """Best-effort interpreter-exit cleanup for children this process owns.
+
+    A clean sidecar exit must not leave a multi-gigabyte model server running
+    nor let Popen emit a shutdown ResourceWarning. A server from an earlier
+    crashed process is intentionally *not* in this registry, so its PID record
+    remains available for the normal defensive recovery path.
+    """
+    with _LOCK:
+        tracked = list(_SERVER_PROCESSES.items())
+    stopped: set[int] = set()
+    for pid, proc in tracked:
+        if _stop_tracked_process(proc, timeout=3.0):
+            stopped.add(pid)
+    if not stopped:
+        return
+    try:
+        record_pid = int(_pid_record().get("pid"))
+    except (TypeError, ValueError):
+        return
+    if record_pid in stopped:
+        try:
+            _pid_path().unlink()
+        except OSError:
+            pass
+
+
+atexit.register(_shutdown_owned_servers)
 
 
 # --------------------------------------------------------------------------

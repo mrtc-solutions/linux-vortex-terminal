@@ -122,23 +122,33 @@
   0.3.0→0.4.0 upgrade simulation proving newest-pick is not version-specific
   (suite is now 627 Python + 10 JS).
 
-- **`npm start` survives low-memory hosts.** The launcher now rebuilds
-  `dist/` only when it is missing or older than the sources (`--rebuild`
-  forces, `--no-build` skips), sizes the build heap from free RAM without
-  overriding an explicit `NODE_OPTIONS`, warns when free memory is too low
-  to compile, and tells an OOM-`Killed` build apart from a real compile
-  error — continuing into the app on the last good bundle after a kill
-  instead of stranding the operator. Freshness is tracked by a build
-  manifest (`dist/.vortex-build.json`, written by the new `npm run build`
-  wrapper): added/removed sources invalidate by set difference rather than
-  by directory mtimes, which some filesystems quantize too coarsely to
-  trust, and `package.json` is fingerprinted by dependency content so
-  script-only edits never force a rebuild. New `npm run start:no-build`
-  alias and `tests/test_start.js` pin the flag parsing, freshness check,
-  heap cap, and OOM diagnosis (suite is now 568 Python + 10 JS).
-  `npm run preview` shares the same incremental check and, unlike the old
-  unconditional pre-build, still serves (legacy UI fallback) when a rebuild
-  cannot run.
+- **Fix: production builds now stay safe on a 2-core/4-GB, swapless Linux
+  host.** The prior launcher sized V8 from free RAM and could permit a ~3-GB
+  heap on a 4-GB desktop, leaving too little memory for the kernel, browser,
+  and Electron; Vite could then be OOM-killed at `src/main.tsx`. Builds now
+  use a fixed 512-MiB V8 old-space cap (while preserving an explicit operator
+  `NODE_OPTIONS` setting), calculate Linux `MemAvailable` plus the *actual*
+  cgroup hierarchy's remaining memory budget, decline a new build below 768 MiB available, and
+  automatically retry one OOM-killed `npm start` build at 384 MiB. The real
+  bundle is exercised at both caps, including a simulated `Killed` first
+  attempt that must recover. The launcher still rebuilds `dist/` only when it
+  is stale (`--rebuild` forces, `--no-build` skips), continues with a last
+  good bundle when safe to do so, and records input freshness in
+  `dist/.vortex-build.json` by source set and dependency fingerprints.
+  `npm run preview` shares the OOM retry and still falls back honestly when a
+  build cannot run.
+- **Fix: managed llamafile servers are retained and reaped.** `server_start`
+  previously dropped its `subprocess.Popen` object after persisting only a PID,
+  which emitted a `ResourceWarning` while the local model server was healthy
+  and could leave a zombie after stop. The launching sidecar now retains its
+  child, uses that stronger identity to terminate and `wait()` for it, removes
+  stale tracked children from status, terminates/reaps a server that never
+  becomes ready, and cleans up owned model-server children on graceful
+  sidecar/interpreter shutdown. The lifecycle tests assert retention while
+  running, release after stop, timeout cleanup, and clean interpreter exit.
+- **Test-harness cleanup.** The real remote-desktop sidecar harness now closes
+  its parent-owned stdout pipe on normal and failed readiness shutdown, leaving
+  the full warning-instrumented suite with no dangling descriptors.
 - **Leaner production build.** `vite.config.ts` disables sourcemaps and the
   gzip-size pass the singlefile bundle never needed, cutting build time and
   peak memory on small Kali VMs.
