@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Fix: published APT repositories were unreadable to apt.** `make-repo.sh`
+  staged the tree with `mktemp -d` and published it as-is, so the repository
+  root was mode 0700. apt runs its acquire methods as the unprivileged
+  `_apt` user, so on a real Debian 12 host every `sudo apt update` after
+  `install-repo.sh` failed with `Permission denied` and `sudo apt install
+  linux-vortex-terminal` (and every later upgrade) could not resolve the
+  package — the unprivileged test suite never sandboxes to `_apt`, which is
+  why it stayed green. The repository is now published 0755/0644 (installer
+  0755) with every mode set explicitly; `build_repo()` verification enforces
+  the invariant; `install-repo.sh` checks, before writing anything, that
+  `_apt` can traverse the repository and every parent directory (Debian
+  12+/Ubuntu private home directories are the common trap) and names the
+  blocking path with a copy-to-`/srv/vortex-apt` fix; and it refreshes the
+  Vortex source on its own before the full `apt update`, restoring the
+  previous registration state when apt cannot read the new repository so a
+  broken source never lingers. Proven end to end on a real Debian 12 host
+  with `sudo`: register → `apt install` → publish a newer version →
+  `apt upgrade` → damage files → `apt install --reinstall` → `apt remove`.
+  Seven new regression tests (`tests/test_apt_repo.py`) fail against the
+  previous scripts and pass now; docs (`README.md`, `packaging/README.md`,
+  `docs/USER_GUIDE.md`, `NEXT-STEPS.txt`) show the world-readable copy step.
 - **Install, upgrade, and repair by APT package name.** New
   `packaging/deb/make-repo.sh` builds a deterministic APT repository from
   one or more `.deb` files (pool, per-architecture indexes, hashed Release,

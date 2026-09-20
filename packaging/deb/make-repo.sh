@@ -96,6 +96,11 @@ fi
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
+# mktemp creates a private 0700 directory, but this tree IS the published
+# repository: apt reads a local repository as the unprivileged _apt user and
+# a web server reads it as its own account. A 0700 root made every
+# `sudo apt update` fail with "Permission denied" after registration.
+chmod 0755 "$stage"
 
 pool="$stage/pool/$component"
 mkdir -p "$pool"
@@ -258,8 +263,22 @@ Upgrade / repair later with:
 
 Restart any running 'vortex serve' after an upgrade so it never mixes
 old code with newly installed modules.
+
+apt reads a local repository as the unprivileged '_apt' user, so this
+directory and every parent must stay world-readable (published as
+0755/0644). Copy it outside private home directories before registering,
+e.g. sudo cp -r . /srv/vortex-apt && cd /srv/vortex-apt (Debian 12+ and
+Ubuntu create 0700/0750 home directories that _apt cannot enter).
 STEPS
 chmod 0644 "$stage/NEXT-STEPS.txt"
+
+# Publish world-readable modes explicitly rather than trusting umask for
+# files created by cp, gpg, or redirections: every directory o+rx, every
+# file o+r, the installer executable. install-repo.sh and build_repo()
+# verify the same invariant before registering or publishing.
+find "$stage" -type d -exec chmod 0755 {} +
+find "$stage" -type f -exec chmod 0644 {} +
+chmod 0755 "$stage/install-repo.sh"
 
 mkdir -p "$(dirname "$out")"
 mv "$stage" "$out"

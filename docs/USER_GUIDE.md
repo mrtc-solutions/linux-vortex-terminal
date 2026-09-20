@@ -121,9 +121,12 @@ cleanly replaces every installed file on upgrade or
 vortex desktop deb
 vortex desktop repo
 # 2. Copy the repo directory to the target machine, or serve it over https.
-# 3. On the target machine, from inside the copied directory (it ships its
+# 3. On the target machine, put the copy somewhere world-readable (apt reads
+#    it as the unprivileged _apt user; home directories are private on
+#    Debian 12+/Ubuntu) and register it from inside that copy (it ships its
 #    own installer plus NEXT-STEPS.txt), as root:
-cd /path/to/copied/repo
+sudo cp -r /path/to/copied/repo /srv/vortex-apt
+cd /srv/vortex-apt
 sudo ./install-repo.sh --repo-path . --trust-unsigned   # local testing only
 # (signed repos served over https: ./install-repo.sh --repo-url <url>
 # --key ./vortex-archive-key.asc)

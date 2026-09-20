@@ -106,6 +106,13 @@ package files without starting a daemon or creating user data. See
 [`packaging/README.md`](packaging/README.md) for local/offline repository use
 and release publication details.
 
+For a local (unsigned, `--trust-unsigned`) copy, place the repository
+somewhere world-readable such as `/srv/vortex-apt`, not under a home
+directory: apt reads local repositories as the unprivileged `_apt` user, and
+Debian 12+/Ubuntu home directories are private (0700/0750). The repository is
+published 0755/0644 and `install-repo.sh` refuses, before writing anything, a
+path that `_apt` could not read.
+
 Install semantics are explicit:
 - `vortex install --user` and `scripts/install-user.sh` write only a user-local launcher.
 - The **Dependencies** text entry accepts one exact Debian package, `ollama`, or a validated `model:tag`. Debian packages become persisted, Guardian-gated apt plans; **OPEN INSTALL TERMINAL** runs the exact saved plan in a managed PTY.
