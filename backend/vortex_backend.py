@@ -24,6 +24,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import sqlite3
 import stat
 import struct
@@ -5799,6 +5800,25 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
             self._request_slots.release()
 
 
+def sidecar_server(host: str, port: int, handler: type[VortexHandler]) -> BoundedThreadingHTTPServer:
+    """Create a sidecar server using the socket family required by ``host``.
+
+    ``ThreadingHTTPServer`` defaults to AF_INET even though the bind validator
+    accepts the IPv6 loopback address.  Select AF_INET6 explicitly so
+    ``vortex serve --bind-host ::1`` is a real supported loopback deployment
+    rather than an address-family error after validation succeeds.
+    """
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        address = None
+    if address is not None and address.version == 6:
+        class IPv6BoundedThreadingHTTPServer(BoundedThreadingHTTPServer):
+            address_family = socket.AF_INET6
+        return IPv6BoundedThreadingHTTPServer((host, port), handler)
+    return BoundedThreadingHTTPServer((host, port), handler)
+
+
 def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None, frame_hosts: list[str] | None = None) -> None:
     validate_bind_security(host, token)
     store = Store()
@@ -5828,7 +5848,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None, f
         except (OSError, sqlite3.Error):
             pass
         try:
-            server = BoundedThreadingHTTPServer((host, port), handler)
+            server = sidecar_server(host, port, handler)
         except OSError as exc:
             # Name the address and the way out: a bare "[Errno 98]" strands
             # operators who double-clicked the menu entry while already

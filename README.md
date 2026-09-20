@@ -64,6 +64,48 @@ Step-by-step install and use: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
 Data lives in `$XDG_DATA_HOME/vortex` (or `~/.local/share/vortex`), mode 0700.
 
+## Install by APT package name
+
+`sudo apt install linux-vortex-terminal` works only after an administrator has
+registered a Vortex APT repository. This project does **not** claim to operate
+a public package mirror, so a plain install on a newly provisioned machine
+cannot resolve the name until you either publish a repository or receive one
+from your release operator. The repository tooling is included so that this
+flow is reproducible rather than relying on an unverified `.deb` download.
+
+On the release/build machine, build the production UI and package, then create
+and publish the repository tree atomically. Use `--sign` for a network-served
+repository; `--trust-unsigned` below is deliberately limited to a local copy
+you control.
+
+```bash
+npm ci
+npm run build
+./vortex desktop deb
+./vortex desktop repo --output ./vortex-apt --sign <GPG-KEY-ID>
+# Publish ./vortex-apt atomically at an HTTPS URL, including
+# vortex-archive-key.asc and install-repo.sh.
+```
+
+On the target machine, register that published signed repository once, then
+install, update, or repair by package name:
+
+```bash
+curl -fLO https://<your-release-host>/vortex/install-repo.sh
+curl -fLO https://<your-release-host>/vortex/vortex-archive-key.asc
+sudo bash ./install-repo.sh --repo-url https://<your-release-host>/vortex \
+  --key ./vortex-archive-key.asc
+sudo apt install linux-vortex-terminal
+sudo apt upgrade linux-vortex-terminal
+sudo apt install --reinstall linux-vortex-terminal
+```
+
+The package intentionally ships no maintainer scripts or conffiles. Therefore
+an upgrade replaces installed package files, and `--reinstall` restores damaged
+package files without starting a daemon or creating user data. See
+[`packaging/README.md`](packaging/README.md) for local/offline repository use
+and release publication details.
+
 Install semantics are explicit:
 - `vortex install --user` and `scripts/install-user.sh` write only a user-local launcher.
 - The **Dependencies** text entry accepts one exact Debian package, `ollama`, or a validated `model:tag`. Debian packages become persisted, Guardian-gated apt plans; **OPEN INSTALL TERMINAL** runs the exact saved plan in a managed PTY.
