@@ -109,11 +109,13 @@ sandbox:
 This sandbox currently has no Chromium/Chrome/Firefox, Electron binary, Xvfb,
 window manager, VNC target stack, Playwright browser cache, or real GGUF model
 engine/model. Browser/Electron binary downloads reset before TLS setup, and no
-local APT candidate/cache is available. Native acceptance detects that state
-without importing Electron's self-downloading package loader, so it fails
-immediately with remediation rather than pretending to test a GUI. Therefore
-domains **4–7 and the full 10th release domain cannot honestly be marked passed
-here**.
+local APT candidate/cache is available. Although passwordless `sudo` is
+available for this sandbox, a direct APT metadata refresh also cannot connect
+to Debian mirrors, so the graphical stack cannot be self-provisioned here.
+Native acceptance detects that state without importing Electron's
+self-downloading package loader, so it fails immediately with remediation
+rather than pretending to test a GUI. Therefore domains **4–7 and the full
+10th release domain cannot honestly be marked passed here**.
 
 A properly provisioned runner must use the concrete setup in
 `.github/workflows/react-ui.yml`:

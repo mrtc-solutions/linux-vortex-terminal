@@ -36,7 +36,9 @@ The current low-memory launcher and lifecycle pass was validated on a target-lik
 
 Actual Electron GUI rendering and Playwright browser execution remain **not
 runnable in this sandbox** because their downloadable browser binaries fail
-before TLS setup (`ECONNRESET` / connection reset). This is an environment
+before TLS setup (`ECONNRESET` / connection reset). A noninteractive `sudo`
+preflight is available, but the sandbox also cannot connect to Debian APT
+mirrors to install Chromium/Xvfb/VNC prerequisites. This is an environment
 limitation, not presented as a passed GUI test; all runnable release gates are
 green.
 
