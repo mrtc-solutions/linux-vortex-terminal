@@ -23,6 +23,11 @@ The current low-memory launcher and lifecycle pass was validated on a target-lik
   test runtime.
 - Production preview served the React shell and representative health,
   capability, dashboard, model, and settings endpoints successfully.
+- A fresh Debian package was built and SHA-256-verified. Its extracted payload
+  served the production shell plus health/capability/dashboard endpoints, and
+  its CLI payload passed `doctor`, `health`, and database-integrity checks.
+  The full suite also performs real unprivileged `dpkg --root` install,
+  upgrade, and removal transactions.
 
 Actual Electron GUI rendering and Playwright browser execution remain **not
 runnable in this sandbox** because their downloadable browser binaries fail
