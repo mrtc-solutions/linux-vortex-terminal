@@ -161,8 +161,85 @@ if [[ "$root" == "/" && "$no_update" == "0" ]] && ! command -v apt-get >/dev/nul
   exit 2
 fi
 
+# apt runs its acquire methods (file/copy/store) as the unprivileged _apt
+# user, so a local repository must be traversable and readable by "others"
+# all the way up from /. The two ways this fails in practice are a tree
+# built by mktemp (0700) and Debian 12+/Ubuntu private home directories
+# (0700/0750). Registering such a path writes a source that can never
+# refresh and breaks every later `apt update`; refuse it before writing.
+# Prints the first offending path (mode) or nothing when the tree is readable.
+repo_readability_problem() {
+  local dir="$1" mode bad
+  while :; do
+    mode=$(stat -c %a "$dir" 2>/dev/null) || return 1
+    if (( (8#$mode & 1) == 0 )); then
+      printf '%s is mode %s (directories need o+x)' "$dir" "$mode"
+      return 0
+    fi
+    [[ "$dir" == "/" ]] && break
+    dir=$(dirname "$dir")
+  done
+  bad=$(find "$1" \( -type d ! -perm -o=rx \) -o \( -type f ! -perm -o=r \) 2>/dev/null | LC_ALL=C sort | head -n 1)
+  if [[ -n "$bad" ]]; then
+    if [[ -d "$bad" ]]; then
+      printf '%s is mode %s (directories need o+rx)' "$bad" "$(stat -c %a "$bad")"
+    else
+      printf '%s is mode %s (files need o+r)' "$bad" "$(stat -c %a "$bad")"
+    fi
+    return 0
+  fi
+  return 1
+}
+if [[ -n "$repo_path" ]] && id _apt >/dev/null 2>&1; then
+  if problem=$(repo_readability_problem "$repo_path"); then
+    if [[ "$root" == "/" ]]; then
+      trust_flag=" --key ./vortex-archive-key.asc"
+      [[ "$trust_unsigned" == "1" ]] && trust_flag=" --trust-unsigned"
+      cat >&2 <<PERMS
+apt reads local repositories as the unprivileged '_apt' user, but it cannot read this one:
+  $problem
+Copy the repository to a world-readable location and register that copy, e.g.
+  sudo cp -r "$repo_path" /srv/vortex-apt && cd /srv/vortex-apt && sudo ./install-repo.sh --repo-path .$trust_flag
+(or run 'chmod a+rX' on the path shown above, including every parent directory).
+PERMS
+      exit 2
+    fi
+    echo "WARNING: $problem; apt's _apt user could not read this repository from a live system." >&2
+  fi
+fi
+
 mkdir -p "$root/etc/apt/sources.list.d" "$root/usr/share/keyrings"
 sources="$root/etc/apt/sources.list.d/vortex.sources"
+# Remember what was registered before this run so a failed refresh can put it
+# back: a source apt cannot read would otherwise break every later
+# `apt update` on the machine, not just this installation.
+previous_sources=""
+previous_keyring=""
+if [[ "$root" == "/" && "$no_update" == "0" ]]; then
+  backup_dir=$(mktemp -d)
+  if [[ -f "$sources" ]]; then
+    cp -p "$sources" "$backup_dir/sources"
+    previous_sources="$backup_dir/sources"
+  fi
+  if [[ -f "$root$keyring_path" ]]; then
+    cp -p "$root$keyring_path" "$backup_dir/keyring"
+    previous_keyring="$backup_dir/keyring"
+  fi
+fi
+restore_previous_registration() {
+  if [[ -n "$previous_sources" ]]; then
+    cp -p "$previous_sources" "$sources"
+  else
+    rm -f "$sources"
+  fi
+  if [[ "$trust_unsigned" == "0" ]]; then
+    if [[ -n "$previous_keyring" ]]; then
+      cp -p "$previous_keyring" "$root$keyring_path"
+    else
+      rm -f "$root$keyring_path"
+    fi
+  fi
+}
 if [[ "$trust_unsigned" == "1" ]]; then
   cat > "$sources" <<SOURCES
 Types: deb
@@ -201,10 +278,35 @@ else
     echo "apt-get not found; cannot refresh the package index" >&2
     exit 2
   fi
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 300 apt-get update
-  else
-    apt-get update
+  run_update() {
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 300 apt-get update "$@"
+    else
+      apt-get update "$@"
+    fi
+  }
+  # Refresh the Vortex source on its own first, without pruning the other
+  # lists, so a failure is attributable to this repository and can be rolled
+  # back — instead of blaming an unrelated mirror, or leaving behind a source
+  # that fails every later `apt update` on the machine.
+  only_dir=$(mktemp -d)
+  cp -p "$sources" "$only_dir/vortex.sources"
+  vortex_ok=1
+  run_update -o Dir::Etc::sourcelist=/dev/null -o "Dir::Etc::sourceparts=$only_dir" -o APT::Get::List-Cleanup=0 || vortex_ok=0
+  rm -rf "$only_dir"
+  if [[ "$vortex_ok" == "0" ]]; then
+    restore_previous_registration
+    rm -rf "${backup_dir:-}"
+    echo "apt-get update could not read the Vortex repository (see the apt errors above); the previous APT registration state was restored so nothing is left half-configured." >&2
+    echo "Fix the repository, then re-run install-repo.sh." >&2
+    exit 1
+  fi
+  rm -rf "${backup_dir:-}"
+  # Full refresh so the machine's other sources are current too. A foreign
+  # mirror failing here is not a Vortex registration failure: the source
+  # above is proven readable, so leave it registered and say so.
+  if ! run_update; then
+    echo "WARNING: the Vortex repository refreshed successfully, but another configured APT source failed to update (see above)." >&2
   fi
 fi
 printf 'Next: sudo apt install linux-vortex-terminal\n'

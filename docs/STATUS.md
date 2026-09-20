@@ -1,11 +1,33 @@
 # Current implementation status
 
-VORTEX 0.2.22 is a real Linux application. Production paths use installed host
+VORTEX 0.3.0 is a real Linux application. Production paths use installed host
 tools, typed argv, and observed output only. Test doubles exist only inside
 controlled tests.
 
 **Automated validation is passing:** the Python unittest suite plus JS terminal,
 window-control, frontend smoke, frontend auth, and frontend runtime smoke suites.
+
+## 0.3.x — full-surface review, owner-aware crash recovery
+
+- The desktop sidecar and every `vortex` CLI process share one SQLite store.
+  Constructing an execution authority used to close *every* `running`
+  operation as `unknown_after_crash`, so a concurrent `vortex run`/`turn`
+  falsely declared another process's live, approved operation crashed and
+  the waiting CLI then killed it. Operations now carry the owning process
+  identity (pid + kernel start time); only rows whose owner is dead,
+  recycled, or unknown are closed. Regression-tested, including pid reuse.
+- `vortex … | head` no longer prints a `BrokenPipeError` traceback and keeps
+  an honest exit code (`interrupted`).
+- CLI exit code alignment: `PolicyError` (Guardian blocked, identity mismatch,
+  scope denial, token required) now maps to exit 4 (`policy_denied`) as
+  specified in `docs/EXIT_CODES.md`.
+- Guardian security gate expanded: `unlink`, `truncate`, `mkswap`, and
+  `find -delete` are identified as destructive commands. Non-destructive file
+  arguments (e.g. `cat unlink.log`) remain unaffected.
+- Planner robustness: requests containing newlines/shell syntax cleanly reject
+  as `unsupported_shell_syntax` without triggering misleading systemd parser errors.
+- Documentation brought back in line with the shipped code: remote desktop
+  (VNC) status, test-suite counts, JSON `schema_version` contract wording.
 
 ## 0.2.22 — remaining hardening closed
 
@@ -67,7 +89,7 @@ any remaining inaccuracies.
 | Docker/Podman sandbox execution | Not implemented |
 | sqlmap / msf execution adapters | Not implemented |
 | MCP | Not implemented |
-| Remote graphical sessions | Not implemented |
+| Authorized remote desktops (VNC/RFB in-app) | Done + tested; verified against a real VNC server in CI. RDP, clipboard/file/audio redirection, recording: not implemented |
 
 ## What the earlier “install failure” really was
 

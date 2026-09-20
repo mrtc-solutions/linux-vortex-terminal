@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+- **Fix: `PolicyError` in CLI now returns exit 4 (`policy_denied`).** When
+  Guardian blocked a plan, executable identity mismatched, or scope authorization
+  was denied, the CLI previously fell into generic `except Exception` and exited
+  with 1 (`failure`) despite `docs/EXIT_CODES.md` specifying exit 4 for policy,
+  scope, identity, or authorization denials. `cli/vortex.py` now catches
+  `PolicyError` explicitly and returns `EXIT_CODES['policy_denied']` (4).
+- **Security: Guardian destructive command coverage expanded.** Added
+  `unlink`, `truncate`, `mkswap`, and `find -delete` to Guardian's destructive
+  command detection, preventing destructive deletion or truncation via direct or
+  planned execution. File arguments with extensions (e.g. `unlink.log`,
+  `truncate.txt`) remain non-destructive and unblocked.
+- **Fix: Planner and systemd parser safely handle newlines and shell syntax.**
+  `parse_systemd_mutation` previously raised `PolicyError("systemd request contains unsafe shell syntax")`
+  on any input containing newlines before checking whether the request was even
+  a systemd mutation. Now non-systemd requests with newlines or compound shell
+  syntax are cleanly classified as `unsupported_shell_syntax` by `build_plan`.
+- **Fix: a concurrent `vortex` CLI marked the sidecar's live operation as
+  crashed — and could kill it.** The sidecar and every CLI process share one
+  SQLite store, but `ExecutionManager.__init__` reconciled *every*
+  `started`/`running` row to `unknown_after_crash` on the assumption that it
+  was the only execution authority. Reproduced on a real host: process A ran
+  an approved `sleep 25`; a `vortex run -- true` started 1.5 s later flipped
+  A's row to `unknown_after_crash` with a false `sidecar_restart` reason and
+  a permanent `operations_reconciled_after_restart` audit event; A's waiting
+  CLI then returned exit 6 ("the sidecar stopped before this operation
+  reached a terminal state") and its shutdown killed the still-running
+  command. Operations now carry the owning process identity (`authority`:
+  pid + kernel start time), and reconciliation closes only rows whose owner
+  is dead, a zombie, recycled, or unrecorded. Same scenario after the fix:
+  A stays `running`, finishes `succeeded`, exit 0, no false audit event.
+  Regression tests cover live owner (same process and another process),
+  owner death, pid reuse, malformed identities, and legacy rows.
+- **Fix: `vortex … | head` printed a `BrokenPipeError` traceback.** The CLI
+  now exits quietly with the `interrupted` code when the reader closes the
+  pipe early; regression test drives real subprocesses with a closed reader.
+- **Docs match the shipped code again.** README/STATUS still said remote
+  graphical sessions were "not implemented" and that "no session code
+  exists" although the VNC/RFB remote desktop (bridge, UI window, real-VNC
+  CI gate) shipped in 0.3.0; the feature table, the not-claimed list, the
+  test-suite counts (636 Python tests, 10 JS suites), the STATUS version
+  header, the crash-recovery ADR, and the `schema_version` contract wording
+  in `docs/EXIT_CODES.md` are corrected.
+- **Fix: published APT repositories were unreadable to apt.** `make-repo.sh`
+  staged the tree with `mktemp -d` and published it as-is, so the repository
+  root was mode 0700. apt runs its acquire methods as the unprivileged
+  `_apt` user, so on a real Debian 12 host every `sudo apt update` after
+  `install-repo.sh` failed with `Permission denied` and `sudo apt install
+  linux-vortex-terminal` (and every later upgrade) could not resolve the
+  package — the unprivileged test suite never sandboxes to `_apt`, which is
+  why it stayed green. The repository is now published 0755/0644 (installer
+  0755) with every mode set explicitly; `build_repo()` verification enforces
+  the invariant; `install-repo.sh` checks, before writing anything, that
+  `_apt` can traverse the repository and every parent directory (Debian
+  12+/Ubuntu private home directories are the common trap) and names the
+  blocking path with a copy-to-`/srv/vortex-apt` fix; and it refreshes the
+  Vortex source on its own before the full `apt update`, restoring the
+  previous registration state when apt cannot read the new repository so a
+  broken source never lingers. Proven end to end on a real Debian 12 host
+  with `sudo`: register → `apt install` → publish a newer version →
+  `apt upgrade` → damage files → `apt install --reinstall` → `apt remove`.
+  Seven new regression tests (`tests/test_apt_repo.py`) fail against the
+  previous scripts and pass now; docs (`README.md`, `packaging/README.md`,
+  `docs/USER_GUIDE.md`, `NEXT-STEPS.txt`) show the world-readable copy step.
 - **Install, upgrade, and repair by APT package name.** New
   `packaging/deb/make-repo.sh` builds a deterministic APT repository from
   one or more `.deb` files (pool, per-architecture indexes, hashed Release,

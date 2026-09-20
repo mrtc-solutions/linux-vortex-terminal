@@ -62,6 +62,7 @@ LOW_NETWORK = {"no-network", "loopback-only"}
 DESTRUCTIVE_WORDS = {
     "rm", "mkfs", "dd", "wipefs", "shred", "chown",
     "iptables", "nft", "reboot", "poweroff", "halt", "kexec",
+    "unlink", "truncate", "mkswap",
 }
 # World-writable chmod is parsed, not pattern-matched: symbolic modes such as
 # o+w, a+w, go=rwx (and long flags like --recursive) must not evade the gate.
@@ -101,12 +102,18 @@ _READONLY_FIREWALL_RE = re.compile(
     r"(?:^|[\s;|&])(?:iptables|ip6tables|iptables-restore|nft)\s+(?:-[A-Za-z]*[SLnVN][A-Za-z]*\b|\b(?:list|show|status|rule)\b)",
     re.I,
 )
+_FIND_DELETE_RE = re.compile(
+    r"(?:^|[\s;|&])(?:/[^\s;|]*/)?find\b[^\n;|]*\s-delete\b",
+    re.I,
+)
 
 
 def looks_destructive(display: str) -> bool:
     """Match destructive command words, not accidental substrings like adduser/remove."""
     text = (display or "").lower()
     if _chmod_world_writable(text):
+        return True
+    if _FIND_DELETE_RE.search(text):
         return True
     # Evaluate each shell segment on its own so a read-only firewall listing
     # elsewhere in the plan cannot launder a mutating iptables/nft command.
@@ -119,10 +126,10 @@ def looks_destructive(display: str) -> bool:
                 if base in _FIREWALL_BINARIES and read_only_firewall:
                     continue
                 return True
-            # mkfs.ext4 / mkfs.xfs must match mkfs without treating adduser as dd.
-            stem = base.split(".", 1)[0]
-            if stem in DESTRUCTIVE_WORDS:
-                if stem in _FIREWALL_BINARIES and read_only_firewall:
+            # mkfs.ext4 / mkfs.xfs must match mkfs without treating adduser as dd
+            # or false-positiving on harmless files with extensions like unlink.log.
+            if base.startswith("mkfs."):
+                if base in _FIREWALL_BINARIES and read_only_firewall:
                     continue
                 return True
     return False

@@ -712,6 +712,32 @@ class MakeRepoTests(_DebCase):
         self.assertIn("--key ./vortex-archive-key.asc", steps)
         self.assertNotIn("--trust-unsigned", steps)
 
+    def test_repo_tree_is_readable_by_apt_sandbox_user(self):
+        # apt runs its acquire methods as the unprivileged _apt user. mktemp
+        # staged the tree 0700, so `sudo apt update` against the published
+        # directory failed with "Permission denied" on a real Debian 12 host.
+        repo = self._make_repo(self._build())
+        self.assertEqual(repo.stat().st_mode & 0o777, 0o755, "repository root must be world-traversable")
+        for item in sorted(repo.rglob("*")):
+            mode = item.stat().st_mode & 0o777
+            if item.is_dir():
+                self.assertEqual(mode, 0o755, f"{item.relative_to(repo)} must be 0755")
+            elif item.name == "install-repo.sh":
+                self.assertEqual(mode, 0o755, "installer must stay executable")
+            else:
+                self.assertEqual(mode, 0o644, f"{item.relative_to(repo)} must be 0644")
+        self.assertIn("_apt", (repo / "NEXT-STEPS.txt").read_text(encoding="utf-8"))
+
+    def test_signed_repo_tree_is_readable_by_apt_sandbox_user(self):
+        # gpg and cp create files with their own modes; the publish step must
+        # normalize them too, not only the redirection-created indexes.
+        stub = _write_gpg_stub(self.home)
+        env = dict(os.environ)
+        env["VORTEX_GPG"] = str(stub)
+        repo = self._make_repo(self._build(), extra=["--sign", "TESTKEY"], env=env)
+        for name in ("dists/stable/InRelease", "dists/stable/Release.gpg", "vortex-archive-key.asc"):
+            self.assertEqual((repo / name).stat().st_mode & 0o777, 0o644, name)
+
     def test_make_repo_without_installer_nearby_refuses(self):
         lone = self.home / "lone"
         lone.mkdir()
@@ -998,6 +1024,92 @@ class InstallRepoTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("requires root", proc.stderr)
 
+    def _apt_sandbox_user_exists(self) -> bool:
+        proc = _run("id", "_apt")
+        return proc.returncode == 0 and shutil.which("apt-get") is not None
+
+    def _private_copy(self) -> Path:
+        # Debian 12+ / Ubuntu home directories are 0700/0750: a repository
+        # copied under one is unreadable to _apt even when its own tree is
+        # 0755. Model that with a private parent directory.
+        private = self.home / "private-home"
+        private.mkdir(mode=0o700)
+        copy = private / "vortex-apt"
+        shutil.copytree(self.repo, copy)
+        return copy
+
+    def test_unreadable_repo_is_refused_before_any_write(self):
+        if not self._apt_sandbox_user_exists():
+            self.skipTest("the _apt sandbox user does not exist on this host")
+        if Path("/etc/apt/sources.list.d/vortex.sources").exists():
+            self.skipTest("a Vortex source is already registered on this machine")
+        copy = self._private_copy()
+        # Same shadow technique as the apt-get check: pretend to be root so the
+        # script reaches the readability preflight, which must refuse before
+        # touching /etc/apt (unprivileged, any write attempt would also fail).
+        driver = self.home / "shadow-root.sh"
+        driver.write_text(
+            "#!/usr/bin/env bash\n"
+            "id() { if [[ \"${1:-}\" == \"-u\" ]]; then echo 0; else builtin command id \"$@\"; fi; }\n"
+            "export -f id\n"
+            f'exec bash "{INSTALL_REPO}" "$@"\n',
+            encoding="utf-8",
+        )
+        driver.chmod(0o755)
+        proc = _run("bash", str(driver), "--repo-path", str(copy), "--trust-unsigned", timeout=120)
+        self.assertEqual(proc.returncode, 2, proc.stderr or proc.stdout)
+        self.assertIn("_apt", proc.stderr)
+        self.assertIn(f"{copy.parent} is mode 700", proc.stderr)
+        self.assertIn("/srv/vortex-apt", proc.stderr)
+        self.assertIn("--trust-unsigned", proc.stderr)
+        self.assertNotIn("requires root", proc.stderr)
+        self.assertFalse(Path("/etc/apt/sources.list.d/vortex.sources").exists())
+
+    def test_unreadable_file_inside_repo_is_named(self):
+        if not self._apt_sandbox_user_exists():
+            self.skipTest("the _apt sandbox user does not exist on this host")
+        world = self.home / "world"
+        world.mkdir(mode=0o755)
+        self.home.chmod(0o755)
+        copy = world / "vortex-apt"
+        shutil.copytree(self.repo, copy)
+        victim = copy / "dists" / "stable" / "main" / "binary-all" / "Packages"
+        victim.chmod(0o600)
+        driver = self.home / "shadow-root.sh"
+        driver.write_text(
+            "#!/usr/bin/env bash\n"
+            "id() { if [[ \"${1:-}\" == \"-u\" ]]; then echo 0; else builtin command id \"$@\"; fi; }\n"
+            "export -f id\n"
+            f'exec bash "{INSTALL_REPO}" "$@"\n',
+            encoding="utf-8",
+        )
+        driver.chmod(0o755)
+        proc = _run("bash", str(driver), "--repo-path", str(copy), "--trust-unsigned", timeout=120)
+        self.assertEqual(proc.returncode, 2, proc.stderr or proc.stdout)
+        self.assertIn(f"{victim} is mode 600 (files need o+r)", proc.stderr)
+
+    def test_staged_registration_only_warns_about_unreadable_repo(self):
+        if not self._apt_sandbox_user_exists():
+            self.skipTest("the _apt sandbox user does not exist on this host")
+        copy = self._private_copy()
+        root = self.home / "staged"
+        proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(copy), "--trust-unsigned", "--root", str(root))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("WARNING", proc.stderr)
+        self.assertIn("_apt", proc.stderr)
+        self.assertTrue((root / "etc" / "apt" / "sources.list.d" / "vortex.sources").is_file())
+
+    def test_world_readable_repo_passes_the_preflight_silently(self):
+        world = self.home / "world"
+        world.mkdir(mode=0o755)
+        self.home.chmod(0o755)
+        copy = world / "vortex-apt"
+        shutil.copytree(self.repo, copy)
+        root = self.home / "staged"
+        proc = _run("bash", str(INSTALL_REPO), "--repo-path", str(copy), "--trust-unsigned", "--root", str(root))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("_apt", proc.stderr)
+
     def test_registration_is_idempotent(self):
         root = self.home / "staged"
         first = _run("bash", str(INSTALL_REPO), "--repo-path", str(self.repo), "--trust-unsigned", "--root", str(root))
@@ -1132,6 +1244,24 @@ class BackendRepoTests(unittest.TestCase):
         stray = tree / "dists" / "stable" / "main" / "binary-all" / "Packages.stray"
         stray.write_text("stray", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "not covered by Release"):
+            _verify_repo(tree, "stable", "main")
+
+    def test_published_repo_is_world_readable_and_verification_enforces_it(self):
+        from backend.debbuild import _verify_repo
+
+        build_deb()
+        tree = Path(build_repo()["path"])
+        self.assertEqual(tree.stat().st_mode & 0o777, 0o755)
+        for item in tree.rglob("*"):
+            needed = 0o005 if item.is_dir() else 0o004
+            self.assertEqual(item.stat().st_mode & needed, needed, str(item.relative_to(tree)))
+        _verify_repo(tree, "stable", "main")
+        (tree / "pool").chmod(0o700)
+        with self.assertRaisesRegex(RuntimeError, r"not world-readable.*pool is mode 0700"):
+            _verify_repo(tree, "stable", "main")
+        (tree / "pool").chmod(0o755)
+        (tree / "dists" / "stable" / "Release").chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, r"not world-readable.*Release is mode 0600"):
             _verify_repo(tree, "stable", "main")
 
 

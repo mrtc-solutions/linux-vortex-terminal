@@ -61,13 +61,21 @@ without an exclusion check.
 ## Crash recovery
 
 An operation advances only while the thread that owns it is alive; that thread
-belongs to exactly one sidecar process. On startup the execution authority calls
-`Store.reconcile_stale_operations()`, which closes any row still marked
-`started`/`running` as `unknown_after_crash`, and the server then calls
+belongs to exactly one process — but the store is shared by the desktop sidecar
+and every `vortex` CLI invocation, and several of them may execute at once.
+Every operation is therefore stamped at start with the owner's process identity
+(`authority`: pid plus the kernel start time from `/proc/<pid>/stat`, so a
+recycled pid is never mistaken for the original owner). On startup the
+execution authority calls `Store.reconcile_stale_operations()`, which closes a
+row still marked `started`/`running` as `unknown_after_crash` only when its
+owner is dead, a zombie, recycled, or unrecorded; rows owned by a live process
+are left untouched, so a concurrent `vortex run` cannot declare the sidecar's
+live operation crashed (or the reverse). The server then calls
 `Workspace.reconcile_orphaned_tasks()` to move the waiting tasks to `PAUSED`
 with a recorded recovery note. Sessions are handled by the pre-existing
-`mark_stale_sessions()`. Nothing is ever promoted to a success state on the
-basis of an unobserved outcome.
+`mark_stale_sessions()`, which only the session authority (the sidecar, or a
+CLI that could not reach one) invokes. Nothing is ever promoted to a success
+state on the basis of an unobserved outcome.
 
 ## Replan budget
 

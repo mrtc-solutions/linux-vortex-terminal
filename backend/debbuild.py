@@ -414,6 +414,18 @@ def _verify_repo(tree: Path, codename: str, component: str) -> dict[str, Any]:
     installer = tree / "install-repo.sh"
     if not installer.is_file() or installer.is_symlink() or not os.access(installer, os.X_OK):
         raise RuntimeError("repo is missing its executable installer (install-repo.sh)")
+    # apt reads a local repository as the unprivileged _apt user (and a web
+    # server as its own account): every directory must be o+rx and every
+    # file o+r, or `sudo apt update` fails with EACCES right after
+    # registration. make-repo.sh publishes 0755/0644; hold it to that here.
+    for item in [tree, *sorted(tree.rglob("*"))]:
+        mode = stat.S_IMODE(item.lstat().st_mode)
+        needed = 0o005 if item.is_dir() else 0o004
+        if mode & needed != needed:
+            raise RuntimeError(
+                f"repo tree is not world-readable (apt's _apt user could not read it): "
+                f"{item.relative_to(tree)} is mode {mode:04o}"
+            )
     return {
         "packages": shipped,
         "release_sha256": _sha256_file(release),
@@ -516,7 +528,8 @@ def _build_repo(
     else:
         hint = (
             f"Unsigned APT repository ready at {target} (local testing only). On the target machine, "
-            "copy the directory, then from inside it: sudo ./install-repo.sh --repo-path . --trust-unsigned "
+            "copy the directory to a world-readable place (apt reads it as the _apt user; not inside a private home directory), "
+            "e.g. sudo cp -r <copy> /srv/vortex-apt, then from inside it: sudo ./install-repo.sh --repo-path . --trust-unsigned "
             "&& sudo apt install linux-vortex-terminal"
         )
     return {

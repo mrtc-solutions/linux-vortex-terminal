@@ -106,6 +106,13 @@ package files without starting a daemon or creating user data. See
 [`packaging/README.md`](packaging/README.md) for local/offline repository use
 and release publication details.
 
+For a local (unsigned, `--trust-unsigned`) copy, place the repository
+somewhere world-readable such as `/srv/vortex-apt`, not under a home
+directory: apt reads local repositories as the unprivileged `_apt` user, and
+Debian 12+/Ubuntu home directories are private (0700/0750). The repository is
+published 0755/0644 and `install-repo.sh` refuses, before writing anything, a
+path that `_apt` could not read.
+
 Install semantics are explicit:
 - `vortex install --user` and `scripts/install-user.sh` write only a user-local launcher.
 - The **Dependencies** text entry accepts one exact Debian package, `ollama`, or a validated `model:tag`. Debian packages become persisted, Guardian-gated apt plans; **OPEN INSTALL TERMINAL** runs the exact saved plan in a managed PTY.
@@ -140,7 +147,7 @@ UNAVAILABLE), or **Not implemented**.
 | Results popup contextual actions (Verify / Report / Export) | Implemented + tested; only offered when a result produced observed output |
 | Objective evaluation / replan proposal after observed results | Implemented + tested |
 | Bounded replanning (max 2 follow-ups, duplicate-plan detection) | Implemented + tested |
-| Crash recovery: stale operations/tasks reconciled at startup | Implemented + tested |
+| Crash recovery: stale operations/tasks reconciled at startup (owner-aware: the sidecar and concurrent `vortex` CLI processes share one store and never mark each other's live operations crashed) | Implemented + tested |
 | Kali/Linux tool registry with live probes | Implemented + tested |
 | Agent Council (built-in `vortex-local` advisor; no third-party agent code ships) | Implemented + tested; roster shows only working advisors |
 | Observe → act → host-state reward | Implemented + tested |
@@ -150,7 +157,7 @@ UNAVAILABLE), or **Not implemented**.
 | Natural-language planning → orchestration → Guardian → executor → verifier | Implemented + tested |
 | Prompt-injection defense (tool output is data, never instructions) | Implemented + tested |
 | MCP server / client | Not implemented |
-| Remote graphical (VNC/RDP/noVNC) sessions | Not implemented |
+| Authorized remote desktops in-app (VNC/RFB 3.3–3.8 over a sidecar-owned WebSocket→RFB bridge, engagement-scoped, single-use tickets) | Implemented + tested; verified against a real VNC server in CI (`tests/remote_desktop_acceptance.py`); RDP, clipboard/file/audio redirection, and recording are **not** implemented — see [`docs/REMOTE_DESKTOP.md`](docs/REMOTE_DESKTOP.md) |
 | In-app dependency entry / `vortex deps` | Implemented + tested; exact reviewed apt plans execute through a confirmation-gated managed PTY; Ollama/models use verified managed workflows; no silent install |
 | Reports Markdown / HTML / JSON / PDF from observed operations | Implemented + tested |
 | System inventory report from doctor + tool probes | Implemented |
@@ -195,9 +202,10 @@ These are either unimplemented, or implemented only as honest unavailable states
 - Privileged apt/systemd mutation acceptance on a disposable VM
 - Signed `.deb` / 1.0 production release
 - MCP server or client (no MCP layer exists in this build)
-- Remote graphical sessions (VNC / RDP / noVNC / Guacamole). No `Xvfb`,
-  `x11vnc`, `websockify`, or RDP client is present and no session code exists;
-  Vortex Terminal shows no desktop rather than a fake one.
+- RDP in-app, Guacamole gateways, clipboard sync, file transfer, audio
+  redirection, shared folders, and screen/keystroke recording for remote
+  desktops (VNC/RFB is implemented; when no compatible graphical service is
+  verified, Vortex Terminal shows no desktop rather than a fake one)
 
 Verified absent on this host at the time of the last audit: `nmap`, `nuclei`,
 `ffuf`, `nikto`, `amass`, `gobuster`, `sqlmap`, `msfconsole`, `docker`,
@@ -277,7 +285,7 @@ records that it does not know the host outcome rather than inferring success.
 
 ```bash
 npm run lint
-npm test                             # 442 python tests + 8 js suites
+npm test                             # 642 python tests + 10 js suites
 python3 scripts/final_gates.py       # the 10-gate release audit (10/10 required)
 ```
 

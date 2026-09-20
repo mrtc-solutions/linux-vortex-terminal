@@ -386,6 +386,58 @@ def runtime_root() -> Path:
     return root
 
 
+def process_identity(pid: int | None = None) -> dict[str, Any]:
+    """Identify a process by pid *and* kernel start time.
+
+    A pid alone is not an identity: pids are recycled, so a row stamped with a
+    bare pid could be mistaken for a live owner long after the real owner died.
+    The start time from ``/proc/<pid>/stat`` (field 22, clock ticks since boot)
+    disambiguates a reused pid. ``start_ticks`` is ``None`` when /proc is not
+    readable; callers then fall back to plain pid liveness.
+    """
+    pid = os.getpid() if pid is None else int(pid)
+    identity: dict[str, Any] = {"pid": pid, "start_ticks": None}
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            raw = handle.read(4096)
+        # ``comm`` may contain spaces or parentheses, so split after the last ')'.
+        fields = raw[raw.rfind(b")") + 2:].split()
+        identity["state"] = fields[0].decode("ascii", "replace")
+        identity["start_ticks"] = int(fields[19])
+    except (OSError, ValueError, IndexError, UnicodeDecodeError):
+        pass
+    return identity
+
+
+def process_alive(identity: Any) -> bool:
+    """True when the process described by ``process_identity()`` still runs.
+
+    Zombies and pids that have been recycled by an unrelated process count as
+    dead. Malformed identities count as dead so that a corrupt row can never
+    keep an operation alive forever.
+    """
+    if not isinstance(identity, dict):
+        return False
+    pid = identity.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass  # exists, but belongs to another user; still a live process
+    except OSError:
+        return False
+    current = process_identity(pid)
+    if current.get("state") in ("Z", "X", "x"):
+        return False
+    expected = identity.get("start_ticks")
+    if isinstance(expected, int) and not isinstance(expected, bool) and isinstance(current.get("start_ticks"), int):
+        return current["start_ticks"] == expected
+    return True
+
+
 def write_runtime_metadata(host: str, port: int, token: str | None) -> Path:
     path = runtime_root() / "sidecar.json"
     atomic_write(path, canonical({"pid": os.getpid(), "host": host, "port": port, "token": token, "created_at": now_iso()}), mode=0o600)
@@ -871,8 +923,17 @@ class Store:
         stays permanently EXECUTING. This is called by the execution authority
         at startup and marks those rows ``unknown_after_crash`` — an honest
         unknown state, never a fabricated success.
+
+        The store is shared by the desktop sidecar and every ``vortex`` CLI
+        process, so "no thread in this process" does not mean "no owner". Each
+        operation carries the ``authority`` identity (pid + kernel start time)
+        of the process that started it; rows whose owner is still running are
+        left untouched. Only rows with a dead, recycled, or missing owner are
+        closed. Rows written before ownership stamping have no ``authority``
+        and are treated as abandoned, exactly as before.
         """
         stale = 0
+        live = 0
         with self.lock, self.connect() as db:
             rows = db.execute("SELECT id, result_json FROM operations WHERE status IN ('started','running')").fetchall()
             for row in rows:
@@ -880,6 +941,11 @@ class Store:
                     operation = json.loads(row["result_json"])
                 except (TypeError, ValueError):
                     operation = {"id": row["id"], "commands": []}
+                if not isinstance(operation, dict):
+                    operation = {"id": row["id"], "commands": []}
+                if process_alive(operation.get("authority")):
+                    live += 1
+                    continue
                 operation["status"] = "unknown_after_crash"
                 operation["ended_at"] = operation.get("ended_at") or now_iso()
                 operation["termination_reason"] = "sidecar_restart"
@@ -891,7 +957,7 @@ class Store:
                 stale += 1
         if stale:
             try:
-                self.append_audit("operations_reconciled_after_restart", {"count": stale})
+                self.append_audit("operations_reconciled_after_restart", {"count": stale, "left_running_with_live_owner": live})
             except (OSError, sqlite3.Error):
                 pass
         return stale
@@ -1926,13 +1992,13 @@ def parse_service(text: str) -> str | None:
 
 
 def parse_systemd_mutation(text: str) -> tuple[str, str, bool] | None:
-    if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
-        raise PolicyError("systemd request contains unsafe shell syntax")
-    user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", text, re.I))
     lower = text.lower()
     match = re.search(r"\b(restart|start|stop|enable|disable)\b", lower)
     if not match:
         return None
+    if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
+        raise PolicyError("systemd request contains unsafe shell syntax")
+    user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", text, re.I))
     action = match.group(1)
     rest = text[match.end():]
     rest = re.sub(r"--user\b", "", rest, flags=re.I).strip()
@@ -2079,7 +2145,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         or re.search(r"\bpkill(?:\s+-\w+)*\s+[\w./@:-]+\b", lower)
         or re.search(r"\bkillall(?:\s+-\w+)*\s+[\w./@:-]+\b", lower)
     )
-    _shell_syntax = bool(re.search(r";|&&|\|\||[|<>]|`|\$\(", lower))
+    _shell_syntax = bool(re.search(r"[\x00\n\r]|[|<>]|;|&&|\|\||`|\$\(", lower))
     if _unsupported_mutation:
         kind = "unsupported_system_mutation"
         risk = "high"
@@ -3158,8 +3224,13 @@ class ExecutionManager:
         self.privilege_brokers: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
         self._closing = False
-        # This process is the only owner of a live operation thread. Any row
-        # still marked running belongs to a previous, now dead sidecar.
+        # Every operation this manager starts is stamped with this process
+        # identity so a concurrent CLI or a restarted sidecar can tell a live
+        # owner from a dead one instead of assuming it is the only authority.
+        self.authority = process_identity()
+        # A row still marked running whose owner process no longer exists
+        # belongs to a crashed sidecar/CLI; rows owned by live processes are
+        # left alone (see Store.reconcile_stale_operations).
         if reconcile:
             try:
                 self.store.reconcile_stale_operations()
@@ -3241,7 +3312,7 @@ class ExecutionManager:
         if not claimed:
             raise PolicyError(reason)
         self.store.append_audit("plan_approved", {"plan_id": plan["id"], "digest": plan["digest"]})
-        op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "network_facts": plan.get("network_facts", {}), "output_digest": None, "analysis": None, "settings_snapshot": model_settings_snapshot(settings, offline=offline)}
+        op = {"schema_version": SCHEMA_VERSION, "id": secrets.token_hex(16), "plan_id": plan["id"], "status": "started", "started_at": now_iso(), "ended_at": None, "commands": [], "workers": plan["workers"], "source": plan["source"], "network_facts": plan.get("network_facts", {}), "output_digest": None, "analysis": None, "settings_snapshot": model_settings_snapshot(settings, offline=offline), "authority": {"pid": self.authority["pid"], "start_ticks": self.authority.get("start_ticks")}}
         self.store.save_operation(op)
         privilege_mode = "root-override" if os.getuid() == 0 and allow_root else "sudo-os-authenticated" if privilege_broker else "user"
         self.store.append_audit("operation_started", {"operation_id": op["id"], "plan_id": plan["id"], "digest": plan["digest"], "privilege": privilege_mode})
@@ -4089,7 +4160,7 @@ class VortexHandler(BaseHTTPRequestHandler):
     token: str | None = None
     allow_remote_host = False
     frame_hosts: list[str] = []
-    server_version = "VortexSidecar/0.2"
+    server_version = f"VortexSidecar/{APP_VERSION}"
     # Browser sessions are process-local, bounded, fixed-lifetime capabilities.
     # The capability fingerprint prevents a session minted for an earlier token
     # from surviving an in-process sidecar reconfiguration.
