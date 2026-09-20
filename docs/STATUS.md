@@ -18,6 +18,14 @@ window-control, frontend smoke, frontend auth, and frontend runtime smoke suites
   recycled, or unknown are closed. Regression-tested, including pid reuse.
 - `vortex … | head` no longer prints a `BrokenPipeError` traceback and keeps
   an honest exit code (`interrupted`).
+- CLI exit code alignment: `PolicyError` (Guardian blocked, identity mismatch,
+  scope denial, token required) now maps to exit 4 (`policy_denied`) as
+  specified in `docs/EXIT_CODES.md`.
+- Guardian security gate expanded: `unlink`, `truncate`, `mkswap`, and
+  `find -delete` are identified as destructive commands. Non-destructive file
+  arguments (e.g. `cat unlink.log`) remain unaffected.
+- Planner robustness: requests containing newlines/shell syntax cleanly reject
+  as `unsupported_shell_syntax` without triggering misleading systemd parser errors.
 - Documentation brought back in line with the shipped code: remote desktop
   (VNC) status, test-suite counts, JSON `schema_version` contract wording.
 

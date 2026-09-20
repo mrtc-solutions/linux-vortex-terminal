@@ -123,6 +123,27 @@ class VortexCoreTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads(proc.stdout)["schema_version"], 1)
 
+    def test_cli_guardian_blocked_direct_run_returns_policy_denied(self):
+        # Destructive direct commands blocked by Guardian must exit with
+        # EXIT_CODES['policy_denied'] (4) per docs/EXIT_CODES.md, not generic 1.
+        from contextlib import redirect_stderr
+        import io
+        from cli import vortex as cli
+        env = {
+            **os.environ,
+            "VORTEX_CONFIG_DIR": str(Path(self.tmp.name) / "guard-cfg"),
+            "VORTEX_DATA_DIR": str(Path(self.tmp.name) / "guard-data"),
+            "VORTEX_RUNTIME_DIR": str(Path(self.tmp.name) / "guard-runtime"),
+        }
+        with patch.dict(os.environ, env):
+            for cmd in (["rm", "/tmp/victim"], ["unlink", "/tmp/victim"], ["truncate", "-s", "0", "/tmp/victim"]):
+                with self.subTest(cmd=cmd):
+                    err = io.StringIO()
+                    with redirect_stderr(err):
+                        rc = cli.main(["--yes", "run", "--", *cmd])
+                    self.assertEqual(rc, vtx_backend.EXIT_CODES["policy_denied"])
+                    self.assertIn("Guardian blocked this plan", err.getvalue())
+
     def test_cli_remote_request_rejects_non_loopback_before_network(self):
         from cli import vortex as cli
         with patch.object(cli.urllib.request, "build_opener") as opener:
@@ -999,6 +1020,14 @@ The following packages will be upgraded:
         self.assertEqual(unsafe['kind'], 'unsupported_shell_syntax')
         self.assertEqual(unsafe['status'], 'rejected')
         self.assertEqual(unsafe['commands'], [])
+        # Non-systemd requests with newlines must reject as unsupported_shell_syntax
+        # rather than raising a misleading "systemd request contains unsafe shell syntax".
+        newline_plan = build_plan(self.store, 'whoami\nid', self.tmp.name)
+        self.assertEqual(newline_plan['kind'], 'unsupported_shell_syntax')
+        self.assertEqual(newline_plan['status'], 'rejected')
+        self.assertIsNone(parse_systemd_mutation('whoami\nid'))
+        with self.assertRaisesRegex(PolicyError, 'systemd request contains unsafe shell syntax'):
+            parse_systemd_mutation('restart nginx; id')
 
     def test_nmap_artifact_parser_reports_only_observed_ports(self):
         data = b'''<?xml version="1.0"?><nmaprun scanner="nmap" args="nmap -sV lab.example.test"><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="lab.example.test"/></hostnames><ports><port protocol="tcp" portid="443"><state state="open"/><service name="https" product="Example" version="1.2"/></port></ports></host></nmaprun>'''

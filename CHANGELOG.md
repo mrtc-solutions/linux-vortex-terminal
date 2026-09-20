@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Fix: `PolicyError` in CLI now returns exit 4 (`policy_denied`).** When
+  Guardian blocked a plan, executable identity mismatched, or scope authorization
+  was denied, the CLI previously fell into generic `except Exception` and exited
+  with 1 (`failure`) despite `docs/EXIT_CODES.md` specifying exit 4 for policy,
+  scope, identity, or authorization denials. `cli/vortex.py` now catches
+  `PolicyError` explicitly and returns `EXIT_CODES['policy_denied']` (4).
+- **Security: Guardian destructive command coverage expanded.** Added
+  `unlink`, `truncate`, `mkswap`, and `find -delete` to Guardian's destructive
+  command detection, preventing destructive deletion or truncation via direct or
+  planned execution. File arguments with extensions (e.g. `unlink.log`,
+  `truncate.txt`) remain non-destructive and unblocked.
+- **Fix: Planner and systemd parser safely handle newlines and shell syntax.**
+  `parse_systemd_mutation` previously raised `PolicyError("systemd request contains unsafe shell syntax")`
+  on any input containing newlines before checking whether the request was even
+  a systemd mutation. Now non-systemd requests with newlines or compound shell
+  syntax are cleanly classified as `unsupported_shell_syntax` by `build_plan`.
 - **Fix: a concurrent `vortex` CLI marked the sidecar's live operation as
   crashed — and could kill it.** The sidecar and every CLI process share one
   SQLite store, but `ExecutionManager.__init__` reconciled *every*

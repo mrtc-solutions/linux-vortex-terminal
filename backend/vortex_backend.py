@@ -1992,13 +1992,13 @@ def parse_service(text: str) -> str | None:
 
 
 def parse_systemd_mutation(text: str) -> tuple[str, str, bool] | None:
-    if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
-        raise PolicyError("systemd request contains unsafe shell syntax")
-    user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", text, re.I))
     lower = text.lower()
     match = re.search(r"\b(restart|start|stop|enable|disable)\b", lower)
     if not match:
         return None
+    if any(char in text for char in "\x00\n\r;|&`$()<>\\"):
+        raise PolicyError("systemd request contains unsafe shell syntax")
+    user_mode = bool(re.search(r"(?:--user\b|\buser\s+(?:service|unit)\b)", text, re.I))
     action = match.group(1)
     rest = text[match.end():]
     rest = re.sub(r"--user\b", "", rest, flags=re.I).strip()
@@ -2145,7 +2145,7 @@ def build_plan(store: Store, request: str, cwd_raw: str | None = None, engagemen
         or re.search(r"\bpkill(?:\s+-\w+)*\s+[\w./@:-]+\b", lower)
         or re.search(r"\bkillall(?:\s+-\w+)*\s+[\w./@:-]+\b", lower)
     )
-    _shell_syntax = bool(re.search(r";|&&|\|\||[|<>]|`|\$\(", lower))
+    _shell_syntax = bool(re.search(r"[\x00\n\r]|[|<>]|;|&&|\|\||`|\$\(", lower))
     if _unsupported_mutation:
         kind = "unsupported_system_mutation"
         risk = "high"

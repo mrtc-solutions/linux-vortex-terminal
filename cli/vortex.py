@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.artifacts import analyze_path
 from backend.fileio import read_owner_text
-from backend.vortex_backend import (APP_VERSION, ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, SessionManager, Store, build_plan, build_undo_plan, detect_context, now_iso, probe_executable, command_spec, report_markdown, runtime_root, trusted_privilege_broker, validate_cwd, plan_digest)
+from backend.vortex_backend import (APP_VERSION, ADAPTER_MANIFESTS, EXIT_CODES, ExecutionManager, PolicyError, SessionManager, Store, build_plan, build_undo_plan, detect_context, now_iso, probe_executable, command_spec, report_markdown, runtime_root, trusted_privilege_broker, validate_cwd, plan_digest)
 
 def emit(value, as_json=False):
     if as_json: print(json.dumps({"schema_version": 1, **value}, sort_keys=True, indent=2))
@@ -789,6 +789,7 @@ def main(argv=None):
     except KeyboardInterrupt: return EXIT_CODES['interrupted']
     except BrokenPipeError: return EXIT_CODES['interrupted']
     except PermissionError as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['confirmation_required']
+    except PolicyError as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['policy_denied']
     except Exception as exc: print(f"vortex: {exc}", file=sys.stderr); return EXIT_CODES['failure']
     finally:
         for manager in reversed(managers):
