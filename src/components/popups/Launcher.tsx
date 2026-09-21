@@ -3,7 +3,7 @@
 import React from 'react';
 import {
   Activity, BrainCircuit, Crosshair, Database, FileText, FolderDown, History,
-  ListChecks, MapPin, Monitor, Scale, Settings as SettingsIcon, Terminal as TerminalIcon,
+  ListChecks, LayoutGrid, MapPin, Monitor, Scale, Settings as SettingsIcon, Terminal as TerminalIcon,
   TerminalSquare, Wrench, Bot, Cpu, CircleHelp, Info,
 } from 'lucide-react';
 import { sound } from '../../services/soundEffects';
@@ -29,8 +29,9 @@ export const Launcher: React.FC<LauncherProps> = ({ onGoTab, onOpenPopup, onClos
   };
 
   const tiles: Tile[] = [
+    { label: 'GUI', hint: 'Graphical workspace', icon: <LayoutGrid className="w-5 h-5" />, action: go(() => onGoTab('terminal')) },
     { label: 'Agent Mode', hint: 'Bounded runs', icon: <Bot className="w-5 h-5" />, action: go(() => onOpenPopup('agent')) },
-    { label: 'Dependencies', hint: 'Missing tools', icon: <Wrench className="w-5 h-5" />, action: go(() => onOpenPopup('dependencies')) },
+    { label: 'Dependencies', hint: 'Present + missing', icon: <Wrench className="w-5 h-5" />, action: go(() => onOpenPopup('dependencies')) },
     { label: 'Terminal', hint: 'Ask + run', icon: <TerminalIcon className="w-5 h-5" />, action: go(() => onGoTab('terminal')) },
     { label: 'Tactical Map', hint: 'Asset graph', icon: <MapPin className="w-5 h-5" />, action: go(() => onGoTab('map')) },
     { label: '/out', hint: 'Evidence', icon: <FolderDown className="w-5 h-5" />, action: go(() => onGoTab('out')) },

@@ -553,6 +553,9 @@ class HttpApiTests(unittest.TestCase):
         deps = data["dependencies"]
         self.assertFalse(deps["auto_install"])
         self.assertGreater(deps["counts"]["missing"], 0)
+        self.assertIn("present", deps)
+        self.assertGreaterEqual(len(deps["present"]), 1)
+        self.assertTrue(any(str(item.get("id") or "").startswith("data:gguf:") or item.get("id") == "runtime:gguf-engine" for item in deps["items"]))
         # Only the built-in advisor ships, so no agent dependency item may appear.
         self.assertFalse(any(str(item["id"]).startswith("agent:") for item in deps["missing"]),
                          "no third-party agent may surface as a missing dependency")
@@ -731,6 +734,21 @@ class HttpApiTests(unittest.TestCase):
         self.assertTrue(deleted["deleted"])
         missing = self._json("POST", "/api/reports/does-not-exist/delete", {}, expected=404)
         self.assertEqual(missing["error"]["code"], "not_found")
+
+    def test_http_report_rename_and_edit_routes(self):
+        report = self.handler.workspace.save_report({
+            "title": "http report",
+            "body": {"markdown": "observed evidence"},
+        })
+        renamed = self._json("POST", f"/api/reports/{report['id']}/rename", {"title": "Renamed via HTTP"})
+        self.assertEqual(renamed["report"]["title"], "Renamed via HTTP")
+        edited = self._json("POST", f"/api/reports/{report['id']}/edit", {"notes": "operator note"})
+        self.assertEqual(edited["report"]["body"]["operator_notes"], "operator note")
+        self.assertEqual(edited["report"]["body"]["markdown"], "observed evidence")
+        missing = self._json("POST", "/api/reports/does-not-exist/rename", {"title": "x"}, expected=404)
+        self.assertEqual(missing["error"]["code"], "not_found")
+        empty = self._json("POST", f"/api/reports/{report['id']}/rename", {"title": "  "}, expected=422)
+        self.assertEqual(empty["error"]["code"], "invalid_plan")
 
     def test_http_rejects_coerced_plan_id_targets_and_artifact_path(self):
         planned = self._json("POST", "/api/plan", {"request": "whoami", "cwd": self.tmp.name})

@@ -318,6 +318,86 @@ class VortexCoreTests(unittest.TestCase):
             probe_executable(name, include_version=False)
             self.assertEqual(resolver.call_count, 1)
 
+    def test_podman_well_known_path_is_recognized_when_path_lookup_misses(self):
+        root = Path(self.tmp.name) / "usr" / "bin"
+        root.mkdir(parents=True)
+        binary = root / "podman"
+        binary.write_bytes(b"#!/bin/sh\nexit 0\n")
+        binary.chmod(0o755)
+        clear_probe_caches()
+        with patch.object(vtx_backend, "_WELL_KNOWN_CONTAINER_BINS", {"podman": (str(binary),), "docker": ()}), \
+             patch("backend.vortex_backend.shutil.which", return_value=None):
+            probe = probe_executable("podman", include_version=False)
+        self.assertEqual(probe["state"], "installed")
+        self.assertEqual(Path(probe["realpath"]).resolve(), binary.resolve())
+        self.assertIn("writable-parent-directory", probe.get("security_flags") or [])
+
+    def test_podman_well_known_survives_group_writable_parent(self):
+        root = Path(self.tmp.name) / "usr" / "local" / "bin"
+        root.mkdir(parents=True)
+        binary = root / "podman"
+        binary.write_bytes(b"#!/bin/sh\nexit 0\n")
+        binary.chmod(0o755)
+        root.chmod(0o775)
+        clear_probe_caches()
+        with patch.object(vtx_backend, "_WELL_KNOWN_CONTAINER_BINS", {"podman": (str(binary),), "docker": ()}), \
+             patch("backend.vortex_backend.shutil.which", return_value=None):
+            probe = probe_executable("podman", include_version=False)
+        self.assertEqual(probe["state"], "installed")
+        self.assertEqual(Path(probe["realpath"]).resolve(), binary.resolve())
+
+    def test_world_writable_podman_is_not_treated_as_installed(self):
+        root = Path(self.tmp.name) / "usr" / "bin"
+        root.mkdir(parents=True)
+        binary = root / "podman"
+        binary.write_bytes(b"#!/bin/sh\nexit 0\n")
+        binary.chmod(0o777)
+        clear_probe_caches()
+        with patch.object(vtx_backend, "_WELL_KNOWN_CONTAINER_BINS", {"podman": (str(binary),), "docker": ()}), \
+             patch("backend.vortex_backend.shutil.which", return_value=None):
+            probe = probe_executable("podman", include_version=False)
+        self.assertNotEqual(probe["state"], "installed")
+
+    def test_health_reports_podman_independently_of_docker(self):
+        from backend.health import collect
+
+        def probe(name, include_version=False):
+            if name == "docker":
+                return {"name": "docker", "state": "installed", "path": "/usr/bin/docker", "security_flags": []}
+            if name == "podman":
+                return {"name": "podman", "state": "installed", "path": "/usr/bin/podman", "security_flags": []}
+            return {"name": name, "state": "absent", "path": None, "version": None}
+
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch("backend.vortex_backend.probe_executable", side_effect=probe))
+            try:
+                import vortex_backend as top_level_backend  # noqa: E402
+            except ImportError:
+                top_level_backend = None
+            if top_level_backend is not None:
+                stack.enter_context(patch.object(top_level_backend, "probe_executable", side_effect=probe))
+            health = collect(self.store, None, {"profile": "safe", "offline": True})
+        components = health["components"]
+        self.assertEqual(components["docker"]["state"], "healthy")
+        self.assertEqual(components["docker"]["runtime"], "docker")
+        self.assertEqual(components["podman"]["state"], "healthy")
+        self.assertEqual(components["podman"]["runtime"], "podman")
+        self.assertEqual(components["podman"]["path"], "/usr/bin/podman")
+
+    def test_local_container_runtime_uses_probed_podman_binary(self):
+        probe = {
+            "name": "podman",
+            "state": "installed",
+            "path": "/usr/bin/podman",
+            "realpath": "/usr/bin/podman",
+        }
+        with patch.object(vtx_backend, "probe_executable", side_effect=lambda name, **kwargs: (
+            {"state": "absent"} if name == "docker" else probe
+        )):
+            runtime = vtx_backend.local_container_runtime()
+        self.assertEqual(runtime, ("podman", ["/usr/bin/podman", "--remote=false"]))
+
     def test_container_detection_never_fabricates_runtime_state(self):
         plan = build_plan(self.store, 'inspect docker containers', self.tmp.name)
         if not any(probe_executable(name)['state'] == 'installed' for name in ('docker', 'podman')):

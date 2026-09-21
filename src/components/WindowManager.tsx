@@ -188,28 +188,31 @@ export const WindowManager: React.FC<WindowManagerProps> = ({ popups, onClose, f
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     onClick={() => setState(popup.id, 'minimized')}
-                    title="Minimize"
+                    title="Minimise"
                     aria-label="Minimize window"
-                    className="w-7 h-6 rounded text-stone-400 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] transition-colors cursor-pointer text-sm leading-none"
+                    className="h-6 px-1.5 rounded text-stone-400 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] transition-colors cursor-pointer text-[10px] leading-none font-bold flex items-center gap-1"
                   >
-                    —
+                    <span aria-hidden="true">—</span>
+                    <span>Minimise</span>
                   </button>
                   <button
                     onClick={() => setState(popup.id, maximized ? 'normal' : 'maximized')}
-                    title={maximized ? 'Restore' : 'Maximize'}
+                    title={maximized ? 'Restore' : 'Maximise'}
                     aria-label={maximized ? 'Restore window' : 'Maximize window'}
                     aria-pressed={maximized}
-                    className="w-7 h-6 rounded text-stone-400 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] transition-colors cursor-pointer text-xs leading-none"
+                    className="h-6 px-1.5 rounded text-stone-400 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] transition-colors cursor-pointer text-[10px] leading-none font-bold flex items-center gap-1"
                   >
-                    {maximized ? '❐' : '□'}
+                    <span aria-hidden="true">{maximized ? '❐' : '□'}</span>
+                    <span>{maximized ? 'Restore' : 'Maximise'}</span>
                   </button>
                   <button
                     onClick={() => onClose(popup.id)}
-                    title="Close"
+                    title="Exit"
                     aria-label="Close window"
-                    className="w-7 h-6 rounded text-stone-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer text-sm leading-none"
+                    className="h-6 px-1.5 rounded text-stone-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer text-[10px] leading-none font-bold flex items-center gap-1"
                   >
-                    ×
+                    <span aria-hidden="true">×</span>
+                    <span>Exit</span>
                   </button>
                 </div>
               </div>

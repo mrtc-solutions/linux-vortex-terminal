@@ -433,6 +433,10 @@ export const downloadReport = (id: string, format = 'md') =>
   apiDownload(`/api/reports/${encodeURIComponent(id)}/download?format=${encodeURIComponent(format)}`, `report-${id.slice(0, 8)}.${format}`);
 export const deleteReport = (id: string) =>
   apiPost<JsonRecord>(`/api/reports/${encodeURIComponent(id)}/delete`);
+export const renameReport = (id: string, title: string) =>
+  apiPost<JsonRecord>(`/api/reports/${encodeURIComponent(id)}/rename`, { title });
+export const editReport = (id: string, payload: { title?: string; notes?: string }) =>
+  apiPost<JsonRecord>(`/api/reports/${encodeURIComponent(id)}/edit`, payload);
 export const searchAll = (query: string) =>
   apiGet<JsonRecord>(`/api/search?q=${encodeURIComponent(query)}`);
 export const analyzeArtifact = (path: string, kind = 'auto') =>

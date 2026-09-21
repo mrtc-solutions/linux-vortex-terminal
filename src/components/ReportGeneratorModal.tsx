@@ -3,8 +3,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Download, FileText, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import {
-  JsonRecord, apiDownload, apiGet, deleteReport, downloadReport,
-  listEngagements, listReports,
+  JsonRecord, apiDownload, apiGet, deleteReport, downloadReport, editReport,
+  listEngagements, listReports, renameReport,
 } from '../services/vortexApi';
 import { sound } from '../services/soundEffects';
 
@@ -25,6 +25,8 @@ export const ReportGeneratorModal: React.FC<ReportGeneratorModalProps> = ({ onRe
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [loading, setLoading] = useState(true);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [notesDraft, setNotesDraft] = useState('');
 
   const refresh = useCallback(async () => {
     setError('');
@@ -67,6 +69,41 @@ export const ReportGeneratorModal: React.FC<ReportGeneratorModalProps> = ({ onRe
       const payload = await apiGet<JsonRecord>(`/api/reports/assessment/${encodeURIComponent(assessmentId)}?format=json`);
       setAssessment(JSON.stringify(payload.report || payload, null, 2).slice(0, 6000));
     } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const pick = (report: JsonRecord) => {
+    setSelected(report);
+    setTitleDraft(String(report.title || ''));
+    const body = (report.body || {}) as JsonRecord;
+    setNotesDraft(String(body.operator_notes || ''));
+    sound.playKeypress();
+  };
+
+  const saveEdits = async () => {
+    if (!selected || busy) return;
+    const id = String(selected.id);
+    setBusy(`edit-${id}`);
+    setError('');
+    try {
+      const payload = await editReport(id, { title: titleDraft.trim(), notes: notesDraft });
+      const report = (payload.report || {}) as JsonRecord;
+      if (report.id) {
+        setSelected(report);
+        setTitleDraft(String(report.title || titleDraft));
+        const body = (report.body || {}) as JsonRecord;
+        setNotesDraft(String(body.operator_notes || notesDraft));
+      } else {
+        await renameReport(id, titleDraft.trim());
+      }
+      await refresh();
+      onReportSaved();
+      sound.playKeypress();
+    } catch (err) {
+      sound.playAlert();
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy('');
@@ -127,7 +164,7 @@ export const ReportGeneratorModal: React.FC<ReportGeneratorModalProps> = ({ onRe
           {reports.map((report) => (
             <button
               key={String(report.id)}
-              onClick={() => { setSelected(report); sound.playKeypress(); }}
+              onClick={() => pick(report)}
               className={`w-full text-left p-2 rounded border cursor-pointer transition-colors ${
                 selected && String(selected.id) === String(report.id)
                   ? 'bg-black/70 border-[var(--theme-primary)]'
@@ -195,10 +232,23 @@ export const ReportGeneratorModal: React.FC<ReportGeneratorModalProps> = ({ onRe
         {selected && selectedBody && (
           <div className="space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-bold text-stone-100 text-sm">{String(selected.title || 'Untitled')}</span>
+              <input
+                aria-label="Rename report"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                className="flex-1 min-w-[12rem] bg-black/60 border border-[var(--theme-border)] rounded px-2 py-1 text-stone-100 font-bold text-sm focus:outline-none"
+              />
               <span className="text-[10px] px-1.5 py-0.5 rounded border border-[var(--theme-border)] text-[var(--theme-primary)]">
                 {String(selected.kind || '')}
               </span>
+              <button
+                type="button"
+                onClick={() => void saveEdits()}
+                disabled={!!busy || !titleDraft.trim()}
+                className="px-2 py-0.5 rounded bg-[var(--theme-primary)] text-black font-bold hover:opacity-90 disabled:opacity-40 cursor-pointer text-[10px]"
+              >
+                {busy.startsWith('edit-') ? 'Saving…' : 'Save title & notes'}
+              </button>
               <span className="flex-1" />
               {FORMATS.map((format) => (
                 <button
@@ -219,6 +269,15 @@ export const ReportGeneratorModal: React.FC<ReportGeneratorModalProps> = ({ onRe
                 <span>Delete</span>
               </button>
             </div>
+            <label className="block text-[10px] uppercase tracking-wider text-stone-500 font-semibold">Operator notes (editable)</label>
+            <textarea
+              aria-label="Edit report notes"
+              value={notesDraft}
+              onChange={(e) => setNotesDraft(e.target.value)}
+              rows={4}
+              className="w-full bg-black/60 border border-[var(--theme-border)] rounded px-2 py-1.5 text-stone-200 focus:outline-none leading-relaxed"
+              placeholder="Add notes. Observed evidence below is not rewritten."
+            />
             <pre className="p-3 rounded bg-black/70 border border-[var(--theme-border)] text-stone-200 whitespace-pre-wrap leading-relaxed select-text">
               {String(selectedBody.markdown || JSON.stringify(selectedBody, null, 2)).slice(0, 12000)}
             </pre>

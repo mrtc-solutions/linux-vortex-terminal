@@ -116,10 +116,58 @@ class GgufDiscoveryTests(unittest.TestCase):
         self.assertIn("Llama-3.2-3B-Instruct-Q4_K_M.gguf", found["curated_missing"])
         self.assertIn("Qwen2.5-3B-Instruct-Q4_K_M.gguf", found["curated_missing"])
 
+    def test_engine_status_reports_llamafile_when_other_engines_absent(self):
+        with patch("backend.models.gguf._python_engine_available", return_value=False), \
+             patch("backend.models.gguf._trusted_cli", return_value=None), \
+             patch("backend.models.gguf._llamafile_cli", return_value="/usr/bin/llamafile"):
+            status = gguf_provider.engine_status()
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(status["llamafile"], "/usr/bin/llamafile")
+        self.assertIn("llamafile", status["detail"])
+
+    def test_local_advisor_lists_discovered_gguf_files(self):
+        from backend.agents.local import ADAPTER
+
+        _write_gguf(self.models / "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
+        _write_gguf(self.models / "Qwen2.5-3B-Instruct-Q4_K_M.gguf")
+        with patch("backend.models.gguf._python_engine_available", return_value=False), \
+             patch("backend.models.gguf._trusted_cli", return_value=None), \
+             patch("backend.models.gguf._llamafile_cli", return_value=None):
+            result = ADAPTER.submit_task({
+                "id": "t-gguf",
+                "observation": {"legal_adapters": ["linux.system.identity"], "missing_tools": []},
+            })
+        self.assertEqual(result["state"], "responded")
+        self.assertIsNone(result["result"])
+        self.assertIn("THINK:", result["message"])
+        self.assertIn("RECOMMEND:", result["message"])
+        self.assertIn("Llama-3.2-3B-Instruct-Q4_K_M.gguf", result["message"])
+        self.assertIn("Qwen2.5-3B-Instruct-Q4_K_M.gguf", result["message"])
+        self.assertIn("engine", result["message"].lower())
+        self.assertIn("install package", result["message"])
+
+    def test_complete_uses_llamafile_one_shot_when_other_engines_absent(self):
+        binary = Path(self.tmp.name) / "llamafile"
+        binary.write_text("#!/bin/sh\necho llamafile-gguf-ok\n")
+        binary.chmod(0o755)
+        _write_gguf(self.models / "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
+        entry = {
+            "path": str(self.models / "Llama-3.2-3B-Instruct-Q4_K_M.gguf"),
+            "family": "llama",
+            "name": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        }
+        with patch("backend.models.gguf._python_engine_available", return_value=False), \
+             patch("backend.models.gguf._trusted_cli", return_value=None), \
+             patch("backend.models.gguf._llamafile_cli", return_value=str(binary)):
+            result = gguf_provider.complete(entry, "sys", "{}", timeout=5)
+        self.assertEqual(result["engine"], "llamafile")
+        self.assertIn("llamafile-gguf-ok", result["text"])
+
     def test_status_unavailable_without_engine_is_honest(self):
         _write_gguf(self.models / "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
         with patch("backend.models.gguf._python_engine_available", return_value=False), \
-             patch("backend.models.gguf._trusted_cli", return_value=None):
+             patch("backend.models.gguf._trusted_cli", return_value=None), \
+             patch("backend.models.gguf._llamafile_cli", return_value=None):
             snapshot = gguf_provider.status({"gguf_enabled": True})
         self.assertEqual(snapshot["state"], "unavailable")
         self.assertIn("engine", snapshot["reason"].lower())
@@ -143,11 +191,21 @@ class GgufDiscoveryTests(unittest.TestCase):
         low = gguf_provider.tuning_for_host({"gguf_ctx": 2048, "gguf_threads": 4})
         self.assertEqual(low["n_ctx"], 2048)
 
+    def test_tight_2gb_profile_caps_context_and_threads(self):
+        with patch.object(gguf_provider, "_mem_total_mb", return_value=2048):
+            tight = gguf_provider.tuning_for_host({"gguf_ctx": 2048, "gguf_threads": 4})
+        self.assertEqual(tight["n_ctx"], 512)
+        self.assertEqual(tight["n_threads"], 2)
+        self.assertEqual(tight["profile"], "tight")
+        self.assertLessEqual(tight["n_predict"], 96)
+
     def test_ram_fit_reports_8gb_target(self):
         fit = gguf_provider.ram_fit(2 * 1024 ** 3)
         self.assertIn("fits_8gb", fit)
+        self.assertIn("fits_2gb", fit)
         self.assertIsNotNone(fit["resident_mb"])
         self.assertGreater(fit["resident_mb"], 2048)
+        self.assertFalse(fit["fits_2gb"])
 
     def test_prompt_templates_differ_per_family(self):
         llama = gguf_provider.build_prompt("llama", "sys", "{}")

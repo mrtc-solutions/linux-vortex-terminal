@@ -49,7 +49,7 @@ const POST_ROUTES = [
   new RegExp(`^/api/conversations/${SAFE_ID}/(?:rename|archive|delete)$`),
   new RegExp(`^/api/conversations/${SAFE_ID}/messages/${SAFE_ID}/edit$`),
   new RegExp(`^/api/tasks/${SAFE_ID}/(?:restart|resume|delete|pause)$`),
-  new RegExp(`^/api/reports/${SAFE_ID}/delete$`),
+  new RegExp(`^/api/reports/${SAFE_ID}/(?:delete|rename|edit)$`),
   new RegExp(`^/api/plans/${SAFE_ID}/reject$`),
   new RegExp('^/api/agent/runs$'),
   new RegExp(`^/api/agent/runs/${SAFE_ID}/(?:approve|stop)$`)

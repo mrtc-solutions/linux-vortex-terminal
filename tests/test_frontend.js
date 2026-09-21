@@ -75,6 +75,9 @@ assert.ok(app.includes('Vortex Terminal never reads your password'), 'root packa
 // conversation renames its reports; next steps are one-click follow-ups; a
 // canvas failure can never kill app wiring.
 assert.ok(workspace.includes('data-report-preview') && workspace.includes('data-report-delete'), 'report cards carry PREVIEW and DELETE actions');
+assert.ok(workspace.includes('data-report-rename') && workspace.includes('data-report-notes'), 'report cards carry RENAME and NOTES actions');
+assert.ok(workspace.includes("api(`/api/reports/${encodeURIComponent(id)}/rename`"), 'report RENAME posts to the real route');
+assert.ok(workspace.includes("api(`/api/reports/${encodeURIComponent(id)}/edit`"), 'report NOTES posts to the real edit route');
 assert.ok(workspace.includes("api(`/api/reports/${encodeURIComponent(btn.dataset.reportDelete)}/delete`"), 'report DELETE posts to the real route');
 assert.ok(workspace.includes('async function previewReport') && workspace.includes('api(`/api/reports/${encodeURIComponent(reportId)}`)') && workspace.includes('data.markdown'), 'report preview loads the real markdown through the authenticated JSON route');
 assert.ok(backend.includes('len(path.split("/")) == 4') && backend.includes('"markdown": data.decode'), 'single-report JSON route serves the preview markdown');
@@ -190,6 +193,51 @@ assert.ok(app.includes("$('download-deb-settings')?.addEventListener('click', do
 // wraps instead of clipping controls, and DOWNLOAD APK stays in the topbar.
 assert.ok(index.includes('class="nav-item" id="open-help"') && index.includes('class="nav-item" id="open-about"'), 'HELP and ABOUT launchers live in the sidebar nav');
 assert.ok(!index.includes('class="secondary-button" id="open-help"') && !index.includes('class="secondary-button" id="open-about"'), 'topbar no longer carries HELP/ABOUT');
+assert.ok(index.includes('Francis Fweta, certified cybersecurity specialist and developer'), 'legacy About names Francis Fweta with the certified specialist identity');
+assert.ok(index.includes('started in 2025') && index.includes('04 August 2026'), 'legacy About records start and release dates');
+assert.ok(index.includes('Theodora (born 2026)'), 'legacy About is dedicated to Theodora');
+
+const headerBar = read('src/components/HeaderBar.tsx');
+const aboutReact = read('src/components/popups/About.tsx');
+assert.ok(headerBar.includes('<span>GUI</span>') && headerBar.includes('aria-label="Open graphical UI"'), 'React header has a visible GUI button');
+assert.ok(headerBar.includes('title="Vortex Terminal start menu"'), 'GUI button keeps the start-menu title real Electron/Playwright clicks');
+const iconPng = path.join(__dirname, '..', 'assets', 'icons', 'vortex.png');
+assert.ok(fs.existsSync(iconPng), 'app icon PNG exists for npm start and apt install');
+assert.deepStrictEqual([...fs.readFileSync(iconPng).subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const desktopEntry = read('packaging/deb/vortex.desktop');
+assert.ok(desktopEntry.includes('Icon=vortex') && desktopEntry.includes('Exec=vortex serve'), 'apt .desktop file names the real icon and serve command');
+assert.ok(headerBar.includes('<span>Help</span>') && headerBar.includes("onOpenPopup('helpwin')"), 'React header has a visible Help button');
+assert.ok(headerBar.includes('<span>About</span>') && headerBar.includes("onOpenPopup('about')"), 'React header has a visible About button');
+assert.ok(headerBar.includes('<span>History</span>') && headerBar.includes("onOpenPopup('history')"), 'React header has a visible History button');
+assert.ok(headerBar.includes('<span>Dependencies</span>') && headerBar.includes("onOpenPopup('dependencies')"), 'React header opens the host dependencies popup');
+const appTsx = read('src/App.tsx');
+assert.ok(appTsx.includes('ConversationHistoryBar'), 'React shell mounts a persistent conversation history bar');
+const historyBar = read('src/components/ConversationHistoryBar.tsx');
+assert.ok(historyBar.includes('listConversations') && historyBar.includes('onSelect'), 'history bar resumes conversations from the sidecar');
+const reportsReact = read('src/components/ReportGeneratorModal.tsx');
+assert.ok(reportsReact.includes('editReport') && reportsReact.includes('Save title & notes'), 'React reports tab can rename and edit notes');
+const historyPopup = read('src/components/popups/History.tsx');
+assert.ok(historyPopup.includes('onClick={() => void resume(id)}'), 'History popup titles resume the conversation canvas');
+const agentReach = read('src/components/AgentReachInspector.tsx');
+assert.ok(agentReach.includes('listTools') && agentReach.includes('install package ${name}'), 'Agent Reach inventories FOSS tools and plans installs via typed install package');
+assert.ok(agentReach.includes("onOpenPopup?.('agent')") && agentReach.includes('think → plan → Guardian → execute'), 'Agent Reach opens the real Agent Mode loop');
+const depsReact = read('src/components/popups/Dependencies.tsx');
+assert.ok(depsReact.includes("filter === 'present'") && depsReact.includes("filter === 'missing'"), 'Dependencies popup lists present and missing items');
+assert.ok(depsReact.includes('Refresh') && depsReact.includes('Rescan host'), 'Dependencies popup can refresh after a locate error');
+assert.ok(depsReact.includes('Open Models (import GGUF)'), 'Dependencies popup can open Models for a manual GGUF import');
+const windowMgr = read('src/components/WindowManager.tsx');
+assert.ok(windowMgr.includes('Minimise') && windowMgr.includes('Maximise') && windowMgr.includes('Exit'), 'Every React popup has Minimise, Maximise, and Exit');
+assert.ok(appTsx.includes("openPopup('dependencies')"), 'React shell auto-opens the host dependencies popup');
+assert.ok(fs.existsSync(path.join(__dirname, '..', 'docs', 'SETUP.md')), 'new-PC setup guide exists');
+assert.ok(fs.existsSync(path.join(__dirname, '..', 'models', 'README.md')), 'models/ README explains GGUF files are not in Git');
+assert.ok(read('packaging/setup-manifest.json').includes('linux-vortex-terminal'), 'setup manifest names the apt package');
+assert.ok(aboutReact.includes('Francis Fweta, certified cybersecurity specialist and developer'), 'React About names Francis Fweta');
+assert.ok(aboutReact.includes('started in 2025') && aboutReact.includes('04 August 2026'), 'React About records start and release dates');
+assert.ok(aboutReact.includes('Theodora (born 2026)'), 'React About is dedicated to Theodora');
+
+const systemPanel = read('src/components/popups/SystemPanel.tsx');
+assert.ok(systemPanel.includes('health?.components'), 'React System panel renders sidecar health components');
+assert.ok(systemPanel.includes('Docker, Podman'), 'React System panel names Podman in the rescan copy');
 assert.ok(/\.topbar ?\{[^}]*flex-wrap:wrap/.test(styles), 'topbar wraps instead of clipping its controls');
 assert.ok(/\.top-actions ?\{[^}]*flex-wrap:wrap/.test(styles), 'top actions wrap instead of overflowing');
 assert.ok(app.includes("api('/api/tools/host/rescan'"), 'PATH rescan posts to the host-tools endpoint');

@@ -58,11 +58,7 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
     agents = discover()
     agent_healthy = sum(1 for item in agents if item.get("health", {}).get("healthy"))
     docker = probe_executable("docker", include_version=False)
-    if docker.get("state") != "installed":
-        docker = probe_executable("podman", include_version=False)
-        docker_name = "podman"
-    else:
-        docker_name = "docker"
+    podman = probe_executable("podman", include_version=False)
     node = probe_executable("node", include_version=False)
     npm = probe_executable("npm", include_version=False)
     pnpm = probe_executable("pnpm", include_version=False)
@@ -111,7 +107,20 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
         "pnpm": _binary_component(pnpm, "optional package manager"),
         "yarn": _binary_component(yarn, "optional package manager"),
         "go": _binary_component(go, "optional toolchain for Go-based security tools"),
-        "docker": {"state": "healthy" if docker.get("state") == "installed" else "unavailable", "runtime": docker_name if docker.get("state") == "installed" else None, "probe": docker.get("state")},
+        "docker": {
+            "state": "healthy" if docker.get("state") == "installed" else ("warning" if docker.get("state") == "blocked" else "unavailable"),
+            "runtime": "docker" if docker.get("state") == "installed" else None,
+            "probe": docker.get("state"),
+            "path": docker.get("path"),
+            "security_flags": docker.get("security_flags") or [],
+        },
+        "podman": {
+            "state": "healthy" if podman.get("state") == "installed" else ("warning" if podman.get("state") == "blocked" else "unavailable"),
+            "runtime": "podman" if podman.get("state") == "installed" else None,
+            "probe": podman.get("state"),
+            "path": podman.get("path"),
+            "security_flags": podman.get("security_flags") or [],
+        },
         "ollama": {
             "state": ollama.get("state") or ("installed" if ollama_binary.get("state") == "installed" else "unavailable"),
             "binary_state": ollama_binary.get("state"),
@@ -164,7 +173,11 @@ def collect(store: Any, sessions: Any | None = None, settings: dict[str, Any] | 
         "tools": tools,
         "which_git": bool(shutil.which("git")),
         "which_python": bool(shutil.which("python3")),
-        "which_docker": bool(shutil.which("docker") or shutil.which("podman")),
+        "which_docker": bool(
+            shutil.which("docker") or shutil.which("podman")
+            or Path("/usr/bin/docker").is_file() or Path("/usr/local/bin/docker").is_file()
+            or Path("/usr/bin/podman").is_file() or Path("/usr/local/bin/podman").is_file()
+        ),
     }
 
 
@@ -183,7 +196,7 @@ def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str
     pnpm_ok = health["components"]["pnpm"]["state"] in {"healthy", "warning"}
     yarn_ok = health["components"]["yarn"]["state"] in {"healthy", "warning"}
     go_ok = health["components"]["go"]["state"] in {"healthy", "warning"}
-    docker = health["components"]["docker"]["state"] == "healthy"
+    docker = health["components"]["docker"]["state"] == "healthy" or health["components"]["podman"]["state"] == "healthy"
     ollama = health["components"]["ollama"]["state"] == "healthy"
     model_pool = health["components"]["model_pool"]["state"] == "healthy"
     db_ok = health["components"]["database"]["state"] == "healthy"
@@ -208,7 +221,11 @@ def setup_checks(store: Any, settings: dict[str, Any] | None = None) -> dict[str
         {"id": "pnpm", "title": "pnpm", "ok": pnpm_ok, "required": False, "detail": health["components"]["pnpm"].get("available")},
         {"id": "yarn", "title": "yarn", "ok": yarn_ok, "required": False, "detail": health["components"]["yarn"].get("available")},
         {"id": "go", "title": "Go", "ok": go_ok, "required": False, "detail": health["components"]["go"].get("available")},
-        {"id": "docker", "title": "Docker or Podman", "ok": docker, "required": False, "detail": health["components"]["docker"].get("probe")},
+        {"id": "docker", "title": "Docker or Podman", "ok": docker, "required": False, "detail": (
+            "podman " + str(health["components"]["podman"].get("probe"))
+            if health["components"]["podman"].get("state") == "healthy"
+            else "docker " + str(health["components"]["docker"].get("probe"))
+        )},
         {"id": "tools", "title": "Linux tools", "ok": tools_n > 0, "required": True, "detail": f"{tools_n} detected"},
         {"id": "agents", "title": "AI advisor", "ok": str(agents_n).split("/")[0] not in {"0", "None", ""}, "required": False, "detail": f"{agents_n} available (built-in advisor)"},
         {"id": "ollama", "title": "Local model runtime (Ollama)", "ok": ollama, "required": False, "detail": health["components"]["ollama"].get("state")},

@@ -51,6 +51,7 @@ export const SystemPanel: React.FC = () => {
 
   const host = asRecord(health?.host) as JsonRecord;
   const distribution = asRecord(host.distribution) as JsonRecord;
+  const components = asRecord(health?.components);
   const services = asRecord(health?.services);
   const probes = asRecord(health?.probes);
 
@@ -78,6 +79,26 @@ export const SystemPanel: React.FC = () => {
             {kv('shell', String(host.shell || 'unknown'))}
             {kv('container', String(host.container ?? 'unknown'))}
             {kv('support tier', String(host.support_tier || 'unknown'))}
+          </div>
+        </Section>
+      )}
+
+      {Object.keys(components).length > 0 && (
+        <Section title="Components">
+          <div className="grid grid-cols-1 gap-1.5">
+            {Object.entries(components).map(([name, detail]) => {
+              const item = asRecord(detail);
+              const extra = [item.runtime, item.path, item.available, item.version]
+                .filter((value) => value !== undefined && value !== null && String(value).length > 0)
+                .map((value) => String(value));
+              return (
+                <div key={name} className="flex items-center gap-2 p-1.5 rounded bg-black/50 border border-[var(--theme-border)] text-[11px]">
+                  <span className="text-stone-200 font-bold">{name.replace(/_/g, ' ')}</span>
+                  <StateBadge state={String(item.state || 'unknown')} />
+                  {extra.length ? <span className="text-stone-500 font-mono truncate">{extra.slice(0, 3).join(' · ')}</span> : null}
+                </div>
+              );
+            })}
           </div>
         </Section>
       )}
@@ -128,7 +149,7 @@ export const SystemPanel: React.FC = () => {
           </GhostButton>
         </div>
         {audit && <div className="text-[11px] text-emerald-300 font-mono">{audit}</div>}
-        <div className="text-[10px] text-stone-600">Rescan re-probes host tools, Docker, network facts, and model providers. It can take up to a minute.</div>
+        <div className="text-[10px] text-stone-600">Rescan re-probes host tools, Docker, Podman, network facts, and model providers. It can take up to a minute.</div>
       </Section>
     </div>
   );

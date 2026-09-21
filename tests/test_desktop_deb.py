@@ -57,7 +57,7 @@ class DesktopDebTests(unittest.TestCase):
         # Runtime resources needed by the installed package remain available;
         # in particular its live package builder must not point at missing files.
         share = extract / "usr" / "share" / "vortex"
-        for relative in ("LICENSE", "NOTICE", "packaging/deb/build.sh", "packaging/deb/vortex.1", "packaging/deb/vortex.desktop"):
+        for relative in ("LICENSE", "NOTICE", "packaging/deb/build.sh", "packaging/deb/vortex.1", "packaging/deb/vortex.desktop", "docs/SETUP.md", "models/README.md", "packaging/setup-manifest.json"):
             self.assertTrue((share / relative).is_file(), f"{relative} must ship for installed runtime parity")
         react = share / "dist" / "index.html"
         self.assertTrue(react.is_file(), "React production build must ship")
@@ -77,7 +77,14 @@ class DesktopDebTests(unittest.TestCase):
         desktop_entry = (extract / "usr" / "share" / "applications" / "vortex.desktop").read_text(encoding="utf-8")
         self.assertIn("Exec=vortex serve", desktop_entry)
         self.assertIn("Name=Vortex Terminal", desktop_entry)
+        self.assertIn("Icon=vortex", desktop_entry)
         self.assertTrue((extract / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps" / "vortex.svg").is_file())
+        pixmap = extract / "usr" / "share" / "pixmaps" / "vortex.png"
+        self.assertTrue(pixmap.is_file(), "apt-installed menu needs a pixmap icon")
+        self.assertEqual(pixmap.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+        png48 = extract / "usr" / "share" / "icons" / "hicolor" / "48x48" / "apps" / "vortex.png"
+        self.assertTrue(png48.is_file(), "hicolor 48x48 icon must ship for Linux menus")
+        self.assertEqual(png48.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
         # CLI entry point and man page ship.
         self.assertTrue((extract / "usr" / "bin" / "vortex").is_file())
         self.assertTrue((extract / "usr" / "share" / "man" / "man1" / "vortex.1.gz").is_file())
@@ -131,6 +138,18 @@ class DesktopDebTests(unittest.TestCase):
     def test_frontend_digest_matches_live_tree(self):
         result = build_deb()
         self.assertEqual(result["frontend_digest"], frontend_digest())
+
+    def test_source_tree_ships_real_png_icons_for_npm_start(self):
+        root = Path(__file__).resolve().parent.parent
+        png = root / "assets" / "icons" / "vortex.png"
+        self.assertTrue(png.is_file(), "Electron/npm start needs assets/icons/vortex.png")
+        self.assertEqual(png.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+        main = (root / "desktop" / "main.js").read_text(encoding="utf-8")
+        self.assertIn("assets', 'icons', 'vortex.png'", main)
+        self.assertIn("nativeImage", main)
+        desktop = (root / "packaging" / "deb" / "vortex.desktop").read_text(encoding="utf-8")
+        self.assertIn("Icon=vortex", desktop)
+        self.assertIn("Exec=vortex serve", desktop)
 
     def test_missing_dpkg_deb_is_an_honest_error(self):
         with mock.patch("backend.debbuild._trusted_tool", side_effect=RuntimeError("A trusted dpkg-deb executable is required")):

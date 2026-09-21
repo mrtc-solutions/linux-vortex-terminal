@@ -52,7 +52,11 @@ fi
 mkdir -p "$out" "$stage/DEBIAN" "$stage/usr/share/vortex" "$stage/usr/share/man/man1" \
   "$stage/usr/share/bash-completion/completions" "$stage/usr/share/zsh/vendor-completions" \
   "$stage/usr/share/fish/vendor_completions.d" "$stage/usr/bin" "$stage/usr/share/doc/$package" \
-  "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/scalable/apps"
+  "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/scalable/apps" \
+  "$stage/usr/share/icons/hicolor/16x16/apps" "$stage/usr/share/icons/hicolor/24x24/apps" \
+  "$stage/usr/share/icons/hicolor/32x32/apps" "$stage/usr/share/icons/hicolor/48x48/apps" \
+  "$stage/usr/share/icons/hicolor/64x64/apps" "$stage/usr/share/icons/hicolor/128x128/apps" \
+  "$stage/usr/share/icons/hicolor/256x256/apps" "$stage/usr/share/pixmaps"
 
 # The production React shell is a self-contained, CSP-hashed document.
 # Never silently release the legacy UI because the frontend build was omitted.
@@ -101,12 +105,26 @@ done
 for source in README.md hooded-researcher.svg; do
   install -D -m 0644 "$root/assets/$source" "$stage/usr/share/vortex/assets/$source"
 done
+if [[ -d "$root/assets/icons" ]]; then
+  while IFS= read -r -d '' icon; do
+    install -D -m 0644 "$icon" "$stage/usr/share/vortex/assets/icons/$(basename "$icon")"
+  done < <(find "$root/assets/icons" -type f \( -name 'vortex.svg' -o -name 'vortex.png' -o -name 'vortex-*.png' \) -print0)
+fi
 for source in vortex.bash vortex.zsh vortex.fish; do
   install -D -m 0644 "$root/assets/completions/$source" "$stage/usr/share/vortex/assets/completions/$source"
 done
 for source in README.md LICENSE LICENSES.md NOTICE SECURITY.md; do
   install -D -m 0644 "$root/$source" "$stage/usr/share/vortex/$source"
 done
+if [[ -f "$root/docs/SETUP.md" ]]; then
+  install -D -m 0644 "$root/docs/SETUP.md" "$stage/usr/share/vortex/docs/SETUP.md"
+fi
+if [[ -f "$root/models/README.md" ]]; then
+  install -D -m 0644 "$root/models/README.md" "$stage/usr/share/vortex/models/README.md"
+fi
+if [[ -f "$root/packaging/setup-manifest.json" ]]; then
+  install -D -m 0644 "$root/packaging/setup-manifest.json" "$stage/usr/share/vortex/packaging/setup-manifest.json"
+fi
 for source in build.sh make-repo.sh install-repo.sh vortex.1 vortex.desktop; do
   mode=0644
   [[ "$source" == *.sh ]] && mode=0755
@@ -124,7 +142,21 @@ cp "$root/assets/completions/vortex.fish" "$stage/usr/share/fish/vendor_completi
 # Desktop integration: menu entry + icon. Operator-started only (vortex serve
 # binds loopback); no maintainer scripts, no autostart, no user data.
 cp "$root/packaging/deb/vortex.desktop" "$stage/usr/share/applications/vortex.desktop"
-cp "$root/assets/hooded-researcher.svg" "$stage/usr/share/icons/hicolor/scalable/apps/vortex.svg"
+icon_svg="$root/assets/icons/vortex.svg"
+if [[ ! -f "$icon_svg" ]]; then
+  icon_svg="$root/assets/hooded-researcher.svg"
+fi
+cp "$icon_svg" "$stage/usr/share/icons/hicolor/scalable/apps/vortex.svg"
+# Raster sizes so menus that ignore SVG still show a real Vortex icon.
+for size in 16 24 32 48 64 128 256; do
+  png="$root/assets/icons/vortex-${size}.png"
+  if [[ -f "$png" ]]; then
+    cp "$png" "$stage/usr/share/icons/hicolor/${size}x${size}/apps/vortex.png"
+  fi
+done
+if [[ -f "$root/assets/icons/vortex.png" ]]; then
+  cp "$root/assets/icons/vortex.png" "$stage/usr/share/pixmaps/vortex.png"
+fi
 
 cat > "$stage/usr/bin/vortex" <<'WRAPPER'
 #!/bin/sh

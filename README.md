@@ -23,7 +23,12 @@ trusted. Nothing is fabricated to make the UI look complete.
 
 ## Quick start
 
-Requires Linux and Python 3.11+. Core use has no pip dependency.
+Requires Linux and Python 3.10+. Core use has no pip dependency.
+
+**Minimum hardware (not a maximum):** 2 GB RAM, 2 GHz Intel i5-class CPU (or
+equivalent). More RAM/CPU is used automatically (larger GGUF context, more
+parallel advisors). Local LLM weights are **not** in GitHub — see
+[`docs/SETUP.md`](docs/SETUP.md) and [`models/README.md`](models/README.md).
 
 Run every command below from the repository root (`cd linux-vortex-terminal`
 after cloning) — `npm` and `./vortex` only resolve inside the checkout, so
@@ -268,6 +273,7 @@ records that it does not know the host outcome rather than inferring success.
 ## Documentation
 
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed in every release
+- [`docs/SETUP.md`](docs/SETUP.md) — new PC: `sudo apt install`, what ships vs local LLMs
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — install, test, and operate as a real app
 - [`docs/STATUS.md`](docs/STATUS.md) — tested vs remaining gates
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow

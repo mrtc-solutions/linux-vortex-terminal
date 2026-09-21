@@ -1,0 +1,39 @@
+{
+  "product": "Vortex Terminal",
+  "package": "linux-vortex-terminal",
+  "apt": {
+    "install_from_github_checkout": "sudo apt install ./dist/deb/linux-vortex-terminal_<version>_all.deb",
+    "install_by_name": "sudo apt install linux-vortex-terminal",
+    "note": "GitHub is not an apt mirror. Build the .deb or register packaging/deb/install-repo.sh first. No maintainer scripts; install never downloads models."
+  },
+  "ships_in_deb": [
+    "backend/",
+    "cli/",
+    "frontend/",
+    "dist/index.html",
+    "assets/icons/",
+    "packaging/deb/",
+    "docs/SETUP.md",
+    "models/README.md"
+  ],
+  "never_ships": [
+    "*.gguf",
+    "Ollama model blobs",
+    "Electron platform binary (optional npm start download)"
+  ],
+  "minimum_hardware": {
+    "ram_mb": 2048,
+    "cpu_ghz": 2.0,
+    "cpu_class": "i5",
+    "note": "Minimum, not exclusive."
+  },
+  "local_llm": {
+    "gguf_dir": "models/",
+    "files": [
+      "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+      "Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+    ],
+    "engine": ["llama-cpp-python", "llama-cli", "llamafile"],
+    "silent_download": false
+  }
+}

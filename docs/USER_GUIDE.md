@@ -19,11 +19,15 @@ when you are ready.
 | Requirement | Why |
 |---|---|
 | Linux: Debian 12+, Ubuntu 22.04+, Mint 21+, Kali rolling | Only supported platforms (Python 3.10+) |
-| Python 3.11+ | Core CLI and sidecar; **no pip packages required** |
+| **Minimum 2 GB RAM, 2 GHz i5-class CPU** | Floor, not a cap. More RAM uses a higher local-AI profile. |
+| Python 3.10+ | Core CLI and sidecar; **no pip packages required** |
 | `git` | Clone the repository |
 | Optional: Node 20+ + Electron | Desktop window |
 | Optional: `nmap`, `curl`, `nuclei`, … | Security adapters (engagement required) |
 | Optional: Docker/Podman, Ollama, agent CLIs | Probed; stay UNAVAILABLE if missing |
+| Optional: GGUF files in `models/` | On-device LLM; **not** shipped in GitHub or the `.deb` |
+
+New PC walkthrough (apt + what you still download): [`SETUP.md`](SETUP.md).
 
 Installing Vortex Terminal does **not** apt-install Kali tools, Docker, or agents.
 

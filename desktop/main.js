@@ -1,8 +1,9 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, session, shell, nativeImage } = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const { attachWindowState, registerWindowControls } = require('./window-controls');
 const {
@@ -141,11 +142,32 @@ function secureNavigation(win) {
   });
 }
 
+function appIcon() {
+  const candidates = [
+    path.join(__dirname, '..', 'assets', 'icons', 'vortex.png'),
+    path.join(__dirname, '..', 'assets', 'icons', 'vortex-256.png'),
+    path.join(__dirname, '..', 'assets', 'icons', 'vortex-512.png'),
+    path.join(__dirname, '..', 'assets', 'icons', 'vortex.svg'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const image = nativeImage.createFromPath(candidate);
+      if (!image.isEmpty()) return image;
+    } catch (_) {
+      // Try the next real file; never skip opening a window because of art.
+    }
+  }
+  return undefined;
+}
+
 function createWindow() {
+  const icon = appIcon();
   const win = new BrowserWindow({
     title: 'Vortex Terminal // Linux Orchestration',
     width: 1440, height: 940, minWidth: 960, minHeight: 680,
     backgroundColor: '#0a0a0c', show: false,
+    ...(icon ? { icon } : {}),
     // Linux desktop decorations vary by window manager. Vortex Terminal owns a visible,
     // tested title bar so minimize/maximize/close remain available everywhere.
     frame: false,

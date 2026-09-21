@@ -505,6 +505,38 @@ class Workspace:
             cursor = db.execute("DELETE FROM reports WHERE id=?", (report_id,))
             return cursor.rowcount > 0
 
+    def rename_report(self, report_id: str, title: str) -> dict[str, Any] | None:
+        title = (title or "").strip()[:160]
+        if not title:
+            raise ValueError("title is required")
+        with self.store.lock, self.store.connect() as db:
+            cursor = db.execute("UPDATE reports SET title=? WHERE id=?", (title, report_id))
+            if cursor.rowcount <= 0:
+                return None
+        return self.get_report(report_id)
+
+    def edit_report(self, report_id: str, *, title: str | None = None, notes: str | None = None) -> dict[str, Any] | None:
+        """Operator-facing edits: rename and/or attach notes. Observed evidence is not rewritten."""
+        item = self.get_report(report_id)
+        if not item:
+            return None
+        new_title = item.get("title") or "Vortex Terminal report"
+        if title is not None:
+            cleaned = title.strip()[:160]
+            if not cleaned:
+                raise ValueError("title is required")
+            new_title = cleaned
+        body = dict(item.get("body") or {})
+        if notes is not None:
+            body["operator_notes"] = notes.strip()[:20000]
+            body["operator_edited_at"] = now_iso()
+        with self.store.lock, self.store.connect() as db:
+            db.execute(
+                "UPDATE reports SET title=?, body_json=? WHERE id=?",
+                (new_title, canonical(body), report_id),
+            )
+        return self.get_report(report_id)
+
     def find_task_by_plan(self, plan_id: str) -> dict[str, Any] | None:
         with self.store.connect() as db:
             row = db.execute("SELECT * FROM tasks WHERE plan_id=? ORDER BY updated_at DESC LIMIT 1", (plan_id,)).fetchone()

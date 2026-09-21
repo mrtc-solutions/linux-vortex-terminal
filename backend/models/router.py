@@ -210,7 +210,13 @@ def hardware_profile(sample_path: str | None = None) -> dict[str, Any]:
         mode = "unknown"
         max_loaded = 1
         max_parallel = 1
-        context_tokens = 2048
+        context_tokens = 512
+        queue_depth = 1
+    elif mem_total_mb <= 2560:
+        mode = "tight"
+        max_loaded = 1
+        max_parallel = 1
+        context_tokens = 512
         queue_depth = 1
     elif mem_total_mb <= 8192 or (mem_available_mb is not None and mem_available_mb < 2048) or cpu <= 4:
         mode = "low-resource"
@@ -246,6 +252,12 @@ def hardware_profile(sample_path: str | None = None) -> dict[str, Any]:
         "context_tokens": context_tokens,
         "task_queue_depth": queue_depth,
         "recommended_strategy": "sequential" if max_parallel == 1 else "bounded-multi-model",
+        "minimum_requirements": {
+            "ram_mb": 2048,
+            "cpu_ghz": 2.0,
+            "cpu_class": "i5",
+            "note": "Minimum, not exclusive. Hosts with more RAM/CPU use a higher resource profile automatically.",
+        },
     }
 
 
@@ -702,7 +714,7 @@ def choose_route(request: str, plan: dict[str, Any] | None = None, operation: di
     if len(str(request or "")) > 180:
         complex_task = True
     max_models = int(resources.get("max_parallel_models") or 1)
-    if resources.get("mode") == "low-resource":
+    if resources.get("mode") in {"low-resource", "tight", "unknown"}:
         max_models = 1
     max_models = max(1, min(max_models, int(settings.get("model_max_parallel", max_models) or max_models), 3))
     if phase == "plan":

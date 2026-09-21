@@ -311,6 +311,122 @@ def _load_runtime_settings() -> dict[str, Any]:
     return load_settings()
 
 
+GGUF_MANUAL_SOURCES: tuple[dict[str, str], ...] = (
+    {
+        "filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        "role": "fast conversation / explanation",
+        "source": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF",
+    },
+    {
+        "filename": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+        "role": "planning / analysis advisory",
+        "source": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF",
+    },
+)
+
+
+def _gguf_items() -> list[dict[str, Any]]:
+    """Curated on-device GGUF files and the local inference engine.
+
+    Weights are never shipped in the GitHub checkout or the .deb — they are
+    too large. The inventory reports presence honestly and points the operator
+    at a reviewed manual download or the Models import picker.
+    """
+    items: list[dict[str, Any]] = []
+    snapshot: dict[str, Any] = {}
+    try:
+        try:
+            from models.gguf import KNOWN_FILES, status as gguf_status
+        except ImportError:
+            from backend.models.gguf import KNOWN_FILES, status as gguf_status  # type: ignore
+        snapshot = gguf_status(_load_runtime_settings()) or {}
+        known = tuple(KNOWN_FILES)
+    except Exception:
+        snapshot = {}
+        known = tuple(row["filename"] for row in GGUF_MANUAL_SOURCES)
+    present = {str(name) for name in (snapshot.get("curated_present") or []) if name}
+    files = {str(item.get("name")): item for item in (snapshot.get("files") or []) if item.get("name")}
+    engine = snapshot.get("engine") if isinstance(snapshot.get("engine"), dict) else {}
+    engine_ready = str(engine.get("state") or "") in {"ready", "test-double"}
+    items.append({
+        "id": "runtime:gguf-engine",
+        "kind": "runtime",
+        "name": "gguf-engine",
+        "title": "GGUF inference engine",
+        "role": "on-device llama.cpp / llamafile",
+        "family": "models",
+        "state": engine.get("state") or "unavailable",
+        "installed": engine_ready,
+        "required": False,
+        "method": "operator-manual",
+        "apt_package": None,
+        "path": engine.get("cli") or engine.get("llamafile"),
+        "version": None,
+        "detail": engine.get("detail") or snapshot.get("reason"),
+        "source": "llama-cpp-python, llama-cli, or managed llamafile",
+    })
+    for row in GGUF_MANUAL_SOURCES:
+        name = row["filename"]
+        if name not in known and name not in present:
+            continue
+        found = files.get(name) or {}
+        installed = bool(found.get("valid")) or name in present
+        items.append({
+            "id": f"data:gguf:{name}",
+            "kind": "dataset",
+            "name": name,
+            "title": name,
+            "role": row["role"],
+            "family": "models",
+            "state": "installed" if installed else "absent",
+            "installed": installed,
+            "required": False,
+            "method": "operator-manual",
+            "apt_package": None,
+            "path": found.get("path"),
+            "version": found.get("quant"),
+            "detail": found.get("reason") or ("Place this file in models/ then tap Refresh." if not installed else "Valid GGUF on this host."),
+            "source": row["source"],
+            "license": "upstream model license (review before download)",
+        })
+    return items
+
+
+def _gguf_proposal(item: dict[str, Any]) -> dict[str, Any]:
+    source = str(item.get("source") or "")
+    name = str(item.get("name") or "")
+    if item.get("id") == "runtime:gguf-engine":
+        commands = [
+            "# Pick one local engine. Vortex Terminal will not pip-install or download for you.",
+            "pip install --user llama-cpp-python",
+            "# or install a llama-cli / llama.cpp binary on a safe PATH",
+            "# or open Models → llamafile and confirm the managed download",
+        ]
+        message = (
+            "On-device GGUF inference needs llama-cpp-python, llama-cli, or llamafile. "
+            "The app stays usable without them (council + deterministic core)."
+        )
+    else:
+        commands = [
+            f"# Review the model card and license: {source}",
+            f"# Download {name} yourself (browser or huggingface-cli). Vortex Terminal never silent-downloads weights.",
+            f"# Place the file in ~/linux-vortex-terminal/models/ or $VORTEX_MODELS_DIR, then tap Refresh.",
+            "# Or open Models and import a local .gguf file already on this disk.",
+        ]
+        message = (
+            f"{name} is not in the GitHub tree or the apt package (weights are too large). "
+            "Download it manually, drop it in models/, then Refresh. Nothing is executed until you do."
+        )
+    return {
+        **item,
+        "auto_install": False,
+        "license": item.get("license") or "Review upstream license terms",
+        "permissions": ["operator-manual", "local-storage", "no-silent-download"],
+        "commands": commands,
+        "message": message,
+    }
+
+
 def _ollama_items() -> list[dict[str, Any]]:
     try:
         from models.router import MODEL_CATALOG, model_status
@@ -502,6 +618,7 @@ def inventory() -> dict[str, Any]:
         })
 
     items.extend(_ollama_items())
+    items.extend(_gguf_items())
 
     # Remote-desktop capability rows are reported with their own state: they are
     # in-tree/bundled components with license and installation requirements, not
@@ -527,6 +644,7 @@ def inventory() -> dict[str, Any]:
         }]
 
     missing = [item for item in items if not item["installed"]]
+    present = [item for item in items if item["installed"]]
     return {
         "product": "Vortex Terminal",
         "auto_install": False,
@@ -534,11 +652,12 @@ def inventory() -> dict[str, Any]:
         "note": "Vortex Terminal never silently installs software and never captures a sudo password.",
         "counts": {
             "total": len(items),
-            "installed": sum(1 for item in items if item["installed"]),
+            "installed": len(present),
             "missing": len(missing),
             "required_missing": sum(1 for item in missing if item["required"]),
         },
         "items": items,
+        "present": present,
         "missing": missing,
         "capabilities": capabilities,
         "remote_desktop": {
@@ -659,6 +778,10 @@ def proposal_for(item_id: str, settings: dict[str, Any] | None = None) -> dict[s
     item = next((row for row in data["items"] if row["id"] == item_id or row["name"] == item_id), None)
     if not item:
         return {"id": item_id, "state": "unknown", "auto_install": False, "message": "Unknown dependency."}
+    if str(item.get("id") or "").startswith("data:gguf:") or item.get("id") == "runtime:gguf-engine":
+        proposal = _gguf_proposal(item)
+        proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)
+        return proposal
     if item["id"] == "runtime:ollama":
         proposal = _ollama_runtime_proposal(item)
         proposal["ai_hint"] = _deps_hint(item_id, proposal, settings)

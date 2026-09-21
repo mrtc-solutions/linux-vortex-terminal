@@ -453,8 +453,10 @@ class FinalValidationTests(unittest.TestCase):
         from backend.config import load_settings
         hw = hardware_profile()
         for key in ("platform", "architecture", "cpu_cores", "ram_total_mb", "gpu",
-                    "mode", "max_parallel_models", "recommended_strategy", "task_queue_depth"):
+                    "mode", "max_parallel_models", "recommended_strategy", "task_queue_depth",
+                    "minimum_requirements"):
             self.assertIn(key, hw)
+        self.assertEqual(hw["minimum_requirements"]["ram_mb"], 2048)
         # On this host we have cores and ram; the profile respects that reality.
         self.assertGreaterEqual(hw["cpu_cores"], 1)
         self.assertIsNone(hw["gpu"])  # no GPU is advertised on this build
@@ -462,7 +464,7 @@ class FinalValidationTests(unittest.TestCase):
         local = status.get("local") or {}
         # The scheduling decision is honest: bounded by the detected resources.
         self.assertIn(local.get("state") or "disabled", ("healthy", "disabled", "unavailable"))
-        self.assertIn(hw["mode"], ("low-resource", "balanced", "roomy"))
+        self.assertIn(hw["mode"], ("tight", "low-resource", "balanced", "roomy", "unknown"))
         self.assertIn(hw["recommended_strategy"], ("sequential", "bounded-multi-model"))
 
     def test_18_gis_satellite_geolocate_never_fabricate(self):
