@@ -2,30 +2,34 @@
    surface: implemented features and host probes. No staged agents. */
 import React, { useCallback, useEffect, useState } from 'react';
 import { Activity, Bot, RefreshCw } from 'lucide-react';
-import { JsonRecord, apiGet, getCapabilities } from '../services/vortexApi';
+import { JsonRecord, apiGet, getCapabilities, listTools } from '../services/vortexApi';
 import { sound } from '../services/soundEffects';
 
 interface AgentReachInspectorProps {
   onExecuteCommand: (cmd: string) => void;
+  onOpenPopup?: (kind: string) => void;
 }
 
-export const AgentReachInspector: React.FC<AgentReachInspectorProps> = ({ onExecuteCommand }) => {
+export const AgentReachInspector: React.FC<AgentReachInspectorProps> = ({ onExecuteCommand, onOpenPopup }) => {
   const [upstream, setUpstream] = useState<JsonRecord>({});
   const [implemented, setImplemented] = useState<string[]>([]);
   const [probes, setProbes] = useState<JsonRecord>({});
+  const [tools, setTools] = useState<JsonRecord[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     setError('');
     try {
-      const [upstreamPayload, capsPayload] = await Promise.all([
+      const [upstreamPayload, capsPayload, toolsPayload] = await Promise.all([
         apiGet<JsonRecord>('/api/agents/upstream'),
         getCapabilities(),
+        listTools(),
       ]);
       setUpstream((upstreamPayload.upstream || {}) as JsonRecord);
       setImplemented(Array.isArray(capsPayload.implemented) ? capsPayload.implemented.map(String) : []);
       setProbes(((capsPayload.host_probes || {}) as JsonRecord));
+      setTools(Array.isArray(toolsPayload.tools) ? toolsPayload.tools as JsonRecord[] : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -125,12 +129,53 @@ export const AgentReachInspector: React.FC<AgentReachInspectorProps> = ({ onExec
           </div>
         </div>
 
-        <button
-          onClick={() => onExecuteCommand('What security tools are installed on this machine?')}
-          className="text-[var(--theme-primary)] hover:underline cursor-pointer text-left"
-        >
-          Ask the terminal about this machine's tooling →
-        </button>
+        <div className="space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wider text-stone-500 font-semibold">
+            Host FOSS tools ({tools.length})
+          </div>
+          <div className="text-[10px] text-stone-600 leading-relaxed">
+            Installed tools are observed on this host. Missing catalog items open a Guardian-reviewed
+            <span className="font-mono"> install package </span> plan — they are never downloaded silently.
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {tools.slice(0, 48).map((tool) => {
+              const name = String(tool.name || '');
+              const state = String(tool.state || 'unknown');
+              const installed = state === 'installed';
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  title={installed ? `${name} is installed` : `Plan install of ${name}`}
+                  onClick={() => onExecuteCommand(installed ? `which ${name}` : `install package ${name}`)}
+                  className={`text-[10px] px-1.5 py-0.5 rounded border cursor-pointer font-mono ${
+                    installed
+                      ? 'text-emerald-300 border-emerald-800 bg-emerald-950/30'
+                      : 'text-stone-400 border-stone-700 bg-black/60 hover:text-[var(--theme-primary)]'
+                  }`}
+                >
+                  {name} · {installed ? 'ready' : 'missing'}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenPopup?.('agent')}
+            className="px-2 py-1 rounded border border-[var(--theme-border)] text-stone-200 hover:text-[var(--theme-primary)] cursor-pointer"
+          >
+            Open Agent Mode (think → plan → Guardian → execute)
+          </button>
+          <button
+            onClick={() => onExecuteCommand('What security tools are installed on this machine?')}
+            className="text-[var(--theme-primary)] hover:underline cursor-pointer text-left"
+          >
+            Ask the terminal about this machine's tooling →
+          </button>
+        </div>
       </div>
     </div>
   );

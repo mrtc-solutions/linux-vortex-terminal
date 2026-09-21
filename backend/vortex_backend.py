@@ -491,6 +491,37 @@ def _safe_executable_dirs() -> tuple[list[str], list[str]]:
     return _SAFE_DIRS_CACHE.get(raw_path, lambda: _compute_safe_dirs(raw_path))
 
 
+_WELL_KNOWN_CONTAINER_BINS = {
+    "docker": ("/usr/bin/docker", "/usr/local/bin/docker", "/bin/docker"),
+    "podman": ("/usr/bin/podman", "/usr/local/bin/podman", "/bin/podman"),
+}
+
+
+def _well_known_container_binary(name: str) -> str | None:
+    """Return a distro-packaged docker/podman path even when PATH is unsafe or incomplete.
+
+    Operators commonly install Podman at ``/usr/bin/podman`` while a user-writable
+    PATH hides it from ``shutil.which``. World/group-writable or set-ID *files*
+    are still refused. A group-writable parent is reported later by
+    ``probe_executable`` and does not hide the runtime.
+    """
+    for candidate in _WELL_KNOWN_CONTAINER_BINS.get(name, ()):
+        try:
+            real = Path(candidate).resolve(strict=True)
+            st = real.stat()
+            mode = stat.S_IMODE(st.st_mode)
+            if real.name != name or not stat.S_ISREG(st.st_mode) or not (mode & 0o111) or (mode & 0o022):
+                continue
+            if st.st_mode & (stat.S_ISUID | stat.S_ISGID):
+                continue
+            if not os.access(real, os.X_OK):
+                continue
+            return str(real)
+        except OSError:
+            continue
+    return None
+
+
 def _resolve_executable_lookup(name: str) -> dict[str, str]:
     if not name or "\x00" in name or (not os.path.isabs(name) and os.sep in name):
         return {"status": "invalid"}
@@ -500,6 +531,9 @@ def _resolve_executable_lookup(name: str) -> dict[str, str]:
     found = shutil.which(name, path=os.pathsep.join(safe_dirs)) if safe_dirs else None
     if found:
         return {"status": "found", "path": found}
+    well_known = _well_known_container_binary(name)
+    if well_known:
+        return {"status": "found", "path": well_known}
     # Distinguish absence from a tool that only exists in an unsafe PATH
     # location; callers must not silently execute the latter.
     unsafe_found = shutil.which(name)
@@ -556,13 +590,21 @@ def probe_executable(name: str, *, include_version: bool = True) -> dict[str, An
             security_flags.append("writable-by-group-or-other")
         if st.st_mode & (stat.S_ISUID | stat.S_ISGID):
             security_flags.append("setuid-or-setgid")
+        # Distro docker/podman often live under a user-writable home or
+        # /usr/local tree on developer hosts. Report the flag, but do not
+        # treat the runtime as missing when the binary itself is not
+        # world/group-writable or set-ID.
+        blocking_flags = [
+            flag for flag in security_flags
+            if not (name in _WELL_KNOWN_CONTAINER_BINS and flag == "writable-parent-directory")
+        ]
         sha = hashlib.sha256()
         with real.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 sha.update(chunk)
         item = {
             "name": name,
-            "state": "blocked" if security_flags else "installed",
+            "state": "blocked" if blocking_flags else "installed",
             "path": str(real),
             "realpath": str(real),
             "device": st.st_dev,
@@ -1854,7 +1896,9 @@ def git_command(adapter_id: str, cwd: Path, *args: str, explanation: str = "") -
 
 def local_container_runtime() -> tuple[str, list[str]] | None:
     """Select a local engine without honoring a remote Docker/Podman context."""
-    if probe_executable("docker")["state"] == "installed":
+    docker = probe_executable("docker")
+    if docker.get("state") == "installed":
+        docker_bin = str(docker.get("realpath") or docker.get("path") or "docker")
         candidates = (Path("/var/run/docker.sock"), Path(f"/run/user/{os.getuid()}/docker.sock"))
         for candidate in candidates:
             try:
@@ -1863,11 +1907,13 @@ def local_container_runtime() -> tuple[str, list[str]] | None:
             except OSError:
                 continue
             if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid in {0, os.getuid()}:
-                return "docker", ["docker", "--host", f"unix://{resolved}"]
-    if probe_executable("podman")["state"] == "installed":
+                return "docker", [docker_bin, "--host", f"unix://{resolved}"]
+    podman = probe_executable("podman")
+    if podman.get("state") == "installed":
         # Explicitly disable Podman's remote mode; local rootless/system storage
         # remains available without contacting a configured SSH/API endpoint.
-        return "podman", ["podman", "--remote=false"]
+        podman_bin = str(podman.get("realpath") or podman.get("path") or "podman")
+        return "podman", [podman_bin, "--remote=false"]
     return None
 
 
@@ -5754,6 +5800,20 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not self.workspace.delete_report(report_id):
                     return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
                 return self._json(200, {"deleted": True, "license": "MIT"})
+            if path.startswith("/api/reports/") and path.endswith("/rename"):
+                report_id = path.split("/")[-2]
+                item = self.workspace.rename_report(report_id, self._text(body, "title") or "")
+                if not item:
+                    return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
+                return self._json(200, {"report": item})
+            if path.startswith("/api/reports/") and path.endswith("/edit"):
+                report_id = path.split("/")[-2]
+                notes = self._optional_str(body, "notes")
+                title = self._optional_str(body, "title")
+                item = self.workspace.edit_report(report_id, title=title, notes=notes)
+                if not item:
+                    return self._json(404, {"error": {"code": "not_found", "message": "report not found"}})
+                return self._json(200, {"report": item})
             if path.startswith("/api/operations/") and path.endswith("/complete-task"):
                 finish_task = _load("orchestrate").finish_task
                 operation_id = path.split("/")[-2]

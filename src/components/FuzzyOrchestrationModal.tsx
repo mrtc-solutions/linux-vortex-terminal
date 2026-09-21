@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { FuzzyConsensusResult } from '../types/terminal';
 import { X, Scale, Cpu, ShieldCheck, CheckCircle2, AlertTriangle, XCircle, Sparkles } from 'lucide-react';
 import { sound } from '../services/soundEffects';
@@ -13,7 +13,33 @@ export const FuzzyOrchestrationModal: React.FC<FuzzyOrchestrationModalProps> = (
   consensus,
   onClose,
 }) => {
+  const [windowState, setWindowState] = useState<'normal' | 'minimized' | 'maximized'>('normal');
   if (!consensus) return null;
+  if (windowState === 'minimized') {
+    return (
+      <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[500] flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-black/80 border border-[var(--theme-border)] font-mono">
+        <button
+          type="button"
+          title="Restore"
+          aria-label="Restore window"
+          onClick={() => { sound.playKeypress(); setWindowState('normal'); }}
+          className="px-2.5 py-1 rounded text-[11px] text-stone-300 hover:text-[var(--theme-primary)] cursor-pointer"
+        >
+          Fuzzy consensus
+        </button>
+        <button
+          type="button"
+          title="Exit"
+          aria-label="Close window"
+          onClick={() => { sound.playKeypress(); onClose(); }}
+          className="px-2 py-1 rounded text-[10px] font-bold text-stone-400 hover:text-rose-400 cursor-pointer"
+        >
+          × Exit
+        </button>
+      </div>
+    );
+  }
+  const maximized = windowState === 'maximized';
 
   const getStatusBadge = (rec: FuzzyConsensusResult['recommendation']) => {
     switch (rec) {
@@ -84,8 +110,8 @@ export const FuzzyOrchestrationModal: React.FC<FuzzyOrchestrationModalProps> = (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-[var(--theme-surface)] border border-[var(--theme-border)] rounded-lg w-full max-w-4xl max-h-[92vh] flex flex-col box-glow shadow-2xl">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm overflow-y-auto ${maximized ? 'p-0' : 'p-4'}`}>
+      <div className={`bg-[var(--theme-surface)] border border-[var(--theme-border)] flex flex-col box-glow shadow-2xl ${maximized ? 'w-full h-full max-w-none max-h-none rounded-none' : 'rounded-lg w-full max-w-4xl max-h-[92vh]'}`}>
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--theme-border)] bg-black/40">
           <div className="flex items-center space-x-2">
@@ -97,15 +123,38 @@ export const FuzzyOrchestrationModal: React.FC<FuzzyOrchestrationModalProps> = (
               Mamdani Centroid Defuzzification
             </span>
           </div>
-          <button
-            onClick={() => {
-              sound.playKeypress();
-              onClose();
-            }}
-            className="text-stone-400 hover:text-white p-1 rounded hover:bg-white/10 transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              title="Minimise"
+              aria-label="Minimize window"
+              onClick={() => { sound.playKeypress(); onClose(); }}
+              className="h-6 px-1.5 rounded text-stone-400 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] text-[10px] font-bold"
+            >
+              — Minimise
+            </button>
+            <button
+              type="button"
+              title="Maximise"
+              aria-label="Maximize window"
+              className="h-6 px-1.5 rounded text-stone-400 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] text-[10px] font-bold"
+            >
+              □ Maximise
+            </button>
+            <button
+              type="button"
+              title="Exit"
+              aria-label="Close window"
+              onClick={() => {
+                sound.playKeypress();
+                onClose();
+              }}
+              className="h-6 px-1.5 rounded text-stone-400 hover:text-rose-400 hover:bg-rose-950/40 text-[10px] font-bold flex items-center gap-1"
+            >
+              <X className="w-3.5 h-3.5" />
+              Exit
+            </button>
+          </div>
         </div>
 
         {/* Content Body */}

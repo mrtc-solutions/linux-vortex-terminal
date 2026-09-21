@@ -12,9 +12,18 @@ deterministic core — is secondary fallback chosen by fuzzy routing.
 | `Qwen2.5-3B-Instruct-Q4_K_M.gguf` | planner + specialist | planning, analysis, verification |
 
 Place both files in `~/linux-vortex-terminal/models/` (or set
-`VORTEX_MODELS_DIR`, or `models_dir` in Settings). VORTEX validates the GGUF
-magic bytes before trusting any file and reports per-file size, family,
-quantization, and 8 GB RAM fit in the Models view.
+`VORTEX_MODELS_DIR`, or `models_dir` in Settings). They are **not** committed
+to GitHub. See [`models/README.md`](../models/README.md). VORTEX validates the
+GGUF magic bytes before trusting any file and reports per-file size, family,
+quantization, and RAM fit in the Models view and the Dependencies popup.
+
+## Hardware: 2 GB is the minimum, not a limit
+
+Tuning is automatic from `MemTotal`:
+
+* **2 GB class (`tight`)** — 512-token context, 2 threads (the floor).
+* **~8 GB class (`low-resource`)** — 2048-token context, 4 threads.
+* **More RAM (`balanced` / `roomy`)** — larger context and more parallel advisors.
 
 ## 8 GB RAM / ~2 GHz tuning (automatic)
 

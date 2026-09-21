@@ -18,9 +18,9 @@
       <span class="titlebar-context">LINUX WORKBENCH</span>
     </div>
     <div class="window-controls native-window-controls">
-      <button type="button" class="window-control window-control-minimize" data-native-window-action="minimize" aria-label="Minimize application window" title="Minimize"><span aria-hidden="true">—</span></button>
-      <button type="button" class="window-control window-control-maximize" data-native-window-action="toggleMaximize" aria-label="Maximize application window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
-      <button type="button" class="window-control window-control-close" data-native-window-action="close" aria-label="Close application window" title="Close"><span aria-hidden="true">×</span></button>
+      <button type="button" class="window-control window-control-minimize" data-native-window-action="minimize" aria-label="Minimize application window" title="Minimise"><span aria-hidden="true">—</span> Minimise</button>
+      <button type="button" class="window-control window-control-maximize" data-native-window-action="toggleMaximize" aria-label="Maximize application window" aria-pressed="false" title="Maximise"><span aria-hidden="true">□</span> Maximise</button>
+      <button type="button" class="window-control window-control-close" data-native-window-action="close" aria-label="Close application window" title="Exit"><span aria-hidden="true">×</span> Exit</button>
     </div>
   </header>
   <div id="first-run" class="first-run surface-window" data-surface-window data-window-state="normal" hidden>
@@ -38,14 +38,14 @@
         <h1>Welcome to Vortex Terminal</h1>
         <p>These checks use the live host. Missing optional components stay unavailable; nothing is silently installed.</p>
         <div id="setup-steps" class="setup-steps"></div>
-        <div class="form-foot"><button class="secondary-button" id="open-deps-from-setup">MISSING DEPENDENCIES</button><button class="secondary-button" id="skip-setup">SKIP</button><button class="primary-button" id="complete-setup">CONTINUE</button></div>
+        <div class="form-foot"><button class="secondary-button" id="open-deps-from-setup">HOST DEPENDENCIES</button><button class="secondary-button" id="skip-setup">SKIP</button><button class="primary-button" id="complete-setup">CONTINUE</button></div>
       </div>
     </section>
   </div>
   <div id="dep-window" class="dep-window surface-window" data-surface-window data-window-state="normal" hidden>
     <section class="dep-card surface-card" role="dialog" aria-modal="true" aria-labelledby="dependencies-title">
       <div class="panel-head surface-titlebar">
-        <div><span class="panel-kicker">LIVE HOST PROBES</span><h2 id="dependencies-title">Missing dependencies</h2></div>
+        <div><span class="panel-kicker">LIVE HOST PROBES</span><h2 id="dependencies-title">Host dependencies · present + missing</h2></div>
         <div class="window-controls">
           <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimize"><span aria-hidden="true">—</span></button>
           <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximize"><span aria-hidden="true">□</span></button>
@@ -142,7 +142,7 @@
           <button class="secondary-button" id="open-ai-ops" title="Step-by-step view of the local agent connecting to models and AI assistants">AI OPS</button>
           <button class="secondary-button" id="open-system" title="Host telemetry, subsystem diagnostics, and environment">SYSTEM</button>
           <button class="secondary-button" id="refresh-all" title="Re-probe agents, tools, models, and health in one pass">REFRESH ALL ↻</button>
-          <button class="secondary-button" id="open-deps" title="Show missing host dependencies">DEPENDENCIES</button>
+          <button class="secondary-button" id="open-deps" title="Show present and missing host dependencies">DEPENDENCIES</button>
           <button class="secondary-button" id="download-apk" title="Sync latest Vortex Terminal into an Android APK and download it">DOWNLOAD APK</button>
           <button class="secondary-button danger-btn" id="stop-all" title="Stop all Vortex Terminal-controlled activity">STOP ALL</button>
           <div class="avatar">OP</div>
@@ -814,7 +814,8 @@
           <section class="about-section">
             <div class="eyebrow"><span class="eyebrow-line"></span>DEVELOPER</div>
             <h3>Francis Fweta</h3>
-            <p>Cybersecurity Specialist and technology professional.</p>
+            <p>Francis Fweta, certified cybersecurity specialist and developer.</p>
+            <p>Vortex Terminal started in 2025 and was released 04 August 2026. Dedicated to his daughter Theodora (born 2026).</p>
             <p>Professional IT training and certifications include:</p>
             <ul class="about-cert-list">
               <li>CCNA (Cisco Certified Network Associate)</li>
@@ -888,7 +889,11 @@
     <section class="surface-card panel" role="dialog" aria-modal="true" aria-labelledby="report-preview-title" style="max-width:860px;width:92vw;max-height:82vh;display:flex;flex-direction:column">
       <div class="surface-titlebar" style="min-height:58px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border-soft)">
         <div><span class="panel-kicker">REPORT PREVIEW</span><strong id="report-preview-title">Report</strong></div>
-        <button class="close-button" id="close-report-preview" aria-label="Close report preview" title="Close report preview">×</button>
+        <div class="window-controls">
+          <button type="button" class="window-control window-control-minimize" data-surface-action="minimize" aria-label="Minimize window" title="Minimise"><span aria-hidden="true">—</span> Minimise</button>
+          <button type="button" class="window-control window-control-maximize" data-surface-action="maximize" aria-label="Maximize window" aria-pressed="false" title="Maximise"><span aria-hidden="true">□</span> Maximise</button>
+          <button type="button" class="close-button" id="close-report-preview" data-surface-action="close" aria-label="Close window" title="Exit">× Exit</button>
+        </div>
       </div>
       <pre id="report-preview-body" style="margin:0;padding:18px;overflow:auto;flex:1;font:11px/1.7 ui-monospace,monospace;color:#c8c9d0;white-space:pre-wrap;word-break:break-word"></pre>
     </section>

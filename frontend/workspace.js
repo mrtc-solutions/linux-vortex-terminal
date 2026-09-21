@@ -352,8 +352,55 @@
     if (!el) return;
     const reports = state.reports;
     if (reports && reports.length) {
-      el.innerHTML = reports.map(r => `<article class="report-card"><div class="panel-kicker">${esc((r.kind || 'task').toUpperCase())}</div><h3>${esc(r.title)}</h3><p>${esc(fmtDate(r.created_at))}<br>${esc(r.task_id || r.operation_id || '')}</p><p>${(r.formats || []).map(fmt => `<a class="report-dl" href="/api/reports/${encodeURIComponent(r.id)}/download?format=${encodeURIComponent(fmt)}">${esc(fmt.toUpperCase())}</a>`).join(' ')} <button class="text-button" data-report-preview="${esc(r.id)}">PREVIEW</button> <button class="text-button" data-report-delete="${esc(r.id)}">DELETE</button></p></article>`).join('');
+      el.innerHTML = reports.map(r => `<article class="report-card"><div class="panel-kicker">${esc((r.kind || 'task').toUpperCase())}</div><h3>${esc(r.title)}</h3><p>${esc(fmtDate(r.created_at))}<br>${esc(r.task_id || r.operation_id || '')}</p><p>${(r.formats || []).map(fmt => `<a class="report-dl" href="/api/reports/${encodeURIComponent(r.id)}/download?format=${encodeURIComponent(fmt)}">${esc(fmt.toUpperCase())}</a>`).join(' ')} <button class="text-button" data-report-preview="${esc(r.id)}">PREVIEW</button> <button class="text-button" data-report-rename="${esc(r.id)}">RENAME</button> <button class="text-button" data-report-notes="${esc(r.id)}">NOTES</button> <button class="text-button" data-report-delete="${esc(r.id)}">DELETE</button></p></article>`).join('');
       document.querySelectorAll('[data-report-preview]').forEach(btn => btn.addEventListener('click', () => previewReport(btn.dataset.reportPreview).catch(err => toast(err.message, true))));
+      document.querySelectorAll('[data-report-rename]').forEach(btn => btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const card = btn.closest('.report-card');
+        const heading = card ? card.querySelector('h3') : null;
+        if (!heading || heading.querySelector('.rename-input')) return;
+        const id = btn.dataset.reportRename;
+        const current = heading.textContent;
+        heading.innerHTML = `<input class="rename-input" aria-label="Report title" value="${esc(current)}" style="background:#0c0c10;border:1px solid var(--cyan);color:var(--text);padding:7px 9px;font:inherit;font-size:12px;width:60%"> <button class="text-button" data-rename-save>SAVE</button> <button class="text-button" data-rename-cancel>CANCEL</button>`;
+        const input = heading.querySelector('.rename-input');
+        const save = async () => {
+          const title = input.value.trim();
+          if (!title) { toast('Title is required.', true); return; }
+          try {
+            await api(`/api/reports/${encodeURIComponent(id)}/rename`, { method: 'POST', body: { title } });
+            toast('Report renamed.');
+            loadReportsWorkspace();
+          } catch (e) { toast(e.message, true); loadReportsWorkspace(); }
+        };
+        heading.querySelector('[data-rename-save]').addEventListener('click', (e2) => { e2.stopPropagation(); save(); });
+        heading.querySelector('[data-rename-cancel]').addEventListener('click', (e2) => { e2.stopPropagation(); loadReportsWorkspace(); });
+        input.addEventListener('keydown', (e2) => {
+          if (e2.key === 'Enter') { e2.preventDefault(); save(); }
+          if (e2.key === 'Escape') { e2.preventDefault(); loadReportsWorkspace(); }
+        });
+        input.focus(); input.select();
+      }));
+      document.querySelectorAll('[data-report-notes]').forEach(btn => btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const id = btn.dataset.reportNotes;
+        const record = (state.reports || []).find(r => r.id === id);
+        const current = (record && record.body && record.body.operator_notes) || '';
+        const card = btn.closest('.report-card');
+        if (!card || card.querySelector('.notes-input')) return;
+        const editor = document.createElement('div');
+        editor.innerHTML = `<textarea class="notes-input" aria-label="Report notes" style="width:100%;min-height:64px;background:#0c0c10;border:1px solid var(--cyan);color:var(--text);padding:8px;font:12px/1.5 inherit;resize:vertical">${esc(current)}</textarea><div style="margin-top:6px"><button class="text-button" data-notes-save>SAVE NOTES</button> <button class="text-button" data-notes-cancel>CANCEL</button></div>`;
+        card.appendChild(editor);
+        const area = editor.querySelector('.notes-input');
+        area.focus();
+        editor.querySelector('[data-notes-save]').addEventListener('click', async () => {
+          try {
+            await api(`/api/reports/${encodeURIComponent(id)}/edit`, { method: 'POST', body: { notes: area.value } });
+            toast('Report notes saved. Observed evidence was not rewritten.');
+            loadReportsWorkspace();
+          } catch (e) { toast(e.message, true); }
+        });
+        editor.querySelector('[data-notes-cancel]').addEventListener('click', () => editor.remove());
+      }));
       document.querySelectorAll('[data-report-delete]').forEach(btn => btn.addEventListener('click', async () => {
         try {
           await api(`/api/reports/${encodeURIComponent(btn.dataset.reportDelete)}/delete`, { method: 'POST', body: {} });
@@ -693,14 +740,19 @@
       try {
         const data = await api('/api/dependencies');
         const deps = data.dependencies || {};
-        const missing = deps.missing || [];
+        const catalog = deps.items || [];
+        const missing = deps.missing || catalog.filter(item => !item.installed);
+        const present = deps.present || catalog.filter(item => item.installed);
         const counts = deps.counts || {};
-        if (summary) summary.textContent = `${counts.installed || 0}/${counts.total || 0} present · ${counts.missing || 0} missing · auto_install=${deps.auto_install ? 'yes' : 'no'}`;
-        if (!missing.length) {
-          list.innerHTML = '<div class="empty-inline">No missing catalog items on this host.</div>';
+        if (summary) summary.textContent = `${counts.installed || present.length}/${counts.total || catalog.length} present · ${counts.missing || missing.length} missing · auto_install=${deps.auto_install ? 'yes' : 'no'}`;
+        const row = (item, action) => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')} · ${item.installed ? 'PRESENT' : 'MISSING'}</small></div><span class="badge ${item.installed ? 'badge-green' : (item.required ? 'badge-red' : 'badge-muted')}">${item.installed ? 'PRESENT' : (item.required ? 'REQUIRED' : 'OPTIONAL')}</span><button class="text-button" data-dep-install="${esc(item.id)}">${action}</button></div>`;
+        const presentHtml = present.map(item => row(item, 'INSPECT')).join('');
+        const missingHtml = missing.map(item => row(item, item.method === 'apt' ? 'INSTALL' : 'REVIEW')).join('');
+        if (!present.length && !missing.length) {
+          list.innerHTML = '<div class="empty-inline">No catalog items on this host.</div>';
           return;
         }
-        list.innerHTML = missing.map(item => `<div class="dep-row"><div><strong>${esc(item.title)}</strong><small>${esc(item.kind)} · ${esc(item.method)} · ${esc(item.role || '')}</small></div><span class="badge ${item.required ? 'badge-red' : 'badge-muted'}">${item.required ? 'REQUIRED' : 'OPTIONAL'}</span><button class="text-button" data-dep-install="${esc(item.id)}" title="${item.method === 'apt' ? 'Open the reviewed install proposal' : 'No reviewed installer is mapped for this item; Vortex Terminal shows operator instructions only and never auto-installs'}">${item.method === 'apt' ? 'INSTALL' : 'REVIEW'}</button></div>`).join('');
+        list.innerHTML = `${presentHtml}${missingHtml}` || '<div class="empty-inline">No missing catalog items on this host.</div>';
         list.querySelectorAll('[data-dep-install]').forEach(btn => btn.addEventListener('click', () => window.openDependency(btn.dataset.depInstall)));
       } catch (e) { toast(e.message, true); }
     }

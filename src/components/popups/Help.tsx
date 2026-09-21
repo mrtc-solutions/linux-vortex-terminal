@@ -45,6 +45,7 @@ export const Help: React.FC<HelpProps> = ({ onOpenPopup }) => {
           <Row keys="shell" what="Open a raw host PTY (your keys, no Guardian)." />
           <Row keys="map · out · report" what="Jump to the Tactical Map, /out evidence, or Reports tab." />
           <Row keys="tasks · scope · tools" what="Open the task ledger, engagement scope, or tool inventory." />
+          <Row keys="dependencies" what="Open present + missing host tools, engines, and local LLM files. Refresh after a locate error." />
           <Row keys="models · system" what="Open local-AI models or system health." />
           <Row keys="history · memory" what="Open conversations or durable memory." />
           <Row keys="settings · aiops" what="Open policy settings or the AI Ops advisory trace." />
@@ -68,6 +69,7 @@ export const Help: React.FC<HelpProps> = ({ onOpenPopup }) => {
           Safe profile: every plan asks first. Standard/Expert: low-risk read-only plans auto-run.
           Medium-risk plans always ask (Guardian invariant). Assessment work needs an authorized
           engagement in <button onClick={() => onOpenPopup('scope')} className="text-[var(--theme-primary)] hover:underline cursor-pointer">Scope</button>.
+          Open <button onClick={() => onOpenPopup('dependencies')} className="text-[var(--theme-primary)] hover:underline cursor-pointer">Dependencies</button> to see present vs missing tools and GGUF files, then Refresh.
           The raw <button onClick={() => onOpenPopup('shell')} className="text-[var(--theme-primary)] hover:underline cursor-pointer">Host Shell</button> bypasses
           the Guardian entirely — it is your keys on your machine.
         </div>

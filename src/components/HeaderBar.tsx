@@ -14,7 +14,11 @@ import {
   Binary, 
   Palette,
   Activity,
-  LayoutGrid
+  LayoutGrid,
+  CircleHelp,
+  Info,
+  History as HistoryIcon,
+  Wrench,
 } from 'lucide-react';
 import { sound } from '../services/soundEffects';
 
@@ -31,6 +35,7 @@ interface HeaderBarProps {
   setSoundMuted: (val: boolean) => void;
   artifactCount: number;
   onOpenLauncher: () => void;
+  onOpenPopup: (kind: string) => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -46,6 +51,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   setSoundMuted,
   artifactCount,
   onOpenLauncher,
+  onOpenPopup,
 }) => {
   const [hostLabel, setHostLabel] = useState('connecting…');
   const [providerBadges, setProviderBadges] = useState<{ name: string; state: string; reason: string }[]>([]);
@@ -110,9 +116,59 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
               sound.playKeypress();
             }}
             title="Vortex Terminal start menu"
-            className="p-1.5 rounded bg-[var(--theme-primary)] text-black hover:opacity-90 transition-opacity cursor-pointer"
+            aria-label="Open graphical UI"
+            className="flex items-center gap-1 px-2 py-1 rounded bg-[var(--theme-primary)] text-black hover:opacity-90 transition-opacity cursor-pointer font-bold text-[11px] tracking-wide"
           >
             <LayoutGrid className="w-4 h-4" />
+            <span>GUI</span>
+          </button>
+          <button
+            onClick={() => {
+              onOpenPopup('helpwin');
+              sound.playKeypress();
+            }}
+            title="Vortex Terminal Help"
+            aria-label="Open Help"
+            className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--theme-border)] text-stone-200 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] transition-colors cursor-pointer text-[11px] font-bold"
+          >
+            <CircleHelp className="w-3.5 h-3.5" />
+            <span>Help</span>
+          </button>
+          <button
+            onClick={() => {
+              onOpenPopup('about');
+              sound.playKeypress();
+            }}
+            title="About Vortex Terminal"
+            aria-label="Open About"
+            className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--theme-border)] text-stone-200 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] transition-colors cursor-pointer text-[11px] font-bold"
+          >
+            <Info className="w-3.5 h-3.5" />
+            <span>About</span>
+          </button>
+          <button
+            onClick={() => {
+              onOpenPopup('history');
+              sound.playKeypress();
+            }}
+            title="Conversation history"
+            aria-label="Open conversation history"
+            className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--theme-border)] text-stone-200 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] transition-colors cursor-pointer text-[11px] font-bold"
+          >
+            <HistoryIcon className="w-3.5 h-3.5" />
+            <span>History</span>
+          </button>
+          <button
+            onClick={() => {
+              onOpenPopup('dependencies');
+              sound.playKeypress();
+            }}
+            title="Present and missing host dependencies"
+            aria-label="Open host dependencies"
+            className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--theme-border)] text-stone-200 hover:text-[var(--theme-primary)] hover:bg-[var(--theme-border)] transition-colors cursor-pointer text-[11px] font-bold"
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Dependencies</span>
           </button>
           <div className="flex items-center space-x-2">
             <div className="relative">

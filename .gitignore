@@ -28,6 +28,10 @@ coverage/
 *.AppImage
 *.apk
 
+# Local GGUF weights (never commit multi-GB models)
+models/*.gguf
+*.gguf
+
 # Local environment
 .env
 .env.*

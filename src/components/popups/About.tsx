@@ -96,6 +96,14 @@ export const About: React.FC = () => {
         </Section>
       )}
 
+      <Section title="Author">
+        <div className="p-2 rounded bg-black/50 border border-[var(--theme-border)] space-y-1 text-[11px] text-stone-400 leading-relaxed">
+          <div className="text-stone-200 font-bold">Francis Fweta, certified cybersecurity specialist and developer</div>
+          <div>Vortex Terminal started in 2025 and was released 04 August 2026.</div>
+          <div>Dedicated to his daughter Theodora (born 2026).</div>
+        </div>
+      </Section>
+
       {license && (
         <Section title={`${String(license.name || 'License')} · ${String(license.spdx || '')}`}>
           <div className="p-2 rounded bg-black/50 border border-[var(--theme-border)] space-y-1.5">

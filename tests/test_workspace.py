@@ -92,6 +92,23 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(workspace.delete_report(report["id"]))
         self.assertIsNotNone(workspace.get_task(task["id"]))
 
+    def test_rename_and_edit_report_keep_observed_evidence(self):
+        report = self.workspace.save_report({
+            "title": "Original report",
+            "body": {"markdown": "observed whoami output", "status": "succeeded"},
+        })
+        renamed = self.workspace.rename_report(report["id"], "Lab notes")
+        self.assertEqual(renamed["title"], "Lab notes")
+        self.assertEqual(renamed["body"]["markdown"], "observed whoami output")
+        edited = self.workspace.edit_report(report["id"], notes="operator follow-up")
+        self.assertEqual(edited["body"]["operator_notes"], "operator follow-up")
+        self.assertEqual(edited["body"]["markdown"], "observed whoami output")
+        self.assertTrue(edited["body"].get("operator_edited_at"))
+        missing = self.workspace.rename_report("does-not-exist", "Nope")
+        self.assertIsNone(missing)
+        with self.assertRaises(ValueError):
+            self.workspace.rename_report(report["id"], "   ")
+
     def tearDown(self):
         self.tmp.cleanup()
         os.environ.pop("VORTEX_DATA_DIR", None)

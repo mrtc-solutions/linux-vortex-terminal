@@ -25,9 +25,9 @@ export function NativeTitleBar() {
     style={{ WebkitAppRegion: 'drag' } as CSSProperties} onDoubleClick={() => bridge.toggleMaximize()}>
     <span>Vortex Terminal {error && `— ${error}`}</span>
     <div className="flex gap-1" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties} onDoubleClick={e => e.stopPropagation()}>
-      <button aria-label="Minimize application" disabled={state.minimizable === false} onClick={() => bridge.minimize()} className="px-3 py-1 hover:bg-stone-700">—</button>
-      <button aria-label={state.maximized ? 'Restore application' : 'Maximize application'} disabled={state.maximizable === false} onClick={() => bridge.toggleMaximize()} className="px-3 py-1 hover:bg-stone-700">{state.maximized ? '❐' : '□'}</button>
-      <button aria-label="Close application" disabled={state.closable === false} onClick={() => bridge.close()} className="px-3 py-1 hover:bg-red-800">×</button>
+      <button aria-label="Minimize application" disabled={state.minimizable === false} onClick={() => bridge.minimize()} className="px-3 py-1 hover:bg-stone-700">— Minimise</button>
+      <button aria-label={state.maximized ? 'Restore application' : 'Maximize application'} disabled={state.maximizable === false} onClick={() => bridge.toggleMaximize()} className="px-3 py-1 hover:bg-stone-700">{state.maximized ? '❐ Restore' : '□ Maximise'}</button>
+      <button aria-label="Close application" disabled={state.closable === false} onClick={() => bridge.close()} className="px-3 py-1 hover:bg-red-800">× Exit</button>
     </div>
   </div>;
 }

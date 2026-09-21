@@ -7,15 +7,18 @@ The operator keeps two curated GGUF files on their own Linux host
 * ``Qwen2.5-3B-Instruct-Q4_K_M.gguf`` — planning / analysis advisory
 
 This module discovers, validates, and serves those files with tuning that
-fits an 8 GB RAM / ~2 GHz CPU host: a single loaded model at a time,
-2048-token context, bounded threads, and memory-mapped weights.
+fits a 2 GB RAM / ~2 GHz i5 host first (512-token context, 2 threads), then
+an 8 GB class host (2048-token context, 4 threads). A single loaded model
+at a time, bounded threads, and memory-mapped weights.
 
 Inference engines (first available wins, honestly reported):
 
 1. ``llama-cpp-python`` (optional pip package, in-process)
 2. a ``llama-cli`` / ``llama.cpp`` style binary on the controlled PATH
    (subprocess, typed argv, timeout, process-group kill)
-3. no engine → ``state == "unavailable"`` with actionable guidance.
+3. a managed or PATH ``llamafile`` binary (one-shot ``-m`` GGUF, same
+   argv contract as llama-cli)
+4. no engine → ``state == "unavailable"`` with actionable guidance.
    Vortex Terminal never simulates model output.
 
 Advisory-only contract: same JSON keys as the Ollama router
@@ -66,6 +69,18 @@ ROLE_DEFAULTS = {
     "specialist": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
 }
 
+# Conservative defaults for 2 GB RAM / ~2 GHz i5. A 3B Q4_K_M file is
+# ~2 GB on disk; mmap + 512 ctx keeps the sidecar usable beside the OS.
+TIGHT_RESOURCE_TUNING = {
+    "n_ctx": 512,
+    "n_threads": 2,
+    "n_batch": 32,
+    "n_predict": 96,
+    "temperature": 0.1,
+    "use_mmap": True,
+    "use_mlock": False,
+    "verbose": False,
+}
 # Conservative defaults for 8 GB RAM / ~2 GHz CPU. A 3B Q4_K_M file is
 # ~2 GB on disk; resident set with mmap + 2048 ctx stays near ~2.5-3 GB,
 # leaving headroom for the OS, sidecar, and one observed command.
@@ -253,17 +268,19 @@ def ram_fit(size_bytes: int | None) -> dict[str, Any]:
     """Estimate whether a GGUF file fits comfortably on this host.
 
     Estimate: resident ≈ file size × 1.25 + 512 MiB context/compute overhead.
-    ``fits`` compares against currently available RAM; ``fits_8gb`` compares
-    against the operator's 8 GB target so the UI can reassure before load.
+    ``fits`` compares against currently available RAM; ``fits_2gb`` and
+    ``fits_8gb`` compare against the operator's 2 GB / 8 GB targets so the
+    UI can refuse a load that would thrash the host.
     """
     available = _mem_available_mb()
     total = _mem_total_mb()
     if not size_bytes:
-        return {"fits": None, "fits_8gb": None, "resident_mb": None,
+        return {"fits": None, "fits_2gb": None, "fits_8gb": None, "resident_mb": None,
                 "available_mb": available, "total_mb": total}
     resident = int(size_bytes / (1024 * 1024) * 1.25) + 512
     return {
         "fits": (available is None) or (resident <= available),
+        "fits_2gb": resident <= (2 * 1024 - 512),
         "fits_8gb": resident <= (8 * 1024 - 1536),
         "resident_mb": resident,
         "available_mb": available,
@@ -276,8 +293,14 @@ def tuning_for_host(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = settings or {}
     total = _mem_total_mb()
     cpu = os.cpu_count() or 1
-    low = (total is not None and total <= 8192) or (total is None) or cpu <= 4
-    base = dict(LOW_RESOURCE_TUNING if low else BALANCED_TUNING)
+    tight = total is not None and total <= 2560
+    low = (not tight) and ((total is not None and total <= 8192) or (total is None) or cpu <= 4)
+    if tight:
+        base = dict(TIGHT_RESOURCE_TUNING)
+    elif low:
+        base = dict(LOW_RESOURCE_TUNING)
+    else:
+        base = dict(BALANCED_TUNING)
 
     ctx = settings.get("gguf_ctx", base["n_ctx"])
     threads = settings.get("gguf_threads", min(base["n_threads"], max(1, cpu)))
@@ -289,12 +312,20 @@ def tuning_for_host(settings: dict[str, Any] | None = None) -> dict[str, Any]:
         threads = max(1, min(int(threads), max(1, cpu), 8))
     except (TypeError, ValueError):
         threads = min(base["n_threads"], max(1, cpu))
-    if low:
+    if tight:
+        ctx = min(ctx, 512)
+        threads = min(threads, 2)
+        n_predict = min(int(base.get("n_predict") or 96), 96)
+    elif low:
         ctx = min(ctx, 2048)
         threads = min(threads, 4)
+        n_predict = int(base.get("n_predict") or 320)
+    else:
+        n_predict = int(base.get("n_predict") or 384)
     base["n_ctx"] = ctx
     base["n_threads"] = threads
-    base["profile"] = "low-resource" if low else "balanced"
+    base["n_predict"] = n_predict
+    base["profile"] = "tight" if tight else ("low-resource" if low else "balanced")
     return base
 
 
@@ -457,24 +488,81 @@ def _python_engine_available() -> bool:
         return False
 
 
+def _llamafile_cli() -> str | None:
+    """Return a trusted llamafile binary that can run a GGUF one-shot.
+
+    The managed llamafile install is preferred; a llamafile on the
+    controlled PATH is accepted with the same regular-file / no-setuid /
+    no-world-writable checks as ``llama-cli``.
+    """
+    try:
+        try:
+            from . import llamafile as llamafile_mod
+        except ImportError:
+            try:
+                from models import llamafile as llamafile_mod  # type: ignore
+            except ImportError:
+                from backend.models import llamafile as llamafile_mod  # type: ignore
+        probe = llamafile_mod.binary_status()
+        if probe.get("present") and probe.get("executable"):
+            path = llamafile_mod._binary_path()
+            try:
+                real = Path(path).resolve(strict=True)
+                details = real.stat()
+            except OSError:
+                real = None
+                details = None
+            if real is not None and details is not None:
+                mode = stat.S_IMODE(details.st_mode)
+                if (
+                    stat.S_ISREG(details.st_mode)
+                    and (mode & 0o111)
+                    and not (mode & 0o022)
+                    and not (details.st_mode & (stat.S_ISUID | stat.S_ISGID))
+                ):
+                    return str(real)
+    except Exception:
+        pass
+    minimal_env = _minimal_env()
+    controlled = minimal_env(False).get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    found = shutil.which("llamafile", path=controlled)
+    if not found:
+        return None
+    try:
+        real = Path(found).resolve(strict=True)
+        details = real.stat()
+    except OSError:
+        return None
+    mode = stat.S_IMODE(details.st_mode)
+    if not stat.S_ISREG(details.st_mode) or not (mode & 0o111) or (mode & 0o022):
+        return None
+    if details.st_mode & (stat.S_ISUID | stat.S_ISGID):
+        return None
+    return str(real)
+
+
 def engine_status() -> dict[str, Any]:
     """Detect real inference engines. No engine is ever faked."""
     if _TEST_ENGINE.get("handler") is not None:
-        return {"state": "test-double", "python": False, "cli": None,
+        return {"state": "test-double", "python": False, "cli": None, "llamafile": None,
                 "detail": "Explicit test engine is installed (sandbox tests only)."}
     python = _python_engine_available()
     cli = _trusted_cli()
+    llamafile = _llamafile_cli()
     if python:
         state, detail = "ready", "llama-cpp-python is importable."
     elif cli:
         state, detail = "ready", f"CLI engine at {cli}."
+    elif llamafile:
+        state, detail = "ready", f"llamafile engine at {llamafile}."
     else:
         state, detail = "unavailable", (
             "No local GGUF engine was found. Install the optional "
-            "'llama-cpp-python' package or a llama-cli binary to enable "
-            "on-device inference; Ollama and the agent council remain as fallback."
+            "'llama-cpp-python' package, a llama-cli binary, or the "
+            "managed llamafile runtime to enable on-device inference; "
+            "Ollama and the agent council remain as fallback."
         )
-    return {"state": state, "python": python, "cli": cli, "detail": detail}
+    return {"state": state, "python": python, "cli": cli, "llamafile": llamafile, "detail": detail}
 
 
 def status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -624,6 +712,12 @@ def _ensure_loaded_locked(entry: dict[str, Any], tuning: dict[str, Any]) -> dict
             _LOADED.update({"path": entry["path"], "handle": None,
                             "family": entry.get("family"), "engine": "cli"})
         return {"engine": "cli", "handle": None}
+    if engine.get("llamafile"):
+        if _LOADED.get("path") != entry["path"]:
+            _unload_locked()
+            _LOADED.update({"path": entry["path"], "handle": None,
+                            "family": entry.get("family"), "engine": "llamafile"})
+        return {"engine": "llamafile", "handle": None}
     raise RuntimeError(str(engine.get("detail") or "No GGUF engine available."))
 
 
@@ -686,7 +780,8 @@ def _complete_python(handle: Any, prompt: str, tuning: dict[str, Any], timeout: 
             pool.shutdown(wait=True)
 
 
-def _complete_cli(binary: str, model_path: str, prompt: str, tuning: dict[str, Any], timeout: float) -> str:
+def _complete_cli(binary: str, model_path: str, prompt: str, tuning: dict[str, Any], timeout: float,
+                  llamafile: bool = False) -> str:
     minimal_env = _minimal_env()
     argv = [
         binary, "-m", model_path,
@@ -696,6 +791,8 @@ def _complete_cli(binary: str, model_path: str, prompt: str, tuning: dict[str, A
         "-temp", str(float(tuning.get("temperature", 0.1))),
         "--no-display-prompt", "-p", prompt,
     ]
+    if llamafile:
+        argv.insert(1, "--cli")
     proc = subprocess.Popen(  # noqa: S603 - absolute validated binary; typed argv
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, env=minimal_env(False), start_new_session=True, close_fds=True,
@@ -753,6 +850,11 @@ def complete(entry: dict[str, Any], system: str, user_json: str,
         if not binary:
             raise RuntimeError("CLI engine disappeared.")
         text = _complete_cli(binary, str(entry["path"]), prompt, tuning, float(timeout))
+    elif engine_name == "llamafile":
+        binary = str(engine_status().get("llamafile") or "")
+        if not binary:
+            raise RuntimeError("llamafile engine disappeared.")
+        text = _complete_cli(binary, str(entry["path"]), prompt, tuning, float(timeout), llamafile=True)
     else:
         raise RuntimeError("No GGUF engine available.")
     return {"text": text, "latency_ms": int((time.monotonic() - started) * 1000),

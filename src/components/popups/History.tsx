@@ -153,7 +153,15 @@ export const History: React.FC<{ onClose: () => void; onSelect: (id: string) => 
                       className={`${inputCls} !w-48`}
                     />
                   ) : (
-                    <span className="font-bold text-[12px] text-stone-200">{String(item.title || 'Untitled')}</span>
+                    <button
+                      type="button"
+                      disabled={!!busy}
+                      onClick={() => void resume(id)}
+                      title="Open this conversation in the terminal canvas"
+                      className="font-bold text-[12px] text-stone-200 hover:text-[var(--theme-primary)] cursor-pointer text-left"
+                    >
+                      {String(item.title || 'Untitled')}
+                    </button>
                   )}
                   <StateBadge state={String(item.status || 'unknown')} />
                   <span className="text-[10px] text-stone-600 font-mono">

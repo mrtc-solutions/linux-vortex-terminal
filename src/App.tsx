@@ -12,6 +12,7 @@ import { NativeTitleBar } from './components/NativeTitleBar';
 import { MatrixRainCanvas } from './components/MatrixRainCanvas';
 import { HeaderBar } from './components/HeaderBar';
 import { QuickPromptBar } from './components/QuickPromptBar';
+import { ConversationHistoryBar } from './components/ConversationHistoryBar';
 import { TerminalView } from './components/TerminalView';
 import { TacticalMap } from './components/TacticalMap';
 import { OutDirectoryExplorer } from './components/OutDirectoryExplorer';
@@ -125,7 +126,8 @@ export function App() {
     const requestedSession = kind === 'remote-session' ? String(props.sessionId || '') : '';
     const stableId = kind === 'remote-session' && requestedSession
       ? `remote-session-${requestedSession}`
-      : kind === 'remote' ? 'remote-manager' : '';
+      : kind === 'remote' ? 'remote-manager'
+        : kind === 'dependencies' ? 'host-dependencies' : '';
     const id = stableId || `${kind}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     if (stableId && popupRef.current.some((popup) => popup.id === stableId)) {
       setPopupFocus({ id: stableId, nonce: Date.now() });
@@ -169,7 +171,12 @@ export function App() {
         spec = { id, title: 'TOOLS', icon: <Wrench className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 640, height: 560, content: <Tools onDependencies={() => openPopup('dependencies')} /> };
         break;
       case 'dependencies':
-        spec = { id, title: 'MISSING DEPENDENCIES', width: 640, height: 560, content: <Dependencies onOpenPopup={openPopup} /> };
+        spec = {
+          id, title: 'HOST DEPENDENCIES · PRESENT + MISSING',
+          icon: <Wrench className="w-3.5 h-3.5 text-[var(--theme-primary)]" />,
+          width: 720, height: 600,
+          content: <Dependencies onOpenPopup={openPopup} />,
+        };
         break;
       case 'models':
         spec = { id, title: 'LOCAL AI / MODELS', icon: <BrainCircuit className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 660, height: 580, content: <Models onOpenPopup={openPopup} /> };
@@ -257,6 +264,21 @@ export function App() {
     sound.playKeypress();
   }, [closePopup]);
 
+  // First launch of a session: show present + missing dependencies unless the
+  // operator opted out. Closing the window still leaves GUI / Help / History.
+  useEffect(() => {
+    let skip = false;
+    try {
+      skip = localStorage.getItem('vortex.deps-window-dismissed') === '1'
+        || sessionStorage.getItem('vortex.deps-window-shown') === '1';
+    } catch {
+      skip = false;
+    }
+    if (skip) return;
+    try { sessionStorage.setItem('vortex.deps-window-shown', '1'); } catch { /* */ }
+    openPopup('dependencies');
+  }, [openPopup]);
+
   // Update CSS variables on theme switch
   useEffect(() => {
     const root = document.documentElement;
@@ -330,10 +352,15 @@ export function App() {
         setSoundMuted={setSoundMuted}
         artifactCount={artifactCount}
         onOpenLauncher={() => openPopup('launcher')}
+        onOpenPopup={(kind) => openPopup(kind)}
       />
 
       {/* 3. Quick AI Prompt Suggestion Chips */}
       <QuickPromptBar onSelectPrompt={handleExecuteExternal} />
+      <ConversationHistoryBar
+        onSelect={resumeConversation}
+        onOpenHistory={() => openPopup('history')}
+      />
 
       {/* 4. Active Main View Container — all tabs stay mounted so terminal
           scrollback, selections, and in-flight turns survive tab switches. */}
@@ -378,7 +405,7 @@ export function App() {
         </div>
 
         <div className={activeTab === 'agent-reach' ? 'flex-1 flex flex-col overflow-hidden min-h-0' : 'hidden'}>
-          <AgentReachInspector onExecuteCommand={handleExecuteExternal} />
+          <AgentReachInspector onExecuteCommand={handleExecuteExternal} onOpenPopup={openPopup} />
         </div>
       </main>
 

@@ -14,13 +14,15 @@ ADAPTERS = {
 
 def resource_budget() -> dict[str, Any]:
     cpu = os.cpu_count() or 1
-    mem_kb = None
+    mem_available_kb = None
+    mem_total_kb = None
     try:
         with open("/proc/meminfo", encoding="utf-8") as handle:
             for line in handle:
                 if line.startswith("MemAvailable:"):
-                    mem_kb = int(line.split()[1])
-                    break
+                    mem_available_kb = int(line.split()[1])
+                elif line.startswith("MemTotal:"):
+                    mem_total_kb = int(line.split()[1])
     except (OSError, ValueError):
         pass
     load = 0.0
@@ -28,9 +30,22 @@ def resource_budget() -> dict[str, Any]:
         load = os.getloadavg()[0]
     except (OSError, AttributeError):
         pass
-    ram_mb = int(mem_kb / 1024) if mem_kb else None
-    parallel = bool(cpu >= 4 and (ram_mb is None or ram_mb >= 2048) and load < max(1.0, cpu * 0.8))
-    return {"cpu": cpu, "mem_available_mb": ram_mb, "load1": load, "mode": "parallel" if parallel else "sequential"}
+    ram_mb = int(mem_available_kb / 1024) if mem_available_kb else None
+    total_mb = int(mem_total_kb / 1024) if mem_total_kb else None
+    tight = total_mb is not None and total_mb <= 2560
+    parallel = bool(
+        (not tight)
+        and cpu >= 4
+        and (ram_mb is None or ram_mb >= 2048)
+        and load < max(1.0, cpu * 0.8)
+    )
+    return {
+        "cpu": cpu,
+        "mem_available_mb": ram_mb,
+        "mem_total_mb": total_mb,
+        "load1": load,
+        "mode": "sequential" if tight or not parallel else "parallel",
+    }
 
 
 def discover() -> list[dict[str, Any]]:
