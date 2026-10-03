@@ -244,7 +244,11 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
     if not conversation:
         conversation = workspace.create_conversation(request[:60] or "New conversation")
     workspace.add_message(conversation["id"], "user", request)
-    if not force_plan:
+    # A turn carrying an approval token refers to an already reviewed plan —
+    # it must never divert into the conversation path. (`confirm` alone is
+    # just "auto-approve if a plan is produced", e.g. CLI -y, and still
+    # allows conversational routing.)
+    if not force_plan and not approval_token:
         try:
             from backend.conversation import classify
         except ImportError:

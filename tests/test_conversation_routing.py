@@ -50,6 +50,30 @@ class ClassifierTests(unittest.TestCase):
                      "do a pentest against 10.0.0.9", "fuzz the login endpoint"):
             self.assert_action(text)
 
+    def test_interrogative_who_is_conversation_but_the_coreutil_stays_action(self):
+        for text in ("who are you", "who invented linux", "who is the author of python"):
+            self.assert_conversation(text)
+        for text in ("who", "who am i", "who -b"):
+            self.assert_action(text)
+
+    def test_why_diagnostic_questions_are_conversation(self):
+        # "why" has no deterministic plan — the AI reply suggests commands,
+        # which the operator then runs through the planner/Guardian.
+        for text in ("why is my computer slow", "why is my disk full",
+                     "why does my server keep crashing"):
+            self.assert_conversation(text)
+
+    def test_system_state_phrases_stay_on_the_planner_path(self):
+        for text in ("system health", "check system health", "show system health",
+                     "what is my ip address", "free memory on this machine"):
+            self.assert_action(text)
+
+    def test_system_concept_questions_stay_conversational(self):
+        for text in ("explain system calls in linux", "what is an operating system",
+                     "what is a computer", "tell me about client server architecture",
+                     "what does a web server do", "how is your health"):
+            self.assert_conversation(text)
+
 
 class RunTurnRoutingTests(unittest.TestCase):
     def setUp(self):

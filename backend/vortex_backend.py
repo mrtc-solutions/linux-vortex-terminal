@@ -5423,11 +5423,15 @@ class VortexHandler(BaseHTTPRequestHandler):
                 provider_id = self._text(body, "provider_id")
                 if not provider_id:
                     raise ValueError("provider_id is required")
+                if _load("providers.catalog").provider_def(provider_id[:64]) is None:
+                    raise ValueError("unknown provider: " + provider_id[:64])
                 return self._json(200, {"health": providers_manager.health_check(provider_id[:64], settings)})
             if path == "/api/providers/refresh":
                 providers_manager = _load("providers.manager").manager()
                 settings = _load("config").load_settings()
                 provider_id = self._optional_str(body, "provider_id")
+                if provider_id and _load("providers.catalog").provider_def(provider_id[:64]) is None:
+                    raise ValueError("unknown provider: " + provider_id[:64])
                 results: dict[str, Any] = {}
                 targets = [provider_id[:64]] if provider_id else [
                     item["id"] for item in providers_manager.providers_snapshot(settings, probe_local=False)["providers"]

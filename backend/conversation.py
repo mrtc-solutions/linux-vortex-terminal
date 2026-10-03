@@ -126,7 +126,13 @@ def classify(request: str) -> dict[str, Any]:
         return {"category": "conversation", "reason": "greeting/small talk"}
     first = _first_token(lower)
     if first in _KNOWN_BINARIES:
-        return {"category": "action", "reason": f"starts with the known command '{first}'"}
+        # "who" doubles as an English interrogative: "who are you" /
+        # "who invented linux" are conversation, while "who", "who -b" and
+        # "who am i" remain the coreutil.
+        interrogative_who = first == "who" and re.match(
+            r"who\s+(?!am\s+i\b)[a-z]", lower) and not re.match(r"who\s+-", lower)
+        if not interrogative_who:
+            return {"category": "action", "reason": f"starts with the known command '{first}'"}
     if _mentions(lower, _SECURITY_INTENTS):
         return {"category": "action", "reason": "security operation — requires planner, Guardian, and engagement authorization"}
     if re.match(r"^(install|remove|uninstall|purge|upgrade|update)\s+\S+", lower):
@@ -135,8 +141,12 @@ def classify(request: str) -> dict[str, Any]:
         return {"category": "action", "reason": "references a concrete filesystem path on this machine"}
     for opener in _CONVERSATION_OPENERS:
         if lower.startswith(opener):
-            # "what processes are running" style questions still target the host.
-            if _word_match(lower, _SYSTEM_NOUNS) and _mentions(lower, _THIS_MACHINE):
+            # "what processes are running" style questions still target the
+            # host — but "why …" diagnostics stay conversational: there is no
+            # deterministic plan for a "why", and the AI reply can suggest
+            # concrete commands the operator then runs through the planner.
+            if (not lower.startswith("why")
+                    and _word_match(lower, _SYSTEM_NOUNS) and _mentions(lower, _THIS_MACHINE)):
                 return {"category": "action", "reason": "question about this machine's live state"}
             return {"category": "conversation", "reason": f"conversational phrasing ('{opener.strip()}…')"}
     has_verb = bool(re.match(r"^(please\s+|can you\s+|could you\s+|go\s+)?(" + "|".join(_ACTION_VERBS) + r")\b", lower)) or _word_match(lower, set(_ACTION_VERBS))
