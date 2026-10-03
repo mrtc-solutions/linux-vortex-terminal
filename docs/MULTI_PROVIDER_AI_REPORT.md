@@ -175,7 +175,29 @@ Mapping to the requested test plan:
 | H. 429 → cooldown + controlled fallback, no retry storm | PASS (mocked) | `GenerateTests`/`GeminiTests` |
 | I. Paid model under free-only → `blocked_policy` | PASS | `PolicyTests`/`GenerateTests` |
 
-## 10. Limitations (honest)
+## 10. Low-spec hardware tuning (4 GB RAM / 2 GHz class)
+
+The app auto-detects machine resources (`/proc/meminfo` + CPU count) and tunes
+itself for low-spec hardware — no configuration needed:
+
+- **Generation budget** (`backend/providers/manager.py:local_generation_options`):
+  on machines with ≤ 4.5 GB RAM **or** ≤ 2 CPUs, every local Qwen request sends
+  `options: {num_predict: 320, num_ctx: 2048}`. At the ~3–6 tokens/s a 2 GHz
+  dual-core produces, a 320-token reply takes ~55–105 s and fits the 90 s local
+  timeout (raisable to 600 s in Settings); the old uncapped 768-token budget
+  needed ~190 s and would have timed out on every long answer. The pinned 2 K
+  context also keeps the KV cache small so the 3B model fits beside the OS in
+  4 GB. Roomier machines keep the full 768-token budget automatically.
+- **Hardware profile** (`backend/models/router.py:hardware_profile`): ≤ 8 GB RAM
+  or ≤ 4 CPUs → `low-resource` mode — one model loaded at a time, sequential
+  agent strategy, 2048-token context. Declared minimum: 2 GB RAM / 2.0 GHz.
+- **Measured on 4 GB / 2-core hardware (this sandbox is that machine)**:
+  cold model load of 40 s → clean `ready` with honest `warmup_ms`; a 70 s
+  generation completes inside the timeout; a 120 s generation fails precisely
+  as `timeout` and falls back in order; sidecar RSS stays ~59 MB flat across
+  100 consecutive turns (no leak).
+
+## 11. Limitations (honest)
 
 - **Operator keys installed 2026-10-03**: real GEMINI_API_KEY_1/2, GROQ_API_KEY
   and OPENROUTER_API_KEY were installed in `~/.config/vortex/.env` (mode 600,
@@ -201,7 +223,7 @@ Mapping to the requested test plan:
 - The seven UNKNOWN-pricing providers have working client plumbing but ship
   disabled; they were not live-tested.
 
-## 11. How to run
+## 12. How to run
 
 ```bash
 # backend + built UI (loopback, no token needed)

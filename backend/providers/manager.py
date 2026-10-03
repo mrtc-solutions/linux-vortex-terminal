@@ -16,6 +16,7 @@ actions still flow through planner -> Guardian -> reviewed adapters.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import socket
@@ -47,6 +48,43 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _CHAT_MAX_CHARS = 24000
 _DEFAULT_CLOUD_TIMEOUT = 30
 _DEFAULT_LOCAL_TIMEOUT = 90
+
+_LOCAL_OPTIONS_CACHE: dict[str, Any] = {}
+
+
+def _read_mem_total_mb() -> int | None:
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def local_generation_options(ram_mb: int | None = None, cpu_count: int | None = None) -> dict[str, Any]:
+    """Resource-aware Ollama generation options.
+
+    A 2 GHz / 2-core CPU produces roughly 3-6 tokens/s with qwen2.5:3b, so an
+    unbounded 768-token reply (~2-4 minutes) would blow the 90 s local chat
+    timeout on exactly the hardware this terminal targets as its minimum
+    (2 GB RAM / 2.0 GHz). On low-spec machines the reply budget is capped at
+    320 tokens (~55-105 s worst case, typically well inside the timeout) and
+    the context window is pinned to 2048 so the KV cache cannot eat the RAM
+    the model itself needs. Roomier machines keep the full budget.
+    """
+    if ram_mb is None and cpu_count is None and _LOCAL_OPTIONS_CACHE:
+        return dict(_LOCAL_OPTIONS_CACHE)
+    ram = ram_mb if ram_mb is not None else (_read_mem_total_mb() or 0)
+    cpus = cpu_count if cpu_count is not None else (os.cpu_count() or 1)
+    if (ram and ram <= 4608) or cpus <= 2:
+        options: dict[str, Any] = {"num_predict": 320, "num_ctx": 2048}
+    else:
+        options = {"num_predict": 768}
+    if ram_mb is None and cpu_count is None:
+        _LOCAL_OPTIONS_CACHE.update(options)
+    return dict(options)
 
 COOLDOWN_SECONDS = {
     "rate_limited": 120,
@@ -648,7 +686,7 @@ class ProviderManager:
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": {"num_predict": 768},
+            "options": local_generation_options(),
         }, timeout=timeout)
         if not isinstance(payload, dict):
             raise ProviderError("provider_error", "unexpected Ollama response shape")

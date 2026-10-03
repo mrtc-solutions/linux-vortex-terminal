@@ -29,6 +29,7 @@ class MockProvider(BaseHTTPRequestHandler):
 
     routes: dict[str, tuple[int, dict]] = {}
     calls: list[str] = []
+    bodies: list[dict] = []
 
     def _reply(self, code: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -47,7 +48,11 @@ class MockProvider(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
-        self.rfile.read(length)
+        raw = self.rfile.read(length)
+        try:
+            type(self).bodies.append(json.loads(raw or b"{}"))
+        except json.JSONDecodeError:
+            type(self).bodies.append({})
         type(self).calls.append("POST " + self.path)
         for prefix, (code, payload) in type(self).routes.items():
             if self.path.split("?")[0] == prefix or self.path.startswith(prefix):
@@ -59,7 +64,7 @@ class MockProvider(BaseHTTPRequestHandler):
 
 
 def start_mock(routes: dict[str, tuple[int, dict]]):
-    handler = type("Handler", (MockProvider,), {"routes": routes, "calls": []})
+    handler = type("Handler", (MockProvider,), {"routes": routes, "calls": [], "bodies": []})
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -416,6 +421,38 @@ class LocalQwenTests(ProviderTestCase):
         self.assertEqual(result["provider"], "ollama-local")
         self.assertEqual(result["model"], "qwen2.5:3b")
         self.assertIn("sudo", result["reply"])
+
+
+class LowSpecHardwareTests(ProviderTestCase):
+    """Behavior on minimum-spec machines (4 GB RAM / 2 GHz, 2 cores)."""
+
+    def test_generation_options_are_resource_aware(self):
+        from backend.providers.manager import local_generation_options
+        # 4 GB / 2 GHz-class machines: bounded reply + pinned context so the
+        # 90 s local timeout and the RAM budget both hold.
+        self.assertEqual(local_generation_options(4096, 2),
+                         {"num_predict": 320, "num_ctx": 2048})
+        self.assertEqual(local_generation_options(2048, 2),
+                         {"num_predict": 320, "num_ctx": 2048})
+        self.assertEqual(local_generation_options(8192, 2),
+                         {"num_predict": 320, "num_ctx": 2048})
+        # Roomy machines keep the full reply budget.
+        self.assertEqual(local_generation_options(16384, 8), {"num_predict": 768})
+
+    def test_options_reach_ollama_on_the_wire(self):
+        from backend.providers.manager import local_generation_options
+        handler, url = self.mock({
+            "/api/tags": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+            "/api/chat": (200, {"message": {"role": "assistant", "content": "ok"}}),
+        })
+        result = self.manager.generate([{"role": "user", "content": "hi"}],
+                                       {"ollama_endpoint": url, "privacy_mode": "local",
+                                        "free_only_mode": True},
+                                       provider_id="ollama-local", allow_fallback=False)
+        self.assertEqual(result["state"], "responded")
+        chat_bodies = [b for b in handler.bodies if "messages" in b]
+        self.assertTrue(chat_bodies)
+        self.assertEqual(chat_bodies[-1].get("options"), local_generation_options())
 
 
 class SecurityTests(ProviderTestCase):

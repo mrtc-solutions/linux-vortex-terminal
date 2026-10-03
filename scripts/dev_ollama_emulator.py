@@ -7,6 +7,7 @@ Knobs via env:
   EMU_MODELS      comma list of installed tags (default "qwen2.5:3b")
   EMU_TAGS_DELAY  seconds to stall /api/tags (simulates a hung daemon)
   EMU_LOAD_DELAY  seconds of cold-start delay on first generate/chat (default 1.5)
+  EMU_CHAT_DELAY  seconds each /api/chat takes after load (simulates slow CPUs)
 """
 import json
 import os
@@ -17,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MODELS = [m.strip() for m in os.environ.get("EMU_MODELS", "qwen2.5:3b").split(",") if m.strip()]
 TAGS_DELAY = float(os.environ.get("EMU_TAGS_DELAY", "0"))
 LOAD_DELAY = float(os.environ.get("EMU_LOAD_DELAY", "1.5"))
+CHAT_DELAY = float(os.environ.get("EMU_CHAT_DELAY", "0"))
 
 _loaded: set[str] = set()
 _lock = threading.Lock()
@@ -78,6 +80,8 @@ class Handler(BaseHTTPRequestHandler):
             })
         if self.path.startswith("/api/chat"):
             ensure_loaded()
+            if CHAT_DELAY:
+                time.sleep(CHAT_DELAY)
             user = next((m.get("content", "") for m in reversed(body.get("messages") or [])
                          if m.get("role") == "user"), "")
             reply = ("Hello! I'm Qwen 2.5, running locally through Ollama on your machine. "
