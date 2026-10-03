@@ -5460,16 +5460,24 @@ class VortexHandler(BaseHTTPRequestHandler):
                     raise ValueError("unknown provider: " + provider_id)
                 if provider_id != "auto":
                     # Free-only protection applies at selection time too: a
-                    # knowingly-paid model cannot even be pinned.
+                    # knowingly-paid model cannot even be pinned. Pinning a
+                    # provider WITHOUT a specific model only needs the
+                    # provider-level gate — the per-model $0 check runs again
+                    # at dispatch with the live discovered catalog entry, so
+                    # an undiscovered catalog (e.g. first run) does not make
+                    # an eligible provider unselectable.
                     providers_manager = _load("providers.manager").manager()
                     settings = _load("config").load_settings()
-                    policy = _load("providers.policy").cost_policy(settings)
+                    policy_module = _load("providers.policy")
+                    policy = policy_module.cost_policy(settings)
                     definition = providers_manager._definition(provider_id)
-                    entry = None
+                    overrides = providers_manager._overrides(provider_id)
                     if model:
                         registry_module = _load("providers.registry")
                         entry = next((item for item in registry_module.registry().get_models(provider_id) if item.get("id") == model), None)
-                    allowed, reason = _load("providers.policy").model_allowed(policy, definition, entry, providers_manager._overrides(provider_id))
+                        allowed, reason = policy_module.model_allowed(policy, definition, entry, overrides)
+                    else:
+                        allowed, reason = policy_module.provider_allowed(policy, definition, overrides)
                     if not allowed:
                         return self._json(403, {"error": {"code": "blocked_by_policy", "message": reason}})
                 updated = save_settings({"conversation_provider": provider_id, "conversation_model": model})

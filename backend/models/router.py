@@ -508,6 +508,42 @@ def _fuzzy_decision(gguf_state: str | None, ollama_state: str | None, phase: str
                 "reason": "fuzzy engine unavailable; static provider order used.", "phase": phase, "ranking": []}
 
 
+def _cloud_summary(settings: dict[str, Any]) -> dict[str, Any]:
+    """Honest, non-probing summary of the multi-provider cloud layer.
+
+    No network calls — definitions and key *presence* only. Live health and
+    discovery live in the AI PROVIDERS window and GET /api/providers.
+    """
+    try:
+        try:
+            from providers import catalog as prov_catalog, keys as prov_keys  # type: ignore
+        except ImportError:
+            from backend.providers import catalog as prov_catalog, keys as prov_keys  # type: ignore
+        privacy = str(settings.get("privacy_mode") or "local")
+        entries: list[dict[str, Any]] = []
+        for definition in prov_catalog.PROVIDERS_BY_ID.values():
+            if definition.get("mode") == "local" or not definition.get("enabled_default"):
+                continue
+            slot = definition.get("key_slot")
+            entries.append({
+                "id": definition["id"],
+                "free_status": definition.get("free_status"),
+                "key_configured": bool(prov_keys.get_key(slot)) if slot else True,
+            })
+        ready = [item["id"] for item in entries if item["key_configured"]]
+        if settings.get("offline") is True:
+            state, reason = "blocked", "offline mode blocks all cloud providers."
+        elif privacy == "local":
+            state, reason = "blocked", "privacy mode 'local' blocks cloud providers — set privacy mode to 'hybrid' or 'cloud' to allow cloud fallback."
+        elif ready:
+            state, reason = "configured", f"{len(ready)} cloud provider(s) are eligible for free-only fallback (credentials present or not required)."
+        else:
+            state, reason = "unconfigured", "no cloud provider credentials are configured (see .env.example)."
+        return {"state": state, "providers": entries, "reason": reason}
+    except Exception:
+        return {"state": "unknown", "providers": [], "reason": "provider layer unavailable."}
+
+
 def model_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = settings or {}
     offline = settings.get("offline") is True
@@ -586,7 +622,7 @@ def model_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
                        "endpoint": local.get("endpoint")},
         },
         "fuzzy": fuzzy,
-        "cloud": {"state": "disabled", "providers": [], "reason": "Cloud providers are not configured and are disabled by default."},
+        "cloud": _cloud_summary(settings),
         "selected": selected,
         "routing": {"phases": routes, "resource_mode": (local.get("resources") or {}).get("mode")},
         "message": "Local advisory routing prefers the llamafile loopback server, then on-device GGUF, then Ollama loopback, then the agent council. Deterministic planning and execution remain authoritative.",
@@ -735,7 +771,7 @@ def choose_route(request: str, plan: dict[str, Any] | None = None, operation: di
         # single primary model keeps request latency bounded; the multi-model
         # verification still happens during post-execution interpretation.
         max_models = 1
-    preferred_fast = settings.get("model_fast") or local.get("recommended", {}).get("fast") or "llama3.2:3b"
+    preferred_fast = settings.get("model_fast") or local.get("recommended", {}).get("fast") or "qwen2.5:3b"
     preferred_plan = settings.get("model_planner") or local.get("recommended", {}).get("planner") or "qwen3:4b"
     preferred_analysis = settings.get("model_primary") or local.get("recommended", {}).get("analysis") or "phi4-mini:3.8b"
     preferred_special = settings.get("model_specialist") or local.get("recommended", {}).get("specialist") or "gemma3:4b"

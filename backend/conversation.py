@@ -57,6 +57,12 @@ _SYSTEM_NOUNS = (
     "swap", "inode", "inodes", "network", "wifi", "bluetooth", "ip",
     "address", "addresses", "dns", "gateway", "system", "health", "machine",
     "host", "server", "computer",
+    # Destructive/privileged command names: "run rm -rf /"-style phrasing
+    # must face the planner/Guardian (which reviews or refuses), never a
+    # chat model. Educational phrasings ("explain rm", "what does dd do")
+    # are caught earlier by the conversational openers.
+    "rm", "rmdir", "mkfs", "dd", "reboot", "shutdown", "poweroff", "chmod",
+    "chown", "sudo",
 )
 
 _SECURITY_INTENTS = (
@@ -137,7 +143,7 @@ def classify(request: str) -> dict[str, Any]:
         return {"category": "action", "reason": "security operation — requires planner, Guardian, and engagement authorization"}
     if re.match(r"^(install|remove|uninstall|purge|upgrade|update)\s+\S+", lower):
         return {"category": "action", "reason": "package mutation request"}
-    if re.search(r"(?:^|\s)(/etc/|/var/|/usr/|/opt/|/home/|/root/|/proc/|/sys/|~/)", text):
+    if re.search(r"(?:^|\s)(/etc/|/var/|/usr/|/opt/|/home/|/root/|/proc/|/sys/|~/)", text) or re.search(r"\.\./", text):
         return {"category": "action", "reason": "references a concrete filesystem path on this machine"}
     for opener in _CONVERSATION_OPENERS:
         if lower.startswith(opener):

@@ -70,8 +70,10 @@ def chat_payload(text: str) -> dict:
     return {"choices": [{"message": {"role": "assistant", "content": text}}]}
 
 
+# Hermetic: ollama_endpoint points at a dead port so these tests behave the
+# same whether or not a real Ollama daemon runs on the developer's machine.
 HYBRID = {"privacy_mode": "hybrid", "free_only_mode": True, "cloud_timeout_seconds": 10,
-          "local_chat_timeout_seconds": 15}
+          "local_chat_timeout_seconds": 15, "ollama_endpoint": "http://127.0.0.1:9"}
 
 
 class ProviderTestCase(unittest.TestCase):
