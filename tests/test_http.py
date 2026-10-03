@@ -17,7 +17,9 @@ from backend.workspace import Workspace
 
 class HttpApiTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # ignore_cleanup_errors: server worker threads may still flush audit/db
+        # files for a few ms after shutdown(); the OS removes the dir either way.
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         os.environ["VORTEX_DATA_DIR"] = self.tmp.name
         # Root runs deliberately use the root config home, so isolate the
         # sidecar's explicit configuration override rather than relying on
