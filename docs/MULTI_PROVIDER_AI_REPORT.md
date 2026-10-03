@@ -177,6 +177,16 @@ Mapping to the requested test plan:
 
 ## 10. Limitations (honest)
 
+- **Operator keys installed 2026-10-03**: real GEMINI_API_KEY_1/2, GROQ_API_KEY
+  and OPENROUTER_API_KEY were installed in `~/.config/vortex/.env` (mode 600,
+  outside the repository; never committed). The app sees them
+  (`key_configured=true` for gemini-1/2/3, groq, openrouter; entry #3 reuses
+  key slot 1), `privacy_mode` was set to `hybrid` so cloud fallback is active,
+  and the fallback chain was exercised live: local → Gemini #1→#2→#3 → Groq →
+  OpenRouter, in order, Gemini first because its free quota outlasts the
+  others. The development sandbox's firewall still kills TLS to the provider
+  hosts, so **key validity could not be confirmed from here** — on a normal
+  machine the same configuration will connect as-is.
 - **This sandbox has no outbound network egress.** Every cloud-provider
   behavior (Gemini/Groq/OpenRouter/Cloudflare HTTP flows, 429 handling,
   discovery, key auth) was validated against local mock HTTP servers that
