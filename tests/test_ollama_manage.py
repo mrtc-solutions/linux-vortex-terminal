@@ -216,10 +216,13 @@ class OllamaManagerTests(unittest.TestCase):
         with patch("backend.models.manager.ollama_status", return_value={"state": "healthy", "reason": None, "version": "0.9.9", "models": [{"name": "phi4-mini:3.8b", "size": 1}]}):
             payload = manager.catalog()
         names = {item["name"] for item in payload["items"]}
-        self.assertTrue({"phi4-mini:3.8b", "qwen3:4b", "llama3.2:3b", "gemma3:4b"} <= names)
+        self.assertTrue({"qwen2.5:3b", "phi4-mini:3.8b", "qwen3:4b", "llama3.2:3b", "gemma3:4b"} <= names)
         phi = next(item for item in payload["items"] if item["name"] == "phi4-mini:3.8b")
         self.assertTrue(phi["installed"])
-        self.assertFalse(phi["optional"])
+        # qwen2.5:3b is the only required local model; everything else is optional.
+        qwen25 = next(item for item in payload["items"] if item["name"] == "qwen2.5:3b")
+        self.assertFalse(qwen25["optional"])
+        self.assertTrue(phi["optional"])
         gemma = next(item for item in payload["items"] if item["name"] == "gemma3:4b")
         self.assertTrue(gemma["optional"])
         self.assertIn("downloads", payload)

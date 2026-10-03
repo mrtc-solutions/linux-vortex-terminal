@@ -172,7 +172,59 @@ def _start_operation(workspace: Any, executor: Any, task_id: str, plan: dict[str
         raise
 
 
-def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: str | None, engagement_id: str | None, conversation_id: str | None, settings: dict[str, Any], confirm: bool = False, approval_token: str | None = None, allow_root: bool = False) -> dict[str, Any]:
+def _conversation_turn(workspace: Any, request: str, conversation: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    """Pure conversation: AI provider layer only.
+
+    No plan is fabricated, no Guardian commentary is attached, and nothing
+    can execute from this path. The Guardian remains mandatory for every
+    action turn; conversation simply never reaches the execution pipeline.
+    """
+    try:
+        from backend.conversation import respond
+    except ImportError:
+        from conversation import respond
+    history = []
+    try:
+        history = [
+            {"role": item.get("role"), "content": item.get("content")}
+            for item in (workspace.list_messages(conversation["id"]) or [])[-12:]
+            if item.get("role") in {"user", "vortex"} and item.get("content")
+        ][:-1]  # the current user message was just appended
+    except Exception:
+        history = []
+    result = respond(request, settings, history=history)
+    if result.get("state") == "responded":
+        reply = str(result.get("reply") or "").strip()
+    else:
+        attempts = result.get("attempts") or []
+        details = "; ".join(
+            f"{item.get('provider')}: {item.get('detail')}" for item in attempts[:6] if item.get("detail")
+        )
+        reply = str(result.get("message") or "All configured free AI providers are currently unavailable.")
+        if details:
+            reply += " (" + details + ")"
+    meta = {
+        "mode": "conversation",
+        "ai": {key: result.get(key) for key in ("state", "provider", "provider_name", "model", "free", "latency_ms", "mode") if key in result},
+    }
+    assistant = workspace.add_message(conversation["id"], "vortex", reply, meta)
+    return {
+        "mode": "conversation",
+        "conversation": workspace.get_conversation(conversation["id"]),
+        "message": assistant,
+        "reply": reply,
+        "explanation": reply,
+        "ai": {**(meta["ai"]), "attempts": result.get("attempts") or [], "consensus": result.get("consensus")},
+        "task": None,
+        "plan": None,
+        "guardian": None,
+        "council": None,
+        "operation": None,
+        "auto_executed": False,
+    }
+
+
+def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: str | None, engagement_id: str | None, conversation_id: str | None, settings: dict[str, Any], confirm: bool = False, approval_token: str | None = None, allow_root: bool = False, force_plan: bool = False) -> dict[str, Any]:
     try:
         from agents.council import consult
         from models.router import advise as local_ai_advise, advisory_workers
@@ -192,6 +244,16 @@ def run_turn(store: Any, workspace: Any, executor: Any, request: str, *, cwd: st
     if not conversation:
         conversation = workspace.create_conversation(request[:60] or "New conversation")
     workspace.add_message(conversation["id"], "user", request)
+    if not force_plan:
+        try:
+            from backend.conversation import classify
+        except ImportError:
+            from conversation import classify
+        routing = classify(request)
+        if routing.get("category") == "conversation":
+            result = _conversation_turn(workspace, request, conversation, settings)
+            result["routing"] = routing
+            return result
     task = workspace.create_task(request, conversation["id"], engagement_id)
     workspace.update_task(task["id"], state="PLANNING")
     workspace.add_task_event(task["id"], "created", {"request": request[:200]})

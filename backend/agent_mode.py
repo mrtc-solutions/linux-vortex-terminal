@@ -547,9 +547,12 @@ def _drive(store: Any, workspace: Any, executor: Any, run_id: str) -> None:
                 request_text = candidates[0]
 
             try:
+                # Agent Mode steps are always action-planning turns: the
+                # conversational short-circuit must never swallow a step.
                 turn = deps.run_turn(store, workspace, executor, request_text, cwd=config.get("cwd"),
                                      engagement_id=config.get("engagement_id"),
-                                     conversation_id=config.get("conversation_id"), settings=settings)
+                                     conversation_id=config.get("conversation_id"), settings=settings,
+                                     force_plan=True)
             except Exception as exc:
                 record_event(store, run_id, "error", {"message": _clip(exc, 300)})
                 _finish(store, run, "error", f"A step failed to plan: {str(exc)[:200]}")

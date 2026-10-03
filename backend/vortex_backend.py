@@ -4086,6 +4086,9 @@ def capabilities_document() -> dict[str, Any]:
             "host-tool-discovery",
             "sigit-osint-capabilities",
             "local-ai-advisory-routing",
+            "multi-provider-ai",
+            "free-only-mode",
+            "conversational-routing",
             "android-apk-client",
             "authorized-remote-desktop-vnc",
             "mit-license",
@@ -4672,6 +4675,16 @@ class VortexHandler(BaseHTTPRequestHandler):
                 load_settings = _load("config").load_settings
                 from models.router import model_status
                 return self._json(200, {"model": model_status(load_settings())})
+            if path == "/api/providers":
+                load_settings = _load("config").load_settings
+                providers_manager = _load("providers.manager").manager()
+                query = urllib.parse.parse_qs(parsed.query)
+                probe = _query_flag(query, "fresh")
+                return self._json(200, {"providers": providers_manager.providers_snapshot(load_settings(), probe_local=probe)})
+            if path == "/api/providers/diagnostics":
+                load_settings = _load("config").load_settings
+                providers_manager = _load("providers.manager").manager()
+                return self._json(200, {"diagnostics": providers_manager.diagnostics(load_settings())})
             if path == "/api/ollama":
                 query = urllib.parse.parse_qs(parsed.query)
                 if _query_flag(query, "fresh"):
@@ -5404,6 +5417,78 @@ class VortexHandler(BaseHTTPRequestHandler):
                 request_text = (self._text(body, "request") or "")[:1500]
                 context = body.get("context") if isinstance(body.get("context"), dict) else {}
                 return self._json(200, {"assist": assist_module.assist(function, request_text, context=context, settings=settings)})
+            if path == "/api/providers/check":
+                providers_manager = _load("providers.manager").manager()
+                settings = _load("config").load_settings()
+                provider_id = self._text(body, "provider_id")
+                if not provider_id:
+                    raise ValueError("provider_id is required")
+                return self._json(200, {"health": providers_manager.health_check(provider_id[:64], settings)})
+            if path == "/api/providers/refresh":
+                providers_manager = _load("providers.manager").manager()
+                settings = _load("config").load_settings()
+                provider_id = self._optional_str(body, "provider_id")
+                results: dict[str, Any] = {}
+                targets = [provider_id[:64]] if provider_id else [
+                    item["id"] for item in providers_manager.providers_snapshot(settings, probe_local=False)["providers"]
+                    if item.get("enabled") and (item.get("key_configured") or not item.get("requires_api_key"))
+                ]
+                for target in targets[:24]:
+                    results[target] = providers_manager.health_check(target, settings)
+                return self._json(200, {"refresh": results})
+            if path == "/api/providers/enable":
+                providers_manager = _load("providers.manager").manager()
+                provider_id = self._text(body, "provider_id")
+                if not provider_id:
+                    raise ValueError("provider_id is required")
+                enabled = body.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled must be a boolean")
+                allow_free = body.get("allow_in_free_mode")
+                if allow_free is not None and not isinstance(allow_free, bool):
+                    raise ValueError("allow_in_free_mode must be a boolean")
+                return self._json(200, {"provider": providers_manager.set_enabled(provider_id[:64], enabled, allow_in_free_mode=allow_free)})
+            if path == "/api/providers/select":
+                save_settings = _load("config").save_settings
+                provider_id = (self._optional_str(body, "provider_id") or "auto")[:64]
+                model = (self._optional_str(body, "model") or "")[:200]
+                if provider_id != "auto" and _load("providers.catalog").provider_def(provider_id) is None:
+                    raise ValueError("unknown provider: " + provider_id)
+                if provider_id != "auto":
+                    # Free-only protection applies at selection time too: a
+                    # knowingly-paid model cannot even be pinned.
+                    providers_manager = _load("providers.manager").manager()
+                    settings = _load("config").load_settings()
+                    policy = _load("providers.policy").cost_policy(settings)
+                    definition = providers_manager._definition(provider_id)
+                    entry = None
+                    if model:
+                        registry_module = _load("providers.registry")
+                        entry = next((item for item in registry_module.registry().get_models(provider_id) if item.get("id") == model), None)
+                    allowed, reason = _load("providers.policy").model_allowed(policy, definition, entry, providers_manager._overrides(provider_id))
+                    if not allowed:
+                        return self._json(403, {"error": {"code": "blocked_by_policy", "message": reason}})
+                updated = save_settings({"conversation_provider": provider_id, "conversation_model": model})
+                return self._json(200, {"selected": {"provider": provider_id, "model": model}, "settings": updated})
+            if path == "/api/providers/gemini":
+                providers_manager = _load("providers.manager").manager()
+                entry = self._text(body, "entry")
+                if not entry:
+                    raise ValueError("entry is required (gemini-1, gemini-2, or gemini-3)")
+                model = self._optional_str(body, "model")
+                key_slot = self._optional_str(body, "key_slot")
+                return self._json(200, {"gemini": providers_manager.configure_gemini(entry[:20], model=model, key_slot=key_slot)})
+            if path == "/api/providers/warmup":
+                providers_manager = _load("providers.manager").manager()
+                settings = _load("config").load_settings()
+                return self._json(200, {"warmup": providers_manager.warm_up(settings)})
+            if path == "/api/providers/consensus":
+                providers_manager = _load("providers.manager").manager()
+                settings = _load("config").load_settings()
+                request_text = self._text(body, "request")
+                if not request_text:
+                    raise ValueError("request is required")
+                return self._json(200, {"consensus": providers_manager.consensus(request_text[:8000], settings)})
             if path == "/api/models/gguf/activate":
                 manager = _load("models.manager")
                 filename = self._text(body, "file") or self._text(body, "name") or ""

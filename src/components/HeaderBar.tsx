@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ThemeMode } from '../types/terminal';
-import { JsonRecord, getCapabilities, getModels, getSystemHealth } from '../services/vortexApi';
+import { JsonRecord, getCapabilities, getModels, getSettings, getSystemHealth } from '../services/vortexApi';
 import { 
   Terminal, 
   MapPin, 
@@ -56,14 +56,15 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   const [hostLabel, setHostLabel] = useState('connecting…');
   const [providerBadges, setProviderBadges] = useState<{ name: string; state: string; reason: string }[]>([]);
   const [advisorLabel, setAdvisorLabel] = useState('Advisors: …');
+  const [freeOnly, setFreeOnly] = useState<boolean | null>(null);
 
   // One honest telemetry pass from the live sidecar (no staged cluster stats).
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const [healthPayload, modelsPayload, capsPayload] = await Promise.all([
-          getSystemHealth(), getModels(), getCapabilities(),
+        const [healthPayload, modelsPayload, capsPayload, settingsPayload] = await Promise.all([
+          getSystemHealth(), getModels(), getCapabilities(), getSettings(),
         ]);
         if (cancelled) return;
         const host = ((healthPayload.health || {}) as JsonRecord).host as JsonRecord | undefined;
@@ -79,11 +80,14 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
         const probes = (capsPayload.host_probes || {}) as JsonRecord;
         const installed = Array.isArray(probes.agents_installed) ? probes.agents_installed.length : 0;
         setAdvisorLabel(installed > 0 ? `Advisors: ${installed} READY` : 'Advisors: NONE');
+        const settings = (settingsPayload.settings || settingsPayload || {}) as JsonRecord;
+        setFreeOnly(settings.free_only_mode !== false);
       } catch {
         if (!cancelled) {
           setHostLabel('sidecar offline');
           setProviderBadges([]);
           setAdvisorLabel('Advisors: ?');
+          setFreeOnly(null);
         }
       }
     };
@@ -190,6 +194,19 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             <span className="text-xs bg-emerald-950/80 text-emerald-400 px-1 rounded border border-emerald-800/50">
               {advisorLabel}
             </span>
+            {freeOnly !== null ? (
+              <button
+                onClick={() => onOpenPopup('providers')}
+                title={freeOnly
+                  ? 'Free-only mode: paid and unknown-priced AI models are blocked. Click for provider details.'
+                  : 'Paid AI providers are permitted. Click for provider details.'}
+                className={`text-[10px] font-bold px-1.5 py-0.5 rounded border cursor-pointer ${freeOnly
+                  ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/50'
+                  : 'bg-amber-950/60 text-amber-300 border-amber-800/50'}`}
+              >
+                {freeOnly ? 'FREE ONLY · $0' : 'PAID ALLOWED'}
+              </button>
+            ) : null}
           </div>
 
           {/* Live Local-AI Provider States */}

@@ -21,13 +21,25 @@ from typing import Any
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MODEL_CATALOG: dict[str, dict[str, Any]] = {
+    # qwen2.5:3b is the confirmed primary local model (discovered via the
+    # Ollama API, never assumed from a .gguf file on disk). Everything else
+    # is optional: Vortex must not fail or retry-loop because Llama 3.2 or
+    # any other catalog entry is absent.
+    "qwen2.5:3b": {
+        "family": "qwen2.5",
+        "label": "Qwen 2.5 3B (primary local)",
+        "roles": ("conversation", "planning", "analysis", "reporting", "coding", "verification"),
+        "resource_tier": "low",
+        "primary_for": ("conversation", "plan", "interpret", "report", "verify", "fast"),
+        "optional": False,
+    },
     "phi4-mini:3.8b": {
         "family": "phi4-mini",
         "label": "Phi-4 Mini 3.8B",
         "roles": ("conversation", "analysis", "reporting", "command-explanation"),
         "resource_tier": "standard",
         "primary_for": ("conversation", "interpret", "report", "verify"),
-        "optional": False,
+        "optional": True,
     },
     "qwen3:4b": {
         "family": "qwen3",
@@ -35,15 +47,15 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "roles": ("planning", "coding", "tool-selection", "verification"),
         "resource_tier": "standard",
         "primary_for": ("plan", "tooling", "verify"),
-        "optional": False,
+        "optional": True,
     },
     "llama3.2:3b": {
         "family": "llama3.2",
-        "label": "Llama 3.2 3B",
+        "label": "Llama 3.2 3B (optional)",
         "roles": ("fast-response", "summarization", "fallback"),
         "resource_tier": "low",
         "primary_for": ("fast", "conversation"),
-        "optional": False,
+        "optional": True,
     },
     "gemma3:4b": {
         "family": "gemma3",
@@ -419,9 +431,10 @@ def recommended_models(resources: dict[str, Any], candidates: list[dict[str, Any
     installed = [item for item in candidates if item.get("installed")]
     names = {item["name"]: item.get("installed_name") or item["name"] for item in installed}
     fallback = extras[0]["name"] if extras else None
-    fast = names.get("llama3.2:3b") or names.get("phi4-mini:3.8b") or names.get("qwen3:4b") or fallback
-    planner = names.get("qwen3:4b") or names.get("phi4-mini:3.8b") or fast
-    analyst = names.get("phi4-mini:3.8b") or planner or fast
+    qwen25 = names.get("qwen2.5:3b")
+    fast = qwen25 or names.get("llama3.2:3b") or names.get("phi4-mini:3.8b") or names.get("qwen3:4b") or fallback
+    planner = qwen25 or names.get("qwen3:4b") or names.get("phi4-mini:3.8b") or fast
+    analyst = qwen25 or names.get("phi4-mini:3.8b") or planner or fast
     specialist = names.get("gemma3:4b") or analyst
     multi_model = resources.get("max_parallel_models", 1) > 1 and len(installed) >= 2
     return {

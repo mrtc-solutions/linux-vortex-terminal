@@ -44,6 +44,7 @@ export const Launcher: React.FC<LauncherProps> = ({ onGoTab, onOpenPopup, onClos
     { label: 'Scope', hint: 'Engagements', icon: <Crosshair className="w-5 h-5" />, action: go(() => onOpenPopup('scope')) },
     { label: 'Tools', hint: 'Inventory', icon: <Wrench className="w-5 h-5" />, action: go(() => onOpenPopup('tools')) },
     { label: 'Models', hint: 'Local AI', icon: <BrainCircuit className="w-5 h-5" />, action: go(() => onOpenPopup('models')) },
+    { label: 'AI Providers', hint: 'Local + free cloud', icon: <BrainCircuit className="w-5 h-5" />, action: go(() => onOpenPopup('providers')) },
     { label: 'System', hint: 'Health', icon: <Activity className="w-5 h-5" />, action: go(() => onOpenPopup('system')) },
     { label: 'Conversations', hint: 'Threads', icon: <History className="w-5 h-5" />, action: go(() => onOpenPopup('history')) },
     { label: 'Memory', hint: 'Knowledge', icon: <Database className="w-5 h-5" />, action: go(() => onOpenPopup('memory')) },

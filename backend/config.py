@@ -22,18 +22,33 @@ DEFAULTS = {
     "ollama_endpoint": "http://127.0.0.1:11434",
     "ai_enabled": True,
     "ai_verbosity": "balanced",
-    "model_primary": "phi4-mini:3.8b",
-    "model_planner": "qwen3:4b",
-    "model_fast": "llama3.2:3b",
+    # qwen2.5:3b is the confirmed primary local model. Llama 3.2 and the
+    # other catalog entries are optional accelerators, never requirements.
+    "model_primary": "qwen2.5:3b",
+    "model_planner": "qwen2.5:3b",
+    "model_fast": "qwen2.5:3b",
     "model_specialist": "gemma3:4b",
+    # Multi-provider AI layer (conversation routing + cost protection).
+    "local_primary_model": "qwen2.5:3b",
+    "free_only_mode": True,
+    "allow_paid_providers": False,
+    "allow_unknown_pricing": False,
+    "conversation_provider": "auto",
+    "conversation_model": "",
+    "secondary_ai_mode": "on-demand",
+    "cloud_timeout_seconds": 30,
+    "local_chat_timeout_seconds": 90,
     "model_timeout_seconds": 12,
     "model_max_parallel": 2,
     "model_keepalive": "0m",
     "gguf_enabled": True,
     "models_dir": "",
-    "gguf_primary": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    # GGUF files are on-disk weights only; they are never treated as live
+    # Ollama model identifiers. Qwen2.5 is the default for every role —
+    # the Llama 3.2 file remains optional.
+    "gguf_primary": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
     "gguf_planner": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
-    "gguf_fast": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "gguf_fast": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
     "gguf_specialist": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
     "gguf_ctx": 2048,
     "gguf_threads": 4,
@@ -108,6 +123,18 @@ def _load_settings_unlocked() -> dict[str, Any]:
         data["privacy_mode"] = "local"
     if data.get("ai_verbosity") not in {"brief", "balanced", "detailed"}:
         data["ai_verbosity"] = "balanced"
+    if data.get("secondary_ai_mode") not in {"off", "on-demand", "auto", "consensus"}:
+        data["secondary_ai_mode"] = "on-demand"
+    # free_only_mode is the $0 guarantee; paid providers stay off unless the
+    # operator explicitly turns free-only off AND allows paid providers.
+    if data.get("free_only_mode") is True:
+        data["allow_paid_providers"] = False
+        data["allow_unknown_pricing"] = False
+    data["conversation_provider"] = str(data.get("conversation_provider") or "auto")[:64]
+    data["conversation_model"] = str(data.get("conversation_model") or "")[:200]
+    data["local_primary_model"] = str(data.get("local_primary_model") or "qwen2.5:3b")[:120]
+    data["cloud_timeout_seconds"] = max(5, min(int(data.get("cloud_timeout_seconds") or 30), 120))
+    data["local_chat_timeout_seconds"] = max(10, min(int(data.get("local_chat_timeout_seconds") or 90), 600))
     data["model_timeout_seconds"] = max(2, min(int(data.get("model_timeout_seconds") or 12), 60))
     data["model_max_parallel"] = max(1, min(int(data.get("model_max_parallel") or 2), 3))
     data["gguf_ctx"] = max(512, min(int(data.get("gguf_ctx") or 2048), 8192))
@@ -151,6 +178,16 @@ def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
             current["profile"] = "safe"
         if current.get("ai_verbosity") not in {"brief", "balanced", "detailed"}:
             current["ai_verbosity"] = "balanced"
+        if current.get("secondary_ai_mode") not in {"off", "on-demand", "auto", "consensus"}:
+            current["secondary_ai_mode"] = "on-demand"
+        if current.get("free_only_mode") is True:
+            current["allow_paid_providers"] = False
+            current["allow_unknown_pricing"] = False
+        current["conversation_provider"] = str(current.get("conversation_provider") or "auto")[:64]
+        current["conversation_model"] = str(current.get("conversation_model") or "")[:200]
+        current["local_primary_model"] = str(current.get("local_primary_model") or "qwen2.5:3b")[:120]
+        current["cloud_timeout_seconds"] = max(5, min(int(current.get("cloud_timeout_seconds") or 30), 120))
+        current["local_chat_timeout_seconds"] = max(10, min(int(current.get("local_chat_timeout_seconds") or 90), 600))
         current["model_timeout_seconds"] = max(2, min(int(current.get("model_timeout_seconds") or 12), 60))
         current["model_max_parallel"] = max(1, min(int(current.get("model_max_parallel") or 2), 3))
         current["gguf_ctx"] = max(512, min(int(current.get("gguf_ctx") or 2048), 8192))
