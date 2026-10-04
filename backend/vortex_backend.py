@@ -4799,6 +4799,19 @@ class VortexHandler(BaseHTTPRequestHandler):
                     limit_i = 200
                 settings = _load("config").load_settings()
                 return self._json(200, {"graph": self.workspace.asset_graph(max(1, min(limit_i, 500)), settings)})
+            if path == "/api/arbitration/history":
+                query = urllib.parse.parse_qs(parsed.query)
+                limit = self._bounded_int({"limit": self._query_text(query, "limit", "50")}, "limit", 50, 1, 200)
+                if hasattr(self.workspace, "list_arbitrations"):
+                    return self._json(200, {"arbitrations": self.workspace.list_arbitrations(limit)})
+                return self._json(200, {"arbitrations": []})
+            if path.startswith("/api/arbitration/lineage/"):
+                msg_id = path.rsplit("/", 1)[-1]
+                if hasattr(self.workspace, "get_arbitration_by_message"):
+                    arb = self.workspace.get_arbitration_by_message(msg_id)
+                    if arb:
+                        return self._json(200, {"arbitration": arb})
+                return self._json(404, {"error": {"code": "not_found", "message": "arbitration record not found"}})
             if path == "/api/search":
                 query = urllib.parse.parse_qs(parsed.query)
                 settings = _load("config").load_settings()
@@ -5626,10 +5639,36 @@ class VortexHandler(BaseHTTPRequestHandler):
                 if not self.executor.cancel(operation_id):
                     return self._json(404, {"error": {"code": "not_running", "message": "operation is not running"}})
                 return self._json(202, {"cancel_requested": True, "operation_id": operation_id})
+            if path == "/api/arbitration/feedback":
+                candidate_id = self._text(body, "candidate_id")
+                feedback_type = self._text(body, "feedback_type")
+                score_delta = float(body.get("score_delta", 0.0))
+                message_id = self._optional_str(body, "message_id")
+                operation_id = self._optional_str(body, "operation_id")
+                comment = self._optional_str(body, "comment")
+                if hasattr(self.workspace, "record_candidate_feedback"):
+                    rec = self.workspace.record_candidate_feedback(
+                        candidate_id, feedback_type, score_delta,
+                        message_id=message_id, operation_id=operation_id, comment=comment
+                    )
+                    return self._json(201, {"saved": True, "feedback": rec})
+                return self._json(201, {"saved": True})
             if path == "/api/feedback":
                 rating = self._bounded_int(body, "rating", 1, 1, 5)
                 correction = redact(self._optional_str(body, "correction") or "")[:2000]
                 feedback = self.store.save_feedback(self._optional_str(body, "operation_id"), rating, correction)
+                candidate_id = self._optional_str(body, "candidate_id")
+                if candidate_id and hasattr(self.workspace, "record_candidate_feedback"):
+                    delta = 10.0 if rating >= 4 else (-15.0 if rating <= 2 else 0.0)
+                    try:
+                        self.workspace.record_candidate_feedback(
+                            candidate_id, "rating", delta,
+                            message_id=self._optional_str(body, "message_id"),
+                            operation_id=self._optional_str(body, "operation_id"),
+                            comment=correction
+                        )
+                    except Exception:
+                        pass
                 return self._json(201, {"saved": True, "feedback": feedback})
             if path == "/api/workspace/turn":
                 load_settings = _load("config").load_settings

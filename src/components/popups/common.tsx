@@ -1,7 +1,7 @@
 /* Shared popup primitives — Vortex Terminal theme, no mock data anywhere. */
 import React from 'react';
 
-export function Section({ title, children }: { title: string; children: React.ReactNode }) {
+export function Section({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <div className="text-[10px] uppercase tracking-wider text-stone-500 font-semibold">{title}</div>

@@ -218,49 +218,165 @@ def _needs_consensus(request: str, settings: dict[str, Any]) -> bool:
 
 def respond(request: str, settings: dict[str, Any] | None = None, *,
             history: list[dict[str, Any]] | None = None,
-            provider_id: str | None = None, model: str | None = None) -> dict[str, Any]:
-    """Answer a conversational turn through the provider layer.
+            provider_id: str | None = None, model: str | None = None,
+            workspace: Any = None, store: Any = None,
+            conversation_id: str | None = None,
+            host_facts: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Answer a conversational turn through the provider and arbitration layer.
 
-    Returns a result that either carries a natural `reply` or a precise,
-    per-provider explanation of why no free provider could answer. No
-    Guardian commentary is attached to conversation — the Guardian governs
-    execution, and nothing here executes.
+    Evaluates whether relevant historical answers in memory provide superior,
+    verified solutions compared to newly generated cloud answers, and arbitrates
+    between them using local evidence and multi-criteria scoring.
     """
     settings = settings or {}
     mgr = _manager()
+    text = (request or "").strip()
+    lower = text.lower().rstrip("!. ")
+
+    # Trivial greetings bypass heavy historical retrieval and arbitration
+    is_greeting = lower in _GREETINGS or classify(text).get("reason") == "greeting/small talk"
+
+    if is_greeting:
+        messages = build_messages(request, history)
+        result = mgr.generate(messages, settings, provider_id=provider_id, model=model, purpose="conversation")
+        if result.get("state") == "responded":
+            return {
+                "state": "responded",
+                "mode": "single",
+                "reply": str(result.get("reply") or ""),
+                "provider": result.get("provider"),
+                "provider_name": result.get("provider_name"),
+                "model": result.get("model"),
+                "free": result.get("free"),
+                "latency_ms": result.get("latency_ms"),
+                "attempts": result.get("attempts") or [],
+                "historical_contribution": "none",
+                "arbitration": None,
+            }
+        return {
+            "state": "unavailable",
+            "mode": "single",
+            "reply": "",
+            "message": str(result.get("message") or "All configured free AI providers are currently unavailable."),
+            "attempts": result.get("attempts") or [],
+            "policy": result.get("policy"),
+            "historical_contribution": "none",
+            "arbitration": None,
+        }
+
+    # For substantive technical / conversational requests, perform historical candidate retrieval
+    raw_history: list[dict[str, Any]] = []
+    retriever = None
+    if workspace or store:
+        try:
+            try:
+                from backend.arbitration import HistoricalCandidateRetriever
+            except ImportError:
+                from arbitration import HistoricalCandidateRetriever
+            retriever = HistoricalCandidateRetriever(workspace=workspace, store=store)
+            raw_history = retriever.retrieve(request, conversation_id=conversation_id, limit=5, min_relevance=0.20)
+        except Exception:
+            raw_history = []
+
+    # Generate new candidate via consensus council or primary provider
+    new_result: dict[str, Any] = {}
     if _needs_consensus(request, settings):
         council = mgr.consensus(request, settings)
         if council.get("state") == "responded" and council.get("synthesis"):
             primary = (council.get("responses") or [{}])[0]
-            return {
+            new_result = {
                 "state": "responded",
                 "mode": "consensus",
                 "reply": str(council.get("synthesis")),
                 "provider": council.get("synthesizer") or primary.get("provider"),
+                "provider_name": "Multi-Model Council",
                 "model": primary.get("model"),
                 "latency_ms": primary.get("latency_ms"),
                 "consensus": council,
             }
-        # Council could not form — fall through to single-provider answer.
-    messages = build_messages(request, history)
-    result = mgr.generate(messages, settings, provider_id=provider_id, model=model, purpose="conversation")
-    if result.get("state") == "responded":
+    if not new_result:
+        messages = build_messages(request, history)
+        new_result = mgr.generate(messages, settings, provider_id=provider_id, model=model, purpose="conversation")
+
+    # If we have relevant historical candidates, perform multi-candidate arbitration
+    if raw_history:
+        try:
+            try:
+                from backend.arbitration import (
+                    HistoricalCandidateScorer,
+                    CandidateNormalizer,
+                    CandidateComparator,
+                    AnswerArbitrator,
+                    AnswerLineageStore,
+                )
+            except ImportError:
+                from arbitration import (
+                    HistoricalCandidateScorer,
+                    CandidateNormalizer,
+                    CandidateComparator,
+                    AnswerArbitrator,
+                    AnswerLineageStore,
+                )
+
+            scorer = HistoricalCandidateScorer(host_facts=host_facts)
+            normalizer = CandidateNormalizer(scorer=scorer)
+            comparator = CandidateComparator(host_facts=host_facts)
+            arbitrator = AnswerArbitrator(provider_manager=mgr, comparator=comparator)
+            lineage_store = AnswerLineageStore(workspace=workspace, store=store)
+
+            candidates = [normalizer.normalize_historical(request, h) for h in raw_history]
+            if new_result.get("state") == "responded":
+                candidates.append(normalizer.normalize_cloud(request, new_result))
+
+            arb_result = arbitrator.arbitrate(request, candidates, settings=settings, host_facts=host_facts)
+
+            # Persist arbitration record
+            lineage_store.save_arbitration(request, arb_result, conversation_id=conversation_id)
+
+            winning_cand = next(
+                (c for c in arb_result.candidates if c.candidate_id == arb_result.selected_candidate_id),
+                (arb_result.candidates[0] if arb_result.candidates else None),
+            )
+
+            return {
+                "state": "responded",
+                "mode": arb_result.decision,
+                "reply": arb_result.final_answer,
+                "provider": (winning_cand.provider if winning_cand else "vortex-arbitrator") if arb_result.decision != "synthesized" else "vortex-synthesis",
+                "provider_name": (winning_cand.provider_name if winning_cand else "Vortex Arbitrator") if arb_result.decision != "synthesized" else "Vortex Evidence Synthesis",
+                "model": (winning_cand.model if winning_cand else arb_result.arbitrator_model),
+                "free": True,
+                "latency_ms": arb_result.latency_ms,
+                "historical_contribution": arb_result.historical_contribution,
+                "arbitration": arb_result.to_dict(),
+                "attempts": new_result.get("attempts") or [],
+            }
+        except Exception:
+            pass
+
+    # No historical candidates or arbitration fallback: return new result
+    if new_result.get("state") == "responded":
         return {
             "state": "responded",
-            "mode": "single",
-            "reply": str(result.get("reply") or ""),
-            "provider": result.get("provider"),
-            "provider_name": result.get("provider_name"),
-            "model": result.get("model"),
-            "free": result.get("free"),
-            "latency_ms": result.get("latency_ms"),
-            "attempts": result.get("attempts") or [],
+            "mode": new_result.get("mode") or "single",
+            "reply": str(new_result.get("reply") or ""),
+            "provider": new_result.get("provider"),
+            "provider_name": new_result.get("provider_name"),
+            "model": new_result.get("model"),
+            "free": new_result.get("free"),
+            "latency_ms": new_result.get("latency_ms"),
+            "attempts": new_result.get("attempts") or [],
+            "historical_contribution": "none",
+            "arbitration": None,
         }
+
     return {
         "state": "unavailable",
         "mode": "single",
         "reply": "",
-        "message": str(result.get("message") or "All configured free AI providers are currently unavailable."),
-        "attempts": result.get("attempts") or [],
-        "policy": result.get("policy"),
+        "message": str(new_result.get("message") or "All configured free AI providers are currently unavailable."),
+        "attempts": new_result.get("attempts") or [],
+        "policy": new_result.get("policy"),
+        "historical_contribution": "none",
+        "arbitration": None,
     }

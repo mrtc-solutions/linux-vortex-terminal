@@ -67,8 +67,22 @@ CREATE TABLE IF NOT EXISTS engagement_scope (
     environment TEXT,
     owner TEXT
 );
+CREATE TABLE IF NOT EXISTS arbitrations (
+    id TEXT PRIMARY KEY, created_at TEXT NOT NULL, conversation_id TEXT,
+    message_id TEXT, task_id TEXT, request TEXT NOT NULL, decision TEXT NOT NULL,
+    winning_candidate_id TEXT, historical_contribution TEXT NOT NULL,
+    confidence REAL NOT NULL, synthesized INTEGER NOT NULL,
+    rationale TEXT NOT NULL, candidates_json TEXT NOT NULL, lineage_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS candidate_feedback (
+    id TEXT PRIMARY KEY, created_at TEXT NOT NULL, candidate_id TEXT NOT NULL,
+    message_id TEXT, operation_id TEXT, feedback_type TEXT NOT NULL,
+    score_delta REAL NOT NULL, comment TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_arbitrations_message ON arbitrations(message_id);
+CREATE INDEX IF NOT EXISTS idx_arbitrations_conversation ON arbitrations(conversation_id);
 """
 
 
@@ -611,6 +625,80 @@ class Workspace:
     def record_agent_run(self, agent_id: str, state: str, task_id: str | None, latency_ms: int, payload: dict[str, Any] | None = None) -> None:
         with self.store.lock, self.store.connect() as db:
             db.execute("INSERT INTO agent_runs VALUES (?,?,?,?,?,?,?)", (secrets.token_hex(16), now_iso(), agent_id, task_id, state, int(latency_ms), canonical(payload or {})))
+
+    def save_arbitration(self, record: dict[str, Any]) -> dict[str, Any]:
+        item = {
+            "id": record.get("id") or secrets.token_hex(16),
+            "created_at": record.get("created_at") or now_iso(),
+            "conversation_id": record.get("conversation_id"),
+            "message_id": record.get("message_id"),
+            "task_id": record.get("task_id"),
+            "request": str(record.get("request") or "")[:1000],
+            "decision": str(record.get("decision") or "cloud"),
+            "winning_candidate_id": record.get("winning_candidate_id") or record.get("selected_candidate_id"),
+            "historical_contribution": str(record.get("historical_contribution") or "none"),
+            "confidence": float(record.get("confidence") or 0.0),
+            "synthesized": 1 if record.get("synthesized") else 0,
+            "rationale": str(record.get("rationale") or "")[:2000],
+            "candidates": record.get("candidates") or [],
+            "lineage": record.get("lineage") or {},
+        }
+        with self.store.lock, self.store.connect() as db:
+            db.execute(
+                "INSERT INTO arbitrations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    item["id"],
+                    item["created_at"],
+                    item["conversation_id"],
+                    item["message_id"],
+                    item["task_id"],
+                    item["request"],
+                    item["decision"],
+                    item["winning_candidate_id"],
+                    item["historical_contribution"],
+                    item["confidence"],
+                    item["synthesized"],
+                    item["rationale"],
+                    canonical(item["candidates"]),
+                    canonical(item["lineage"]),
+                ),
+            )
+        return item
+
+    def get_arbitration_by_message(self, message_id: str) -> dict[str, Any] | None:
+        with self.store.connect() as db:
+            row = db.execute("SELECT * FROM arbitrations WHERE message_id=? ORDER BY created_at DESC LIMIT 1", (message_id,)).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["candidates"] = json.loads(data["candidates_json"])
+        data["lineage"] = json.loads(data["lineage_json"])
+        return data
+
+    def list_arbitrations(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.store.connect() as db:
+            rows = db.execute("SELECT id, created_at, conversation_id, message_id, task_id, request, decision, winning_candidate_id, historical_contribution, confidence, synthesized, rationale, lineage_json FROM arbitrations ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["lineage"] = json.loads(d["lineage_json"]) if d.get("lineage_json") else None
+            out.append(d)
+        return out
+
+    def record_candidate_feedback(self, candidate_id: str, feedback_type: str, score_delta: float, *, message_id: str | None = None, operation_id: str | None = None, comment: str | None = None) -> dict[str, Any]:
+        item = {
+            "id": secrets.token_hex(16),
+            "created_at": now_iso(),
+            "candidate_id": str(candidate_id)[:80],
+            "message_id": message_id,
+            "operation_id": operation_id,
+            "feedback_type": str(feedback_type)[:40],
+            "score_delta": float(score_delta),
+            "comment": str(comment or "")[:2000] if comment else None,
+        }
+        with self.store.lock, self.store.connect() as db:
+            db.execute("INSERT INTO candidate_feedback VALUES (?,?,?,?,?,?,?,?)", (item["id"], item["created_at"], item["candidate_id"], item["message_id"], item["operation_id"], item["feedback_type"], item["score_delta"], item["comment"]))
+        return item
 
     def create_engagement(self, item: dict[str, Any], excluded: list[str] | None, environment: str | None = None, owner: str | None = None) -> None:
         """Persist authorization and its exclusion scope in one transaction."""

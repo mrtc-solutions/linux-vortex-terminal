@@ -173,7 +173,7 @@ def _start_operation(workspace: Any, executor: Any, task_id: str, plan: dict[str
 
 
 def _conversation_turn(workspace: Any, request: str, conversation: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    """Pure conversation: AI provider layer only.
+    """Pure conversation: AI provider and arbitration layer.
 
     No plan is fabricated, no Guardian commentary is attached, and nothing
     can execute from this path. The Guardian remains mandatory for every
@@ -192,7 +192,11 @@ def _conversation_turn(workspace: Any, request: str, conversation: dict[str, Any
         ][:-1]  # the current user message was just appended
     except Exception:
         history = []
-    result = respond(request, settings, history=history)
+    result = respond(
+        request, settings, history=history,
+        workspace=workspace, store=workspace.store if workspace else None,
+        conversation_id=conversation["id"],
+    )
     if result.get("state") == "responded":
         reply = str(result.get("reply") or "").strip()
     else:
@@ -206,8 +210,20 @@ def _conversation_turn(workspace: Any, request: str, conversation: dict[str, Any
     meta = {
         "mode": "conversation",
         "ai": {key: result.get(key) for key in ("state", "provider", "provider_name", "model", "free", "latency_ms", "mode") if key in result},
+        "arbitration": result.get("arbitration"),
+        "historical_contribution": result.get("historical_contribution") or "none",
     }
     assistant = workspace.add_message(conversation["id"], "vortex", reply, meta)
+    if result.get("arbitration") and workspace:
+        try:
+            workspace.save_arbitration({
+                **(result["arbitration"]),
+                "message_id": assistant.get("id"),
+                "conversation_id": conversation["id"],
+                "request": request,
+            })
+        except Exception:
+            pass
     return {
         "mode": "conversation",
         "conversation": workspace.get_conversation(conversation["id"]),
@@ -215,6 +231,8 @@ def _conversation_turn(workspace: Any, request: str, conversation: dict[str, Any
         "reply": reply,
         "explanation": reply,
         "ai": {**(meta["ai"]), "attempts": result.get("attempts") or [], "consensus": result.get("consensus")},
+        "arbitration": result.get("arbitration"),
+        "historical_contribution": result.get("historical_contribution") or "none",
         "task": None,
         "plan": None,
         "guardian": None,
@@ -407,6 +425,17 @@ def finish_task(workspace: Any, task_id: str, operation: dict[str, Any], plan: d
                 workspace.add_finding(task_id, plan.get("engagement_id"), f"Open port observed {observation.get('port')}", "info", observation, "observed")
     validated = status == "succeeded" and bool(objective.get("achieved"))
     workspace.record_experience(workspace.get_task(task_id), status or "unknown", validated=validated)
+    if hasattr(workspace, "record_candidate_feedback"):
+        if validated and status == "succeeded":
+            try:
+                workspace.record_candidate_feedback(f"hist-task-{task_id}", "outcome_success", 15.0, operation_id=operation.get("id"))
+            except Exception:
+                pass
+        elif status == "failed":
+            try:
+                workspace.record_candidate_feedback(f"hist-task-{task_id}", "outcome_failure", -20.0, operation_id=operation.get("id"))
+            except Exception:
+                pass
     report = None
     if operation.get("id"):
         existing = workspace.get_report_by_operation(operation["id"])

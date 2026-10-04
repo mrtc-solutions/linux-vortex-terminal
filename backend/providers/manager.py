@@ -814,6 +814,12 @@ class ProviderManager:
 
     def _chat(self, definition: dict[str, Any], model: str, messages: list[dict[str, str]],
               settings: dict[str, Any]) -> str:
+        # Before sending context to a cloud provider, redact all secrets, API keys, private keys, passwords
+        if definition.get("mode") == "cloud":
+            messages = [
+                {"role": m["role"], "content": _keys.redact_secrets(str(m.get("content") or ""))}
+                for m in messages
+            ]
         api = str(definition.get("api") or "openai")
         timeout = float(settings.get("cloud_timeout_seconds") or _DEFAULT_CLOUD_TIMEOUT)
         if api == "ollama":
@@ -1011,7 +1017,14 @@ class ProviderManager:
                 "mode": definition["mode"],
                 "base_url": definition["base_url"],
                 "free_status": definition["free_status"],
+                "free_category": definition.get("free_category") or definition.get("free_status"),
                 "free_detail": definition.get("free_detail"),
+                "rate_limits": definition.get("rate_limits"),
+                "context_length": definition.get("context_length"),
+                "requires_card": bool(definition.get("requires_card", False)),
+                "requires_phone": bool(definition.get("requires_phone", False)),
+                "source_url": definition.get("source_url") or "",
+                "priority": definition.get("priority", 99),
                 "enabled": self._enabled(definition),
                 "allow_in_free_mode": overrides.get("allow_in_free_mode") is True,
                 "requires_api_key": bool(definition.get("key_slot")),
