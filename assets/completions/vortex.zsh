@@ -1,6 +1,6 @@
 #compdef vortex
 _vortex() {
-  _arguments '1:command:(ask plan run doctor tools adapters artifact backup db migrate shell engagement history explain undo session config model knowledge completion report theme host-tools mobile desktop)' '*::arg:->args'
+  _arguments '1:command:(ask plan run doctor bootstrap tools adapters artifact backup db migrate shell engagement history explain undo session config model knowledge completion report theme host-tools mobile desktop)' '*::arg:->args'
   case "$words[2]" in
     desktop) _values 'action' deb repo ;;
     engagement) _values 'action' list create show close ;;

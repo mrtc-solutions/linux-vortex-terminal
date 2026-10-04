@@ -89,7 +89,7 @@ def _normalize_args(raw):
                 cleaned = cleaned[:separator] + ['--direct-mode'] + cleaned[separator + 1:]
         except ValueError:
             pass
-    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn', 'host-tools', 'mobile', 'desktop', 'palette', 'search', 'dashboard', 'assets'}
+    commands = {'ask', 'plan', 'doctor', 'tools', 'adapters', 'artifact', 'backup', 'db', 'migrate', 'undo', 'retention', 'model', 'shell', 'history', 'explain', 'audit', 'report', 'completion', 'theme', 'engagement', 'session', 'run', 'health', 'agents', 'tasks', 'memory', 'learning', 'conversations', 'sandbox', 'plugins', 'benchmark', 'deps', 'serve', 'install', 'turn', 'host-tools', 'mobile', 'desktop', 'palette', 'search', 'dashboard', 'assets', 'bootstrap'}
     if cleaned and cleaned[0] not in commands and not cleaned[0].startswith('-'):
         cleaned.insert(0, '_request')
     return prefix + cleaned
@@ -366,6 +366,7 @@ def main(argv=None):
     for name in ('ask', 'plan'):
         p = sub.add_parser(name); p.add_argument('request')
     sub.add_parser('doctor')
+    sub.add_parser('bootstrap')
     ht = sub.add_parser('host-tools'); ht.add_argument('action', choices=['list', 'rescan'], nargs='?', default='list')
     mob = sub.add_parser('mobile'); mob.add_argument('action', choices=['apk'], nargs='?', default='apk'); mob.add_argument('--sidecar-url')
     desk = sub.add_parser('desktop'); desk.add_argument('action', choices=['deb', 'repo'], nargs='?', default='deb'); desk.add_argument('--output', help='output directory for the .deb (default: Vortex Terminal data dir)'); desk.add_argument('--deb', action='append', default=None, help='repo input package (repeatable; default: latest built .deb)'); desk.add_argument('--codename', default='stable', help='APT suite name for desktop repo (default: stable)'); desk.add_argument('--component', default='main', help='APT component for desktop repo (default: main)'); desk.add_argument('--sign', default=None, help='GPG key id to sign the repo Release files with'); desk.add_argument('--replace', action='store_true', help='replace an existing repo output directory')
@@ -423,6 +424,11 @@ def main(argv=None):
     try:
         store = Store()
         if args.subcommand == 'doctor': emit({'doctor': detect_context()}, args.as_json); return EXIT_CODES['success']
+        if args.subcommand == 'bootstrap':
+            from backend.bootstrap import collect as collect_bootstrap
+            report = collect_bootstrap()
+            emit({'bootstrap': report}, args.as_json)
+            return EXIT_CODES['success'] if report.get('ready') else EXIT_CODES['unavailable']
         if args.subcommand == 'health':
             from backend.health import collect
             from backend.config import load_settings as _load_settings

@@ -21,6 +21,21 @@ git clone https://github.com/mrtc-solutions/linux-vortex-terminal.git
 cd linux-vortex-terminal
 ```
 
+## 1.1 Run the safe bootstrap report
+
+Before installing optional tools or models, run:
+
+```bash
+./vortex bootstrap
+./vortex --json bootstrap
+```
+
+The report checks Python, Node.js, npm, the React build dependencies, the
+production bundle, RAM, CPU, disk space, and optional Ollama availability. It
+never installs packages, downloads models, changes shell configuration, or uses
+sudo. On a 4 GB / 2 GHz-class machine it selects the low-memory profile and
+points to the exact next action when something is missing.
+
 ## 2. Install the app (`sudo apt install` still works)
 
 The package name is `linux-vortex-terminal`. GitHub is not an apt mirror, so
