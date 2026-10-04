@@ -4644,6 +4644,9 @@ class VortexHandler(BaseHTTPRequestHandler):
         if not public_asset and not self._authorized():
             return self._json(HTTPStatus.UNAUTHORIZED, {"error": {"code": "unauthorized", "message": "invalid sidecar capability"}})
         try:
+            if path == "/api/bootstrap":
+                collect_bootstrap = _load("bootstrap").collect
+                return self._json(200, {"bootstrap": collect_bootstrap()})
             if path == "/api/health":
                 try:
                     load_settings = _load("config").load_settings

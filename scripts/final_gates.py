@@ -263,8 +263,11 @@ def gate_live_http() -> None:
                 code, payload = _http_json(base + "/api/memory", "POST", {"title": "gate", "body": "gate note", "kind": "knowledge"})
                 checks["memory_save"] = code == 201 and payload.get("memory", {}).get("title") == "gate"
                 checks["ui_shell"] = _http_status(base + "/") == 200
+                code, payload = _http_json(base + "/api/bootstrap")
+                bootstrap = payload.get("bootstrap", {})
+                checks["bootstrap"] = code == 200 and bootstrap.get("schema_version") == 1 and bootstrap.get("profile") in {"low-memory", "standard"} and "checks" in bootstrap
             ok = all(checks.values())
-            gate("8/10 live http smoke (11 endpoints)", ok, f"checks={checks}")
+            gate("8/10 live http smoke (bootstrap + 11 endpoints)", ok, f"checks={checks}")
         finally:
             proc.terminate()
             try:
@@ -303,6 +306,12 @@ def gate_cli() -> None:
             results["db"] = False
         proc = run([sys.executable, "cli/vortex.py", "--version"], env=env, timeout=60)
         results["version"] = proc.returncode == 0 and proc.stdout.strip() == f"vortex {APP_VERSION}"
+        proc = run([sys.executable, "cli/vortex.py", "bootstrap", "--json"], env=env, timeout=60)
+        try:
+            bootstrap = json.loads(proc.stdout).get("bootstrap", {})
+            results["bootstrap"] = proc.returncode == 0 and bootstrap.get("schema_version") == 1 and bootstrap.get("profile") in {"low-memory", "standard"} and isinstance(bootstrap.get("checks"), list)
+        except ValueError:
+            results["bootstrap"] = False
         repo_scripts = [ROOT / "packaging" / "deb" / name for name in ("build.sh", "make-repo.sh", "install-repo.sh")]
         syntax = {script.name: run(["bash", "-n", str(script)], timeout=60).returncode == 0 and (script.stat().st_mode & 0o111) != 0 for script in repo_scripts}
         results["repo-scripts"] = all(syntax.values())
