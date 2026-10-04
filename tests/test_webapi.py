@@ -144,9 +144,15 @@ class TurnTests(unittest.TestCase):
         self.assertEqual(status, 413)
 
     def test_conversation_turn_without_keys_is_honest(self):
-        # Force an empty key environment view.
+        # Force an empty key environment view AND neutralize the keyless
+        # provider (Pollinations needs no API key, so on an internet-connected
+        # CI runner the turn would genuinely succeed — a feature, but this
+        # test asserts the honest no-provider path, so make it hermetic).
+        from backend.providers import catalog as _cat
         with patch.object(webapi._keys, "configured_slots",
-                          return_value={name: False for name in ("GROQ_API_KEY",)}):
+                          return_value={name: False for name in ("GROQ_API_KEY",)}), \
+             patch.dict(_cat.PROVIDERS_BY_ID["pollinations"],
+                        {"base_url": "http://127.0.0.1:9/openai"}):
             status, payload = call("POST", "/api/workspace/turn", {"request": "hello"})
         self.assertEqual(status, 200)
         self.assertEqual(payload["mode"], "conversation")

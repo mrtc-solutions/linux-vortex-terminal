@@ -1894,26 +1894,33 @@ def git_command(adapter_id: str, cwd: Path, *args: str, explanation: str = "") -
     return spec
 
 
+def docker_socket_candidates() -> tuple[Path, ...]:
+    return (Path("/var/run/docker.sock"), Path(f"/run/user/{os.getuid()}/docker.sock"))
+
+
 def local_container_runtime() -> tuple[str, list[str]] | None:
-    """Select a local engine without honoring a remote Docker/Podman context."""
+    """Select a local engine without honoring a remote Docker/Podman context.
+
+    The returned argv MUST start with the plain runtime name: command_spec()
+    enforces argv[0] == executable, and probe_executable() resolves/validates
+    the real binary separately. Returning the resolved binary path here broke
+    every machine that actually has a Docker socket with
+    PolicyError("invalid argv")."""
     docker = probe_executable("docker")
     if docker.get("state") == "installed":
-        docker_bin = str(docker.get("realpath") or docker.get("path") or "docker")
-        candidates = (Path("/var/run/docker.sock"), Path(f"/run/user/{os.getuid()}/docker.sock"))
-        for candidate in candidates:
+        for candidate in docker_socket_candidates():
             try:
                 resolved = candidate.resolve(strict=True)
                 metadata = resolved.stat()
             except OSError:
                 continue
             if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid in {0, os.getuid()}:
-                return "docker", [docker_bin, "--host", f"unix://{resolved}"]
+                return "docker", ["docker", "--host", f"unix://{resolved}"]
     podman = probe_executable("podman")
     if podman.get("state") == "installed":
         # Explicitly disable Podman's remote mode; local rootless/system storage
         # remains available without contacting a configured SSH/API endpoint.
-        podman_bin = str(podman.get("realpath") or podman.get("path") or "podman")
-        return "podman", [podman_bin, "--remote=false"]
+        return "podman", ["podman", "--remote=false"]
     return None
 
 

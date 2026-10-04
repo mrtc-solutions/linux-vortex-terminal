@@ -27,6 +27,12 @@ async function boot(page: Page) {
     if (path === '/api/dependencies/plan') data = { planned: true, plan: { id: 'p1', commands: [{ display: 'apt install test' }], approval_token: 'test-token' }, guardian: { decision: 'review', risk: 'high' } };
     await route.fulfill({ json: data });
   });
+  // The app auto-opens the MISSING DEPENDENCIES window once per session.
+  // These scenarios manage their own windows, so opt out for determinism
+  // (the startup window itself is covered by the live acceptance suite).
+  await page.addInitScript(() => {
+    try { sessionStorage.setItem('vortex.deps-window-shown', '1'); } catch { /* */ }
+  });
   await page.goto('/');
   await expect(page.getByTitle('Sidecar connected')).toBeVisible();
 }

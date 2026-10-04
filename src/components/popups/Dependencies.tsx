@@ -101,7 +101,7 @@ export function Dependencies({
         GitHub or the .deb — download them yourself or import a file, then tap Refresh.
       </p>
       <div className="flex flex-wrap gap-2">
-        <GhostButton disabled={busy} onClick={() => void refresh(false)}>Refresh</GhostButton>
+        <GhostButton aria-label="Refresh dependencies" disabled={busy} onClick={() => void refresh(false)}>Refresh</GhostButton>
         <GhostButton disabled={busy} onClick={() => void refresh(true)}>Rescan host</GhostButton>
         <GhostButton disabled={busy} onClick={() => onOpenPopup('models')}>Open Models (import GGUF)</GhostButton>
       </div>
@@ -146,7 +146,11 @@ export function Dependencies({
               {String(item.kind || '')} · {String(item.method || '')} · {String(item.role || '')}
             </div>
           </div>
-          <GhostButton disabled={busy} onClick={() => void review(String(item.id))}>
+          <GhostButton
+            aria-label={`Review ${String(item.title || item.id)}`}
+            disabled={busy}
+            onClick={() => void review(String(item.id))}
+          >
             {item.installed ? 'Inspect' : (item.method === 'apt' ? 'Review install' : 'How to obtain')}
           </GhostButton>
         </div>
