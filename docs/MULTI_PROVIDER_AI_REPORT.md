@@ -191,11 +191,27 @@ itself for low-spec hardware — no configuration needed:
 - **Hardware profile** (`backend/models/router.py:hardware_profile`): ≤ 8 GB RAM
   or ≤ 4 CPUs → `low-resource` mode — one model loaded at a time, sequential
   agent strategy, 2048-token context. Declared minimum: 2 GB RAM / 2.0 GHz.
+- **Warm-up loads with the same context it chats with**: the warm-up
+  `/api/generate` request carries the same `options` (`num_ctx`) as every
+  chat request, so Ollama never reloads the model on the first real turn —
+  without this, a changed `num_ctx` would throw the 40 s warm-up away.
+- **Keep-alive 15 m everywhere**: warm-up *and* every chat send
+  `keep_alive: 15m` (configurable via `model_keepalive`), and the agent path
+  uses the same default. The legacy `0m` default (which unloaded the model
+  after every agent call, forcing a ~40 s reload on the next turn) is
+  migrated automatically in existing settings files.
+- **Transcript always fits the pinned context**: before each local chat the
+  message list is trimmed to the `num_ctx` budget (system prompt is never
+  dropped; oldest turns go first; an oversized final message is truncated,
+  not dropped), so Ollama never silently truncates away the system rules.
+  Requests over 8 000 chars are rejected at the API boundary with a clear
+  422 before any model work.
 - **Measured on 4 GB / 2-core hardware (this sandbox is that machine)**:
   cold model load of 40 s → clean `ready` with honest `warmup_ms`; a 70 s
   generation completes inside the timeout; a 120 s generation fails precisely
-  as `timeout` and falls back in order; sidecar RSS stays ~59 MB flat across
-  100 consecutive turns (no leak).
+  as `timeout` and falls back in order; sidecar RSS stays flat across
+  100 consecutive turns (no leak); 10 maximum-size history turns in one
+  conversation still answer locally after context trimming.
 
 ## 11. Limitations (honest)
 

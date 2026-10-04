@@ -63,6 +63,38 @@ def _read_mem_total_mb() -> int | None:
     return None
 
 
+def _fit_messages(messages: list[dict[str, str]], max_chars: int) -> list[dict[str, str]]:
+    """Trim a chat transcript to a character budget without ever dropping the
+    system prompt. Oldest non-system turns go first; a single oversized final
+    message is truncated rather than dropped."""
+    total = sum(len(str(item.get("content") or "")) for item in messages)
+    if total <= max_chars:
+        return messages
+    system = [item for item in messages if item.get("role") == "system"]
+    rest = [item for item in messages if item.get("role") != "system"]
+    while len(rest) > 1 and sum(len(str(item.get("content") or "")) for item in system + rest) > max_chars:
+        rest.pop(0)
+    remaining = max_chars - sum(len(str(item.get("content") or "")) for item in system)
+    if rest and remaining > 0 and len(str(rest[-1].get("content") or "")) > remaining:
+        rest[-1] = {**rest[-1], "content": str(rest[-1].get("content") or "")[:remaining]}
+    return system + rest
+
+
+_LOCAL_KEEP_ALIVE = "15m"
+
+
+def _local_keep_alive(settings: dict[str, Any] | None = None) -> str:
+    """Keep-alive for local Qwen. Defaults to 15m so slow machines (2 GHz class)
+    do not pay a full model reload after short idle gaps; honors an explicit
+    `model_keepalive` setting when the operator sets one."""
+    value = str((settings or {}).get("model_keepalive") or "").strip()[:32]
+    # "0m" was the old shipped default (never user-selectable); treat zero-ish
+    # values as unset so legacy settings files migrate to the warm default.
+    if value in {"", "0", "0m", "0s"}:
+        return _LOCAL_KEEP_ALIVE
+    return value
+
+
 def local_generation_options(ram_mb: int | None = None, cpu_count: int | None = None) -> dict[str, Any]:
     """Resource-aware Ollama generation options.
 
@@ -624,7 +656,8 @@ class ProviderManager:
         started = time.monotonic()
         try:
             _http_json(base + "/api/generate", method="POST",
-                       body={"model": model, "prompt": "", "keep_alive": "15m"},
+                       body={"model": model, "prompt": "", "keep_alive": _local_keep_alive(settings),
+                             "options": local_generation_options()},
                        timeout=float(settings.get("local_chat_timeout_seconds") or _DEFAULT_LOCAL_TIMEOUT))
             latency = int((time.monotonic() - started) * 1000)
             self._record_success("ollama-local", latency)
@@ -682,11 +715,20 @@ class ProviderManager:
                      settings: dict[str, Any]) -> str:
         base = str(settings.get("ollama_endpoint") or definition["base_url"]).rstrip("/")
         timeout = float(settings.get("local_chat_timeout_seconds") or _DEFAULT_LOCAL_TIMEOUT)
+        options = local_generation_options()
+        num_ctx = options.get("num_ctx")
+        if num_ctx:
+            # Fit the prompt inside the pinned context window so Ollama never
+            # silently truncates away the system prompt on low-spec machines.
+            # Reserve the reply budget plus template overhead; ~4 chars/token.
+            budget = max(2000, (int(num_ctx) - int(options.get("num_predict") or 0) - 64) * 4)
+            messages = _fit_messages(messages, budget)
         status, payload = _http_json(base + "/api/chat", method="POST", body={
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": local_generation_options(),
+            "keep_alive": _local_keep_alive(settings),
+            "options": options,
         }, timeout=timeout)
         if not isinstance(payload, dict):
             raise ProviderError("provider_error", "unexpected Ollama response shape")
@@ -803,14 +845,8 @@ class ProviderManager:
         """
         settings = settings or {}
         policy = _policy.cost_policy(settings)
-        total_chars = sum(len(str(item.get("content") or "")) for item in messages)
-        if total_chars > _CHAT_MAX_CHARS:
-            # Trim oldest non-system turns rather than failing.
-            system = [item for item in messages if item.get("role") == "system"]
-            rest = [item for item in messages if item.get("role") != "system"]
-            while rest and sum(len(str(item.get("content") or "")) for item in system + rest) > _CHAT_MAX_CHARS:
-                rest.pop(0)
-            messages = system + rest
+        # Trim oldest non-system turns rather than failing.
+        messages = _fit_messages(messages, _CHAT_MAX_CHARS)
         if provider_id:
             preferred_target: str | None = provider_id
             wanted_model = model

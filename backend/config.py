@@ -40,7 +40,7 @@ DEFAULTS = {
     "local_chat_timeout_seconds": 90,
     "model_timeout_seconds": 12,
     "model_max_parallel": 2,
-    "model_keepalive": "0m",
+    "model_keepalive": "15m",
     "gguf_enabled": True,
     "models_dir": "",
     # GGUF files are on-disk weights only; they are never treated as live
@@ -194,6 +194,10 @@ def save_settings(updates: dict[str, Any]) -> dict[str, Any]:
         current["gguf_threads"] = max(1, min(int(current.get("gguf_threads") or 4), 8))
         current["gguf_timeout_seconds"] = max(2, min(int(current.get("gguf_timeout_seconds") or 20), 120))
         current["models_dir"] = str(current.get("models_dir") or "")[:300]
+        # Migrate the legacy "0m" keep-alive default (never user-selectable):
+        # immediate unload forces a full model reload every turn on slow CPUs.
+        if str(current.get("model_keepalive") or "").strip() in {"", "0", "0m", "0s"}:
+            current["model_keepalive"] = "15m"
         for _role in ("gguf_primary", "gguf_planner", "gguf_fast", "gguf_specialist"):
             current[_role] = str(current.get(_role) or "")[:160]
         # Safe always confirms. HTTP/settings cannot unlock medium auto-run or root.

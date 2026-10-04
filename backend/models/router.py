@@ -926,8 +926,13 @@ def _model_timeout(settings: dict[str, Any] | None = None, default: int = 12) ->
 
 def _model_keepalive(settings: dict[str, Any] | None = None) -> str:
     settings = settings or {}
-    value = str(settings.get("model_keepalive") or "0m")[:32]
-    return value if value else "0m"
+    # Default 15m: on low-spec machines (2 GHz class) an immediate unload means
+    # the next turn pays a full model reload (~40 s); keep the model resident.
+    # "0m" was the old shipped default (never user-selectable) — migrate it.
+    value = str(settings.get("model_keepalive") or "").strip()[:32]
+    if value in {"", "0", "0m", "0s"}:
+        return "15m"
+    return value
 
 
 def _coerce_reply(text: str, role: str, model: str) -> dict[str, Any]:

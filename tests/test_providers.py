@@ -453,6 +453,72 @@ class LowSpecHardwareTests(ProviderTestCase):
         chat_bodies = [b for b in handler.bodies if "messages" in b]
         self.assertTrue(chat_bodies)
         self.assertEqual(chat_bodies[-1].get("options"), local_generation_options())
+        # keep_alive must ride every chat so slow machines keep the model warm.
+        self.assertEqual(chat_bodies[-1].get("keep_alive"), "15m")
+
+    def test_warmup_loads_with_matching_context(self):
+        # Warm-up must load the model with the SAME num_ctx the chats use,
+        # otherwise Ollama reloads the model on the first real turn and the
+        # warm-up is wasted (a ~40 s double-pay on 2 GHz machines).
+        from backend.providers.manager import local_generation_options
+        handler, url = self.mock({
+            "/api/tags": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+            "/api/ps": (200, {"models": []}),
+            "/api/generate": (200, {"done": True}),
+        })
+        result = self.manager.warm_up({"ollama_endpoint": url, "privacy_mode": "local",
+                                       "free_only_mode": True})
+        self.assertEqual(result["state"], "ready")
+        load_bodies = [b for b in handler.bodies if "prompt" in b]
+        self.assertTrue(load_bodies)
+        self.assertEqual(load_bodies[-1].get("options"), local_generation_options())
+        self.assertEqual(load_bodies[-1].get("keep_alive"), "15m")
+
+    def test_transcript_fits_pinned_context_window(self):
+        # 24 000-char histories must be trimmed to the 2 048-token local window
+        # (system prompt kept) instead of letting Ollama truncate it silently.
+        from backend.providers.manager import _fit_messages, local_generation_options
+        msgs = ([{"role": "system", "content": "SYSTEM-RULES"}]
+                + [{"role": "user" if i % 2 == 0 else "assistant", "content": f"turn-{i} " + "x" * 900}
+                   for i in range(26)])
+        fitted = _fit_messages(list(msgs), 6000)
+        self.assertEqual(fitted[0]["content"], "SYSTEM-RULES")  # never dropped
+        self.assertLessEqual(sum(len(m["content"]) for m in fitted), 6000)
+        self.assertEqual(fitted[-1]["content"], msgs[-1]["content"])  # newest kept
+        # One oversized message gets truncated, not dropped.
+        huge = [{"role": "system", "content": "S"}, {"role": "user", "content": "y" * 50000}]
+        fitted = _fit_messages(huge, 6000)
+        self.assertEqual(len(fitted), 2)
+        self.assertLessEqual(len(fitted[1]["content"]), 5999)
+        # Wire check: the local chat path applies the budget end-to-end.
+        handler, url = self.mock({
+            "/api/tags": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+            "/api/chat": (200, {"message": {"role": "assistant", "content": "ok"}}),
+        })
+        result = self.manager.generate(
+            [{"role": "system", "content": "SYSTEM-RULES"}]
+            + [{"role": "user", "content": "z" * 23000}],
+            {"ollama_endpoint": url, "privacy_mode": "local", "free_only_mode": True},
+            provider_id="ollama-local", allow_fallback=False)
+        self.assertEqual(result["state"], "responded")
+        body = [b for b in handler.bodies if "messages" in b][-1]
+        options = local_generation_options()
+        if options.get("num_ctx"):  # low-spec host (this sandbox qualifies)
+            sent = sum(len(m.get("content") or "") for m in body["messages"])
+            budget = max(2000, (options["num_ctx"] - options.get("num_predict", 0) - 64) * 4)
+            self.assertLessEqual(sent, budget)
+            self.assertEqual(body["messages"][0]["content"], "SYSTEM-RULES")
+
+    def test_legacy_zero_keepalive_migrates_to_warm_default(self):
+        from backend.providers.manager import _local_keep_alive
+        self.assertEqual(_local_keep_alive({}), "15m")
+        self.assertEqual(_local_keep_alive({"model_keepalive": "0m"}), "15m")
+        self.assertEqual(_local_keep_alive({"model_keepalive": "0"}), "15m")
+        self.assertEqual(_local_keep_alive({"model_keepalive": "30m"}), "30m")
+        from backend.models.router import _model_keepalive
+        self.assertEqual(_model_keepalive({"model_keepalive": "0m"}), "15m")
+        self.assertEqual(_model_keepalive({}), "15m")
+        self.assertEqual(_model_keepalive({"model_keepalive": "5m"}), "5m")
 
 
 class SecurityTests(ProviderTestCase):
