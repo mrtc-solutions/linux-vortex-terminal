@@ -165,7 +165,7 @@ export function Dependencies({
             placeholder="e.g. nmap"
             className="flex-1 min-w-40 bg-black/60 border border-[var(--theme-border)] rounded px-2 py-1 text-[12px] text-stone-200"
           />
-          <PrimaryButton disabled={busy} onClick={() => void planPackage()}>Create reviewed install plan</PrimaryButton>
+          <PrimaryButton disabled={busy} onClick={() => void planPackage()}>Create reviewed package plan</PrimaryButton>
         </div>
       </Section>
       {proposal && (
