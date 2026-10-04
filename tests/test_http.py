@@ -902,6 +902,45 @@ class HttpApiTests(unittest.TestCase):
         mismatch = self._json("POST", f"/api/operations/{operation['id']}/complete-task", {"task_id": unbound["id"]}, expected=422)
         self.assertIn("not bound", mismatch["error"]["message"])
 
+    def test_arbitration_routes_and_feedback(self):
+        # 1. Test GET /api/arbitration/history
+        history = self._json("GET", "/api/arbitration/history")
+        self.assertIn("arbitrations", history)
+
+        # 2. Test saving arbitration and retrieving via GET /api/arbitration/lineage/<message_id>
+        conv = self.handler.workspace.create_conversation("Arb Route Test")
+        msg = self.handler.workspace.add_message(conv["id"], "vortex", "Historical advice on 4GB RAM.")
+        self.handler.workspace.save_arbitration({
+            "message_id": msg["id"],
+            "conversation_id": conv["id"],
+            "request": "How to optimize on 4GB RAM?",
+            "decision": "historical",
+            "winning_candidate_id": "hist-test-01",
+            "historical_contribution": "primary",
+            "confidence": 0.96,
+            "synthesized": False,
+            "rationale": "Matches 4GB RAM host.",
+            "candidates": [{"candidate_id": "hist-test-01", "score": 96.0}],
+            "lineage": {"node_id": "root", "children": []},
+        })
+
+        lineage_resp = self._json("GET", f"/api/arbitration/lineage/{msg['id']}")
+        self.assertEqual(lineage_resp["arbitration"]["decision"], "historical")
+        self.assertEqual(lineage_resp["arbitration"]["winning_candidate_id"], "hist-test-01")
+
+        # 3. Test POST /api/arbitration/feedback
+        fb_resp = self._json("POST", "/api/arbitration/feedback", {
+            "candidate_id": "hist-test-01",
+            "feedback_type": "accepted",
+            "score_delta": 10.0,
+            "message_id": msg["id"],
+            "comment": "Confirmed working on 4GB host",
+        }, expected=201)
+        self.assertTrue(fb_resp["saved"])
+
+        # 4. Test 404 for unknown message lineage
+        self._json("GET", "/api/arbitration/lineage/non-existent-msg", expected=404)
+
 
 if __name__ == "__main__":
     unittest.main()
