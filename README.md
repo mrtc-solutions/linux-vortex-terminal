@@ -2,7 +2,10 @@
 
 **Verified Orchestration, Reasoning, Testing, Execution & eXperience**
 
-Linux-native, local-first, multi-provider AI cybersecurity and operations workbench.
+Linux-native, local-first, multi-provider AI cybersecurity and operations workbench — **one product with two runtimes**: the Local Linux/Electron app and the Web/Vercel deployment.
+
+* **Local runtime:** run it on your own Linux machine (`npm install && npm start`).
+* **Web runtime (live):** [https://linux-vortex-terminal.vercel.app/](https://linux-vortex-terminal.vercel.app/)
 
 ---
 
@@ -15,6 +18,66 @@ Vortex features a **dual-path conversation & execution architecture**:
 2. **Action & System Requests** ("check disk usage", "list listening ports", "audit SUID binaries") route through the deterministic Planner, Guardian authorization authority, and reviewed adapters. The AI model may propose actions, but it **never directly executes shell commands**.
 
 > **Authorized Use Only.** Vortex Terminal is designed for systems, networks, and artifacts you own or are explicitly authorized to assess.
+
+---
+
+## Local vs Web Mode
+
+Vortex is one product with two runtimes that share the same AI provider abstraction, model registry, free-only policy, fallback logic, historical-answer arbitration, Guardian policy concepts, and provenance model. **Only runtime-specific execution capabilities differ** — and the app always tells you which runtime you are in (`● LOCAL — Linux` or `☁ WEB — Vercel` in the header).
+
+```text
+                         VORTEX
+                            |
+                +-----------+-----------+
+                |                       |
+             LOCAL                    WEB
+             LINUX                   VERCEL
+                |                       |
+          +-----+-----+            +----+---------+
+          |           |            |              |
+        Qwen       Adapters      AI Manager    Cloud Functions
+          |           |            |              |
+       Ollama      Guardian     +---+---+       Guardian
+                    |           |       |          |
+                    v         Gemini  Groq       Typed
+                 Linux       OpenRouter         Functions
+                 Host           |
+                                v
+                           AI Response
+```
+
+**Local mode can operate directly on the Linux machine.**
+
+**Web mode operates through the Vercel backend and cannot directly control the user's local Linux host unless a secure Vortex Local Agent is connected.** No such agent is implemented yet, so the web app always reports `LOCAL MACHINE: NOT CONNECTED` and refuses local-action requests honestly instead of faking them. The browser never attempts `localhost:11434`, never gets shell access, and the UI never pretends it has either.
+
+### Runtime capability matrix (`RuntimeCapabilityManager`)
+
+| Capability | `LOCAL_LINUX` (sidecar / Electron) | `WEB_CLOUD` (Vercel backend) |
+| :--- | :--- | :--- |
+| Filesystem | ✅ real host FS | server-scoped ephemeral only |
+| Processes / services / systemd | ✅ | ❌ |
+| Git / networking inspection | ✅ | ❌ |
+| Local shell (PTY) | ✅ | ❌ (no shell endpoint exists) |
+| Local Ollama / Qwen 2.5 3B | ✅ `http://127.0.0.1:11434` | ❌ (`Local Qwen is unavailable in Web Mode; using cloud AI.`) |
+| Cloud AI (Gemini #1/#2/#3, Groq, OpenRouter, …) | ✅ fallback | ✅ primary |
+| Provider discovery / health / free-model registry | ✅ | ✅ (server-side) |
+| Conversation memory | ✅ local SQLite | browser-local (per-user isolated; the serverless backend stores no transcripts) |
+| Historical answer arbitration | ✅ local Qwen arbitrates | ✅ cloud arbitrates (`arbitration_mode = CLOUD`) |
+| Guardian / typed-plan execution | ✅ | policy checks only — no local execution |
+| Engagements / artifacts / reports / cybersecurity tooling | ✅ | ❌ (requires the local runtime) |
+
+The capability map is served live by `GET /api/capabilities` in both runtimes (`backend/runtime_capabilities.py`); the UI derives behaviour from it rather than from the mere presence of buttons.
+
+### Default AI priority per runtime
+
+```text
+LOCAL_LINUX:  Qwen 2.5 3B → Gemini #1 → Gemini #2 → Gemini #3 → Groq → OpenRouter → other free providers
+WEB_CLOUD:    Gemini #1 → Gemini #2 → Gemini #3 → Groq → OpenRouter → other free providers
+```
+
+### Vortex Local Agent (designed, NOT implemented)
+
+Controlling a user's real Linux host from the web app would require an optional, authenticated **Vortex Local Agent** (browser → Vercel backend → authenticated agent → local Linux) that exposes only typed Vortex capabilities, remains subject to the Guardian, and never exposes unrestricted shell access to the internet. Until that component exists, Web Mode truthfully reports `LOCAL MACHINE: NOT CONNECTED`.
 
 ---
 
@@ -80,7 +143,9 @@ Vortex features a **dual-path conversation & execution architecture**:
 
 Vortex Terminal does not assume that a newly generated cloud answer is automatically superior to a previous solution. Sometimes a historical response in conversation memory is more reliable, specifically because it incorporates **verified local environment facts**, **successful command executions**, or **user-confirmed results**.
 
-Therefore, Vortex treats **historical answers** and **newly generated AI answers** as **competing candidates**, evaluated by the local **Qwen 2.5 3B** arbitrator.
+Therefore, Vortex treats **historical answers** and **newly generated AI answers** as **competing candidates**, evaluated by the local **Qwen 2.5 3B** arbitrator when it is available.
+
+**When local Qwen is unavailable (or in Web Mode), arbitration still happens:** the best currently available eligible cloud provider arbitrates instead, and the result honestly records `arbitration_mode = "CLOUD"` (a deterministic multi-criteria fallback records `"DETERMINISTIC"`) — the system never claims local Qwen performed an arbitration it didn't. In Web Mode the historical candidates come from the visitor's own browser-held history. History can beat cloud, cloud can beat history, and synthesis can beat both.
 
 ```text
 CURRENT USER REQUEST
@@ -251,6 +316,57 @@ Vortex explicitly classifies every AI provider and model into one of these trans
 
 ---
 
+## Web / Vercel Deployment
+
+The canonical web deployment is **[https://linux-vortex-terminal.vercel.app/](https://linux-vortex-terminal.vercel.app/)**.
+
+The static UI (Vite single-file bundle in `dist/`) is served by Vercel, and every `/api/*` request is rewritten (see `vercel.json`) to a stdlib-only Python serverless function (`api/index.py` → `backend/webapi.py`) that reuses the exact same provider manager, policy engine, classifier and arbitration code as the local sidecar.
+
+### Server-side API routes (WEB_CLOUD)
+
+| Route | Method | Purpose |
+| :--- | :--- | :--- |
+| `/api/health` | GET | Runtime identity (`WEB_CLOUD`), version, free-only state, Local Agent status |
+| `/api/capabilities` | GET | Honest runtime capability map |
+| `/api/system/health` | GET | Describes the **Vercel sandbox** (explicitly *not* your machine) |
+| `/api/providers` | GET | Provider snapshot: health, pricing class, key `configured: true/false` (never values) |
+| `/api/providers/diagnostics` | GET | Developer diagnostics: runtime, chain, policy, catalogue source — no credentials |
+| `/api/models` | GET | Cloud model view; local engines honestly `unavailable_web` |
+| `/api/workspace/turn` | POST | Conversation turns via the cloud chain; **system actions return `web_action_blocked`** |
+| `/api/providers/check` | POST | Live provider health check (server-resolved provider IDs only) |
+| `/api/providers/refresh` | POST | `Refresh Free Models` — live model discovery + pricing/free re-verification |
+
+There is **no** `/api/execute`, no PTY, and no generic shell endpoint in the web backend. Provider configuration endpoints return `403 web_readonly`: the deployment's environment variables are the only configuration source, so one visitor can never alter another visitor's providers.
+
+### Required Vercel environment variables (server-side only)
+
+```text
+GEMINI_API_KEY_1
+GEMINI_API_KEY_2
+GEMINI_API_KEY_3        # optional third slot
+GROQ_API_KEY
+OPENROUTER_API_KEY
+FREE_ONLY_MODE=true
+```
+
+These are read exclusively by the serverless function. They are **never** exposed through `NEXT_PUBLIC_*`/`VITE_*` variables, bundles, window globals, localStorage, URLs, logs, or diagnostics — responses pass through secret redaction and key slots are reported as `configured: true|false` only.
+
+### Web-runtime security & limits
+
+* `FREE_ONLY_MODE` is enforced **server-side**; browser-supplied settings cannot weaken it, paid/unknown-priced models are blocked, and when nothing is eligible the API answers `No eligible free AI provider is currently available.`
+* Request validation, 64 KB body cap, per-client rate limiting, provider IDs resolved against the server registry.
+* Serverless statelessness: no server-side transcript store — conversation history lives in the visitor's browser (session/memory isolation by construction). Provider cooldown/stats state is per-instance and ephemeral.
+* Function limits: typical serverless execution budget (configured `maxDuration: 60`); long multi-provider councils may be truncated by the platform.
+
+### Simulate the Vercel deployment locally
+
+```bash
+npm run build
+python3 scripts/web_preview.py --host 127.0.0.1 --port 3000   # same router as api/index.py, VORTEX_RUNTIME=WEB_CLOUD
+```
+
+---
+
 ## Configuration & Credentials
 
 Credentials are read from `.env` in the repository root or `~/.config/vortex/.env`, or directly from environment variables.
@@ -260,6 +376,21 @@ To configure your providers:
 cp .env.example .env
 # Edit .env and insert keys for the providers you wish to use
 ```
+
+Core variables (identical names in local `.env` and Vercel project settings — production secrets belong in Vercel environment variables / server-side secret storage, never in this file or the repo):
+
+```text
+GEMINI_API_KEY_1=
+GEMINI_API_KEY_2=
+GEMINI_API_KEY_3=
+
+GROQ_API_KEY=
+OPENROUTER_API_KEY=
+
+FREE_ONLY_MODE=true
+```
+
+The three **Gemini logical entries** map to key *slots*, not hard-coded credentials: `Gemini #1 → GEMINI_API_KEY_1`, `Gemini #2 → GEMINI_API_KEY_2`, `Gemini #3 → configurable slot (defaults to slot 1)` — two configured keys can serve all three entries. Gemini model IDs are re-verified dynamically at discovery time; Pro/paid-only IDs are blocked under free-only mode. Groq and OpenRouter use live `/models` discovery (OpenRouter additionally filters `:free` / zero-pricing models) — no obsolete hard-coded model lists.
 
 ### Invariants:
 1. `.env` is gitignored: never commit secrets to version control.
@@ -277,7 +408,7 @@ cp .env.example .env
 * Python 3.10+
 * 2 GB RAM minimum (4 GB+ recommended)
 
-### Run from Checkout
+### Run from Checkout (Local Linux runtime)
 ```bash
 # 1. Install dependencies
 npm install
@@ -292,12 +423,38 @@ npm start
 npm run preview
 ```
 
+### Local primary AI (recommended, optional)
+
+```bash
+ollama list          # should include the primary local model:
+# qwen2.5:3b
+
+ollama pull qwen2.5:3b   # if missing
+```
+
+If Ollama is offline, the model is missing/warming, or inference times out, Vortex reports the **precise** condition (`Ollama is not running.`, `Qwen model missing`, `Local Qwen is warming up.`, `Qwen inference timed out.`) and — when privacy mode permits cloud — automatically falls back through Gemini #1 → #2 → #3 → Groq → OpenRouter → other eligible free providers. A failed local model never breaks the application.
+
 ### Run Tests & Validation
 ```bash
 npm test            # Run full Python & Node.js test suite
 npm run lint        # Code check across Python, JS, and TypeScript
 npm run typecheck   # Validate TypeScript types
 ```
+
+---
+
+## Security Model
+
+* **Guardian authority:** every action plan is evaluated by the deterministic Guardian before any adapter runs; AI output is advisory, never authoritative.
+* **Typed adapters only — no direct LLM shell execution:** models propose; reviewed typed adapters execute. The execution boundary is absolute in every runtime: `AI → plan/proposal → Guardian → typed adapter → execution`.
+* **Local/Web capability separation:** the web backend exposes no shell, no process control, and no local-host reach; local-only routes answer with explicit `web_unsupported` errors instead of emulating success.
+* **Cloud secret protection & redaction:** API keys, tokens, passwords, and private keys are redacted from prompts, errors and responses; UI and API only ever see `configured: true|false`.
+* **Free-only billing protection:** `FREE_ONLY_MODE=true` blocks paid models, unknown-priced models, paid fallbacks and automatic upgrades — server-side, in both runtimes. No hidden billing, ever.
+* **Cloud privacy:** cloud requests carry a minimized context window (bounded recent history + the new turn), not your entire private history; secrets are stripped first.
+* **Multi-user web isolation:** the stateless web backend stores no conversations; each browser owns its history, so cross-user leakage is impossible by construction.
+* **Cybersecurity tooling stays gated:** nmap/nuclei/gobuster/SSH/arbitrary curl remain engagement-gated, Guardian-reviewed, local-runtime-only capabilities — cloud AI cannot bypass engagement authorization, and the web runtime refuses them outright.
+* **Optional authenticated Local Agent:** designed for future web→local control; until it exists the product shows `LOCAL MACHINE: NOT CONNECTED` rather than pretending.
+* **Audit logging:** local-mode executions are recorded in the tamper-evident audit chain; web-mode answers carry provenance (`provider / model / mode / source / arbitration_mode`).
 
 ---
 

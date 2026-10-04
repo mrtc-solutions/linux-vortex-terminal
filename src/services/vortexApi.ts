@@ -11,6 +11,8 @@ export interface ApiErrorShape {
   message: string;
 }
 
+import { isWeb } from './runtimeState';
+
 export class ApiError extends Error {
   status: number;
   code: string;
@@ -294,6 +296,11 @@ export interface TurnOptions {
   confirm?: boolean;
   approval_token?: string;
   offline?: boolean;
+  /* WEB_CLOUD runtime only: the stateless Vercel backend receives a bounded
+     recent-history window and optional browser-held historical candidates
+     for server-side arbitration. Ignored by the local sidecar. */
+  history?: { role: string; content: string }[];
+  historical_candidates?: JsonRecord[];
 }
 
 export const runTurn = (request: string, options: TurnOptions = {}, timeoutMs = 120000) =>
@@ -355,26 +362,95 @@ export const resumeTask = (id: string) => apiPost<JsonRecord>(`/api/tasks/${enco
 export const restartTask = (id: string) => apiPost<JsonRecord>(`/api/tasks/${encodeURIComponent(id)}/restart`, {}, 120000);
 export const deleteTask = (id: string) => apiPost<JsonRecord>(`/api/tasks/${encodeURIComponent(id)}/delete`);
 
-/* ---------------- Conversations / memory / learning ---------------- */
+/* ---------------- Conversations / memory / learning ----------------
+   In the WEB_CLOUD runtime (Vercel) the backend is stateless by design:
+   conversation history lives in THIS browser only (per-user isolation —
+   no server-side transcript store exists to leak across visitors). The
+   same UI calls transparently hit the browser-local store instead. */
 
-export const listConversations = (query = '') => apiGet<JsonRecord>(query ? `/api/conversations?q=${encodeURIComponent(query)}` : '/api/conversations');
-export const getConversation = (id: string) =>
-  apiGet<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}`);
-export const createConversation = (title: string) =>
-  apiPost<JsonRecord>('/api/conversations', { title });
-export const renameConversation = (id: string, title: string) =>
-  apiPost<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}/rename`, { title });
-export const archiveConversation = (id: string) =>
-  apiPost<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}/archive`);
-export const deleteConversation = (id: string) =>
-  apiPost<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}/delete`);
-export const exportConversation = (id: string) =>
-  apiDownload(`/api/conversations/${encodeURIComponent(id)}/export`, `conversation-${id.slice(0, 8)}.json`);
-export const editMessage = (conversationId: string, messageId: string, content: string) =>
-  apiPost<JsonRecord>(
+function webConversationSummary(conversation: JsonRecord): JsonRecord {
+  const { messages: _messages, ...summary } = conversation as JsonRecord & { messages?: unknown };
+  return summary;
+}
+
+export const listConversations = async (query = ''): Promise<JsonRecord> => {
+  if (isWeb()) {
+    const { listWebConversations } = await import('./webConversations');
+    return { conversations: listWebConversations(query).map(webConversationSummary), storage: 'browser-local' };
+  }
+  return apiGet<JsonRecord>(query ? `/api/conversations?q=${encodeURIComponent(query)}` : '/api/conversations');
+};
+export const getConversation = async (id: string): Promise<JsonRecord> => {
+  if (isWeb()) {
+    const { getWebConversation } = await import('./webConversations');
+    const conversation = getWebConversation(id);
+    if (!conversation) throw new ApiError({ status: 404, code: 'not_found', message: 'Conversation not found in this browser.' });
+    return { conversation: webConversationSummary(conversation), messages: conversation.messages };
+  }
+  return apiGet<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}`);
+};
+export const createConversation = async (title: string): Promise<JsonRecord> => {
+  if (isWeb()) {
+    const { createWebConversation } = await import('./webConversations');
+    return { conversation: webConversationSummary(createWebConversation(title)) };
+  }
+  return apiPost<JsonRecord>('/api/conversations', { title });
+};
+export const renameConversation = async (id: string, title: string): Promise<JsonRecord> => {
+  if (isWeb()) {
+    const { renameWebConversation } = await import('./webConversations');
+    const conversation = renameWebConversation(id, title);
+    if (!conversation) throw new ApiError({ status: 404, code: 'not_found', message: 'Conversation not found in this browser.' });
+    return { conversation: webConversationSummary(conversation) };
+  }
+  return apiPost<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}/rename`, { title });
+};
+export const archiveConversation = async (id: string): Promise<JsonRecord> => {
+  if (isWeb()) {
+    const { archiveWebConversation } = await import('./webConversations');
+    const conversation = archiveWebConversation(id);
+    return { conversation: conversation ? webConversationSummary(conversation) : null };
+  }
+  return apiPost<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}/archive`);
+};
+export const deleteConversation = async (id: string): Promise<JsonRecord> => {
+  if (isWeb()) {
+    const { deleteWebConversation } = await import('./webConversations');
+    deleteWebConversation(id);
+    return { deleted: true };
+  }
+  return apiPost<JsonRecord>(`/api/conversations/${encodeURIComponent(id)}/delete`);
+};
+export const exportConversation = async (id: string): Promise<void> => {
+  if (isWeb()) {
+    const { getWebConversation } = await import('./webConversations');
+    const conversation = getWebConversation(id);
+    if (!conversation) throw new ApiError({ status: 404, code: 'not_found', message: 'Conversation not found in this browser.' });
+    const blob = new Blob([JSON.stringify(conversation, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `conversation-${id.slice(0, 8)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return;
+  }
+  return apiDownload(`/api/conversations/${encodeURIComponent(id)}/export`, `conversation-${id.slice(0, 8)}.json`);
+};
+export const editMessage = async (conversationId: string, messageId: string, content: string): Promise<JsonRecord> => {
+  if (isWeb()) {
+    const { editWebMessage } = await import('./webConversations');
+    const message = editWebMessage(conversationId, messageId, content);
+    if (!message) throw new ApiError({ status: 404, code: 'not_found', message: 'Message not found in this browser.' });
+    return { message };
+  }
+  return apiPost<JsonRecord>(
     `/api/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/edit`,
     { content },
   );
+};
 
 export const listMemories = () => apiGet<JsonRecord>('/api/memory');
 export const saveMemory = (title: string, body: string, kind = 'knowledge') =>

@@ -835,6 +835,11 @@ class ProviderManager:
     def candidate_order(self, settings: dict[str, Any]) -> list[str]:
         preferred = str(settings.get("conversation_provider") or "auto")
         order = list(_catalog.DEFAULT_FALLBACK_ORDER)
+        # WEB_CLOUD runtime (Vercel backend): there is no loopback Ollama on
+        # the server and the visitor's machine is NOT reachable — the local
+        # entry is skipped honestly instead of timing out against 127.0.0.1.
+        if str(settings.get("runtime") or "").upper() == "WEB_CLOUD":
+            order = [item for item in order if item != "ollama-local"]
         if preferred != "auto" and preferred in order:
             order.remove(preferred)
             order.insert(0, preferred)
@@ -865,7 +870,13 @@ class ProviderManager:
             wanted_model = model or (str(settings.get("conversation_model") or "") or None)
             order = self.candidate_order(settings)
         attempts: list[dict[str, Any]] = []
+        web_runtime = str(settings.get("runtime") or "").upper() == "WEB_CLOUD"
         for candidate in order:
+            if web_runtime and candidate == "ollama-local":
+                # Never pretend the Vercel backend can reach local Qwen.
+                attempts.append({"provider": "ollama-local", "state": "unavailable_web",
+                                 "detail": "Local Qwen is unavailable in Web Mode; using cloud AI."})
+                continue
             # A pinned model only applies to the provider it was pinned for;
             # fallback providers resolve their own policy-allowed model.
             requested_model = wanted_model if (preferred_target and candidate == preferred_target) else None

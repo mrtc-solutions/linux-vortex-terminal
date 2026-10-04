@@ -114,6 +114,11 @@ class ArbitrationResult:
     synthesized: bool = False
     lineage: LineageNode | None = None
     arbitrator_model: str = "qwen2.5:3b"
+    # Which runtime actually performed the arbitration: "LOCAL" (local Qwen),
+    # "CLOUD" (an eligible cloud provider arbitrated because local Qwen was
+    # unavailable or this is the web runtime), or "DETERMINISTIC" (MCDA
+    # fallback with no LLM arbiter). Never claim LOCAL when Qwen didn't run.
+    arbitration_mode: str = "DETERMINISTIC"
     latency_ms: int = 0
     contradictions_detected: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=now_iso)
@@ -132,6 +137,7 @@ class ArbitrationResult:
             "synthesized": self.synthesized,
             "lineage": self.lineage.to_dict() if self.lineage else None,
             "arbitrator_model": self.arbitrator_model,
+            "arbitration_mode": self.arbitration_mode,
             "latency_ms": self.latency_ms,
             "contradictions_detected": self.contradictions_detected,
             "created_at": self.created_at,

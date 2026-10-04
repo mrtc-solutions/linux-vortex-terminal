@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- **Feature: Real dual-runtime architecture — `LOCAL_LINUX` + `WEB_CLOUD` (Vercel).**
+  Vortex is now one product with two honest runtimes:
+  - `backend/runtime_capabilities.py` — `RuntimeCapabilityManager` reporting the
+    genuine capability map per runtime (web never claims local shell, processes,
+    services, Git, networking, or Ollama; `GET /api/capabilities` serves it live
+    in both runtimes, and `/api/health` now carries `runtime`/`runtime_label`).
+  - `backend/webapi.py` + `api/index.py` + `vercel.json` — a stdlib-only Python
+    serverless backend for https://linux-vortex-terminal.vercel.app/ that reuses
+    the SAME provider manager, cost policy, conversation classifier and
+    arbitration engine as the local sidecar. Routes: health, capabilities,
+    providers (snapshot/diagnostics/check/refresh), models, settings view, and
+    `/api/workspace/turn`. No shell/execute endpoint exists in the web backend;
+    local-only sidecar routes answer `404 web_unsupported` with
+    "LOCAL MACHINE: NOT CONNECTED" instead of faking success.
+  - Web turns: conversation requests flow through the cloud chain
+    (Gemini #1 → #2 → #3 → Groq → OpenRouter → other verified free providers);
+    system-action requests return an explicit `web_action_blocked` result —
+    the browser is never pretended to have Linux shell access. Fallback,
+    free-only enforcement (`FREE_ONLY_MODE`), request validation, body-size
+    caps, per-client rate limiting and secret redaction are enforced
+    server-side; credentials are never exposed to the browser.
+  - Historical answer arbitration works in Web Mode with browser-held
+    candidates; `ArbitrationResult` now records `arbitration_mode`
+    (`LOCAL` / `CLOUD` / `DETERMINISTIC`) so a cloud arbitration is never
+    misattributed to local Qwen.
+  - Frontend runtime awareness: `src/services/runtime.ts` +
+    `runtimeState.ts` + `activeAi.ts`; header badges `● LOCAL — Linux` /
+    `☁ WEB — Vercel` plus a LOCAL/CLOUD active-AI badge; web boot greeting
+    states the real capability boundary; concise fallback notices
+    ("ollama-local unavailable → Using Gemini #1"). Web conversation history
+    is browser-local (`src/services/webConversations.ts`) — the stateless
+    serverless backend stores no transcripts, so cross-user leakage is
+    impossible by construction.
+  - `scripts/web_preview.py` (`npm run preview:web`) simulates the Vercel
+    deployment locally; `tests/test_webapi.py` adds 27 tests covering runtime
+    honesty, free-only enforcement, validation/rate limits, secret safety and
+    cloud arbitration provenance. README documents Local vs Web Mode,
+    the Vercel deployment, environment variables and the security model.
+  - `scripts/ensure-electron.js` skips the Electron binary download in
+    web/serverless build environments (`VERCEL`/`ELECTRON_SKIP_BINARY_DOWNLOAD`).
 - **Fix: `PolicyError` in CLI now returns exit 4 (`policy_denied`).** When
   Guardian blocked a plan, executable identity mismatched, or scope authorization
   was denied, the CLI previously fell into generic `except Exception` and exited

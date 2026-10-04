@@ -4074,9 +4074,14 @@ def capabilities_document() -> dict[str, Any]:
         } for s in _load("tools.sigit").service_listing()]
     except Exception:
         sigit_services = []
+    try:
+        runtime_doc = _load("runtime_capabilities").runtime_document()
+    except Exception:
+        runtime_doc = {"runtime": "LOCAL_LINUX"}
     return {
         "product": "Vortex Terminal",
         "version": APP_VERSION,
+        **runtime_doc,
         "implemented": [
             "typed-plan-execution", "pty-sessions", "guardian", "engagements",
             "workspace-turn", "tasks", "conversations", "reports", "assessment-reports",
@@ -4648,10 +4653,11 @@ class VortexHandler(BaseHTTPRequestHandler):
                 try:
                     load_settings = _load("config").load_settings
                     collect = _load("health").collect
+                    rt = _load("runtime_capabilities")
                     payload = collect(self.store, self.sessions, load_settings())
-                    return self._json(200, {"ok": True, "version": APP_VERSION, "backend": "online", "health": payload, "offline": payload.get("offline"), "interrupted_tasks": self.workspace.interrupted_tasks()})
+                    return self._json(200, {"ok": True, "version": APP_VERSION, "backend": "online", "runtime": rt.RUNTIME_LOCAL, "runtime_label": rt.runtime_label(rt.RUNTIME_LOCAL), "health": payload, "offline": payload.get("offline"), "interrupted_tasks": self.workspace.interrupted_tasks()})
                 except Exception as exc:
-                    return self._json(200, {"ok": False, "version": APP_VERSION, "backend": "online", "health_error": redact(str(exc))})
+                    return self._json(200, {"ok": False, "version": APP_VERSION, "backend": "online", "runtime": "LOCAL_LINUX", "health_error": redact(str(exc))})
             if path == "/api/system/health":
                 load_settings = _load("config").load_settings
                 collect = _load("health").collect

@@ -191,15 +191,28 @@ class AnswerArbitrator:
         ]
 
         try:
-            # Prefer local Qwen for arbitration
-            resp = self.provider_manager.generate(
-                messages,
-                settings,
-                provider_id="ollama-local",
-                model=self.arbitrator_model,
-                purpose="arbitration",
-                allow_fallback=True,
-            )
+            # Prefer local Qwen for arbitration. In the WEB_CLOUD runtime the
+            # local model genuinely does not exist, so the best currently
+            # available eligible cloud provider arbitrates instead — and the
+            # result records arbitration_mode="CLOUD" rather than pretending
+            # local Qwen did it.
+            web_runtime = str((settings or {}).get("runtime") or "").upper() == "WEB_CLOUD"
+            if web_runtime:
+                resp = self.provider_manager.generate(
+                    messages,
+                    settings,
+                    purpose="arbitration",
+                    allow_fallback=True,
+                )
+            else:
+                resp = self.provider_manager.generate(
+                    messages,
+                    settings,
+                    provider_id="ollama-local",
+                    model=self.arbitrator_model,
+                    purpose="arbitration",
+                    allow_fallback=True,
+                )
 
             if resp.get("state") != "responded":
                 return None
@@ -230,6 +243,9 @@ class AnswerArbitrator:
 
             lineage = self._build_lineage(decision, selected_id, candidates, final_answer, confidence)
 
+            # Honest provenance: which runtime actually arbitrated.
+            arbitration_mode = "LOCAL" if str(resp.get("provider") or "") == "ollama-local" else "CLOUD"
+
             return ArbitrationResult(
                 decision=decision,  # type: ignore
                 selected_candidate_id=selected_id if decision != "synthesized" else None,
@@ -241,6 +257,7 @@ class AnswerArbitrator:
                 synthesized=(decision == "synthesized"),
                 lineage=lineage,
                 arbitrator_model=resp.get("model") or self.arbitrator_model,
+                arbitration_mode=arbitration_mode,
             )
         except Exception:
             return None

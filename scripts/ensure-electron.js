@@ -190,6 +190,13 @@ function ensureElectron() {
 
 if (require.main === module) {
   const required = process.argv.slice(2).includes('--required');
+  // Web/Vercel builds never run Electron: skip the ~110 MB binary download
+  // in best-effort (postinstall) mode so serverless builds stay fast.
+  // `npm start --required` on a real machine is unaffected.
+  if (!required && (process.env.VERCEL || process.env.ELECTRON_SKIP_BINARY_DOWNLOAD === '1')) {
+    log('Skipping Electron binary download (web/serverless build environment).');
+    process.exit(0);
+  }
   const ok = ensureElectron();
   if (!ok && required) process.exit(1);
 }
