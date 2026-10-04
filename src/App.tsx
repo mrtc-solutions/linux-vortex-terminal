@@ -28,6 +28,7 @@ import { Tasks } from './components/popups/Tasks';
 import { Scope } from './components/popups/Scope';
 import { Tools } from './components/popups/Tools';
 import { Models } from './components/popups/Models';
+import { AiProviders } from './components/popups/AiProviders';
 import { SystemPanel } from './components/popups/SystemPanel';
 import { History } from './components/popups/History';
 import { Memory } from './components/popups/Memory';
@@ -180,6 +181,9 @@ export function App() {
         break;
       case 'models':
         spec = { id, title: 'LOCAL AI / MODELS', icon: <BrainCircuit className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 660, height: 580, content: <Models onOpenPopup={openPopup} /> };
+        break;
+      case 'providers':
+        spec = { id, title: 'AI PROVIDERS', icon: <BrainCircuit className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 760, height: 620, content: <AiProviders /> };
         break;
       case 'system':
         spec = { id, title: 'SYSTEM HEALTH', icon: <Activity className="w-3.5 h-3.5 text-[var(--theme-primary)]" />, width: 600, height: 540, content: <SystemPanel /> };

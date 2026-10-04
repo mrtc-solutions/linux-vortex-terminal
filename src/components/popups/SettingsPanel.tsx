@@ -163,6 +163,51 @@ export const SettingsPanel: React.FC = () => {
       )}
 
       {settings && (
+        <Section title="AI routing & cost">
+          <div className="space-y-1.5">
+            <Toggle
+              on={settings.free_only_mode !== false}
+              label="Free-only mode ($0 guarantee)"
+              help="Never route to paid or unknown-priced AI models. Trial credit is not free. If every free provider is down, the terminal says so instead of billing you."
+              onFlip={() => { setSettings((prev) => (prev ? { ...prev, free_only_mode: prev.free_only_mode === false } : prev)); setSaved(''); }}
+            />
+            <Toggle
+              on={settings.allow_paid_providers === true}
+              label="Allow paid providers"
+              help="OFF by default. Ignored while free-only mode is on — the backend forces this off whenever free-only mode is enabled."
+              onFlip={() => flip('allow_paid_providers')}
+            />
+            <div className="p-2 rounded bg-black/50 border border-[var(--theme-border)] space-y-1">
+              <div className="font-bold text-[12px] text-stone-200">Privacy mode</div>
+              <div className="text-[10px] text-stone-500">local = never contact cloud AI · hybrid = local first, free cloud fallback · cloud = cloud allowed first</div>
+              <div className="flex gap-1.5">
+                {['local', 'hybrid', 'cloud'].map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => { setSettings((prev) => (prev ? { ...prev, privacy_mode: mode } : prev)); setSaved(''); }}
+                    className={`px-2 py-0.5 rounded border text-[11px] font-semibold cursor-pointer ${String(settings.privacy_mode || 'local') === mode ? 'border-[var(--theme-primary)] text-[var(--theme-primary)]' : 'border-[var(--theme-border)] text-stone-400'}`}
+                  >{mode}</button>
+                ))}
+              </div>
+            </div>
+            <div className="p-2 rounded bg-black/50 border border-[var(--theme-border)] space-y-1">
+              <div className="font-bold text-[12px] text-stone-200">Secondary AI mode</div>
+              <div className="text-[10px] text-stone-500">off · on-demand (only when asked) · auto (difficult tasks) · consensus (multi-model council — never used for greetings)</div>
+              <div className="flex gap-1.5 flex-wrap">
+                {['off', 'on-demand', 'auto', 'consensus'].map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => { setSettings((prev) => (prev ? { ...prev, secondary_ai_mode: mode } : prev)); setSaved(''); }}
+                    className={`px-2 py-0.5 rounded border text-[11px] font-semibold cursor-pointer ${String(settings.secondary_ai_mode || 'on-demand') === mode ? 'border-[var(--theme-primary)] text-[var(--theme-primary)]' : 'border-[var(--theme-border)] text-stone-400'}`}
+                  >{mode}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {settings && (
         <Section title="Switches">
           <div className="space-y-1.5">
             {TOGGLES.map((toggle) => (

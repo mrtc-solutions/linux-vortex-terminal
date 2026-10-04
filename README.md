@@ -277,6 +277,7 @@ records that it does not know the host outcome rather than inferring success.
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — install, test, and operate as a real app
 - [`docs/STATUS.md`](docs/STATUS.md) — tested vs remaining gates
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — authority and data flow
+- [`docs/MULTI_PROVIDER_AI_REPORT.md`](docs/MULTI_PROVIDER_AI_REPORT.md) — local-first multi-provider AI layer: providers, free-only mode, discovery, Gemini slots, test results
 - [`docs/REMOTE_DESKTOP.md`](docs/REMOTE_DESKTOP.md) — authorized VNC desktops: architecture, security model, support matrix, evidence
 - [`docs/REMOTE_DESKTOP_ACCEPTANCE.md`](docs/REMOTE_DESKTOP_ACCEPTANCE.md) — real-target acceptance evidence for the current commit
 - [`docs/IMPLEMENTATION_REPORT.md`](docs/IMPLEMENTATION_REPORT.md) — current slice

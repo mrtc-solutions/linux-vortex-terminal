@@ -284,6 +284,35 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     }
     if (!mountedRef.current) return;
     setLastTurn(turn);
+
+    // Conversational turns: a natural AI reply only — no Guardian commentary,
+    // no plan table, no adapter talk. Action turns keep the full pipeline below.
+    if (String(turn.mode || '') === 'conversation') {
+      const ai = asRecord(turn.ai);
+      const reply = String(turn.reply || turn.explanation || '');
+      const ok = String(ai.state || '') === 'responded';
+      const providerLabel = ai.provider
+        ? `${String(ai.provider_name || ai.provider)} · ${String(ai.model || '')}${ai.free === true ? ' · $0' : ''}`
+        : 'no provider available';
+      appendLines([{
+        id: `conv-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString(),
+        type: ok ? 'output' : 'error',
+        content: reply,
+        rawCommand: trimmed,
+        meta: {
+          modelName: providerLabel,
+          executionTimeMs: ai.latency_ms ? Number(ai.latency_ms) : Date.now() - started,
+          exitCode: ok ? 0 : 1,
+          reachLevel: 'CONVERSATION',
+        },
+      }]);
+      setIsProcessing(false);
+      setStage('');
+      if (ok) sound.playSuccess(); else sound.playAlert();
+      return;
+    }
+
     const plan = asRecord(turn.plan);
     const guardian = asRecord(turn.guardian);
     const localAi = asRecord(turn.local_ai);
@@ -436,7 +465,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       setInputValue('');
       return;
     }
-    for (const popup of ['agent', 'tasks', 'scope', 'tools', 'dependencies', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
+    for (const popup of ['agent', 'tasks', 'scope', 'tools', 'dependencies', 'models', 'providers', 'system', 'history', 'memory', 'settings', 'launcher', 'aiops', 'about']) {
       if (trimmed === popup) {
         appendLines([{ id: `input-${Date.now()}`, timestamp: timeStr, type: 'input', content: trimmed }]);
         onOpenPopup(popup, {});
@@ -513,7 +542,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
       const commandCandidates = [
         'help', 'clear', 'stop', 'shell', 'map', 'report', 'out',
-        'tasks', 'scope', 'tools', 'models', 'system', 'history', 'memory', 'settings', 'launcher', 'retry', 'aiops', 'about',
+        'tasks', 'scope', 'tools', 'models', 'providers', 'system', 'history', 'memory', 'settings', 'launcher', 'retry', 'aiops', 'about',
         'whoami', 'check disk usage', 'list listening ports', 'show system health',
       ];
 

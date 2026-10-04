@@ -42,9 +42,8 @@ def _section_commands_ollama(runtime: dict[str, Any]) -> list[str]:
     # guide satisfies the app's own "missing core models" check.
     return [
         "curl -fsSL https://ollama.com/install.sh | sh",
-        "ollama pull llama3.2:3b        # fast conversation + fallback",
-        "ollama pull qwen3:4b            # planning + tool selection",
-        "ollama pull phi4-mini:3.8b     # analysis + reporting",
+        "ollama pull qwen2.5:3b         # primary local model (conversation, planning, analysis)",
+        "# optional extras: ollama pull llama3.2:3b / qwen3:4b / phi4-mini:3.8b / gemma3:4b",
     ]
 
 

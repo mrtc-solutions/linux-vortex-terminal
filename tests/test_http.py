@@ -17,7 +17,9 @@ from backend.workspace import Workspace
 
 class HttpApiTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # ignore_cleanup_errors: server worker threads may still flush audit/db
+        # files for a few ms after shutdown(); the OS removes the dir either way.
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         os.environ["VORTEX_DATA_DIR"] = self.tmp.name
         # Root runs deliberately use the root config home, so isolate the
         # sidecar's explicit configuration override rather than relying on
@@ -820,6 +822,34 @@ class HttpApiTests(unittest.TestCase):
         rescanned = self._json("POST", "/api/tools/host/rescan", {}, expected=200, timeout=20)
         self.assertIn("host_tools", rescanned)
         self.assertGreaterEqual(rescanned["host_tools"]["counts"]["path_executables"], data["host_tools"]["counts"]["path_executables"])
+
+    def test_provider_select_policy_matrix(self):
+        # Pinning an eligible provider WITHOUT a model must work even before
+        # any catalog discovery (per-model $0 is re-enforced at dispatch).
+        picked = self._json("POST", "/api/providers/select", {"provider_id": "gemini-1"})
+        self.assertEqual(picked["selected"]["provider"], "gemini-1")
+        # Unknown-pricing providers stay blocked under free-only mode.
+        denied = self._json("POST", "/api/providers/select", {"provider_id": "zai"}, expected=403)
+        self.assertEqual(denied["error"]["code"], "blocked_by_policy")
+        # An explicit model with unverified pricing stays blocked too.
+        denied = self._json("POST", "/api/providers/select",
+                            {"provider_id": "gemini-1", "model": "gemini-2.5-pro"}, expected=403)
+        self.assertEqual(denied["error"]["code"], "blocked_by_policy")
+        # Unknown provider ids are a clean validation error, never a 500.
+        bad = self._json("POST", "/api/providers/select", {"provider_id": "bogus"}, expected=422)
+        self.assertEqual(bad["error"]["code"], "invalid_plan")
+        # Back to automatic fallback routing.
+        auto = self._json("POST", "/api/providers/select", {"provider_id": "auto"})
+        self.assertEqual(auto["selected"]["provider"], "auto")
+        snapshot = self._json("GET", "/api/providers")
+        self.assertEqual(snapshot["providers"]["conversation_provider"], "auto")
+        self.assertTrue(snapshot["providers"]["free_only"])
+
+    def test_capabilities_advertise_provider_layer(self):
+        caps = self._json("GET", "/api/capabilities")
+        self.assertIn("multi-provider-ai", caps["implemented"])
+        self.assertIn("free-only-mode", caps["implemented"])
+        self.assertIn("conversational-routing", caps["implemented"])
 
     def test_mobile_apk_sync_then_download(self):
         built = self._json("POST", "/api/mobile/apk", {}, expected=201, timeout=30)

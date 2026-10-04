@@ -299,6 +299,28 @@ export interface TurnOptions {
 export const runTurn = (request: string, options: TurnOptions = {}, timeoutMs = 120000) =>
   apiPost<TurnResult>('/api/workspace/turn', { request, ...options }, timeoutMs);
 
+/* ---------------- AI providers (multi-provider layer) ---------------- */
+
+export const getProviders = (fresh = false) =>
+  apiGet<{ providers?: JsonRecord } & JsonRecord>(`/api/providers${fresh ? '?fresh=1' : ''}`);
+export const getProviderDiagnostics = () =>
+  apiGet<{ diagnostics?: JsonRecord } & JsonRecord>('/api/providers/diagnostics');
+export const checkProvider = (providerId: string) =>
+  apiPost<{ health?: JsonRecord } & JsonRecord>('/api/providers/check', { provider_id: providerId }, 60000);
+export const refreshProviders = (providerId?: string) =>
+  apiPost<{ refresh?: JsonRecord } & JsonRecord>('/api/providers/refresh', providerId ? { provider_id: providerId } : {}, 120000);
+export const setProviderEnabled = (providerId: string, enabled: boolean, allowInFreeMode?: boolean) =>
+  apiPost<JsonRecord>('/api/providers/enable', {
+    provider_id: providerId, enabled,
+    ...(allowInFreeMode === undefined ? {} : { allow_in_free_mode: allowInFreeMode }),
+  });
+export const selectProviderModel = (providerId: string, model?: string) =>
+  apiPost<JsonRecord>('/api/providers/select', { provider_id: providerId, model: model || '' });
+export const configureGemini = (entry: string, model?: string, keySlot?: string) =>
+  apiPost<JsonRecord>('/api/providers/gemini', { entry, ...(model ? { model } : {}), ...(keySlot ? { key_slot: keySlot } : {}) });
+export const warmupLocalModel = () =>
+  apiPost<{ warmup?: JsonRecord } & JsonRecord>('/api/providers/warmup', {}, 180000);
+
 export const buildPlan = (request: string, options: TurnOptions = {}) =>
   apiPost<{ plan?: PlanDocument } & JsonRecord>('/api/plan', { request, ...options });
 

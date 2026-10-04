@@ -21,13 +21,25 @@ from typing import Any
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MODEL_CATALOG: dict[str, dict[str, Any]] = {
+    # qwen2.5:3b is the confirmed primary local model (discovered via the
+    # Ollama API, never assumed from a .gguf file on disk). Everything else
+    # is optional: Vortex must not fail or retry-loop because Llama 3.2 or
+    # any other catalog entry is absent.
+    "qwen2.5:3b": {
+        "family": "qwen2.5",
+        "label": "Qwen 2.5 3B (primary local)",
+        "roles": ("conversation", "planning", "analysis", "reporting", "coding", "verification"),
+        "resource_tier": "low",
+        "primary_for": ("conversation", "plan", "interpret", "report", "verify", "fast"),
+        "optional": False,
+    },
     "phi4-mini:3.8b": {
         "family": "phi4-mini",
         "label": "Phi-4 Mini 3.8B",
         "roles": ("conversation", "analysis", "reporting", "command-explanation"),
         "resource_tier": "standard",
         "primary_for": ("conversation", "interpret", "report", "verify"),
-        "optional": False,
+        "optional": True,
     },
     "qwen3:4b": {
         "family": "qwen3",
@@ -35,15 +47,15 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "roles": ("planning", "coding", "tool-selection", "verification"),
         "resource_tier": "standard",
         "primary_for": ("plan", "tooling", "verify"),
-        "optional": False,
+        "optional": True,
     },
     "llama3.2:3b": {
         "family": "llama3.2",
-        "label": "Llama 3.2 3B",
+        "label": "Llama 3.2 3B (optional)",
         "roles": ("fast-response", "summarization", "fallback"),
         "resource_tier": "low",
         "primary_for": ("fast", "conversation"),
-        "optional": False,
+        "optional": True,
     },
     "gemma3:4b": {
         "family": "gemma3",
@@ -419,9 +431,10 @@ def recommended_models(resources: dict[str, Any], candidates: list[dict[str, Any
     installed = [item for item in candidates if item.get("installed")]
     names = {item["name"]: item.get("installed_name") or item["name"] for item in installed}
     fallback = extras[0]["name"] if extras else None
-    fast = names.get("llama3.2:3b") or names.get("phi4-mini:3.8b") or names.get("qwen3:4b") or fallback
-    planner = names.get("qwen3:4b") or names.get("phi4-mini:3.8b") or fast
-    analyst = names.get("phi4-mini:3.8b") or planner or fast
+    qwen25 = names.get("qwen2.5:3b")
+    fast = qwen25 or names.get("llama3.2:3b") or names.get("phi4-mini:3.8b") or names.get("qwen3:4b") or fallback
+    planner = qwen25 or names.get("qwen3:4b") or names.get("phi4-mini:3.8b") or fast
+    analyst = qwen25 or names.get("phi4-mini:3.8b") or planner or fast
     specialist = names.get("gemma3:4b") or analyst
     multi_model = resources.get("max_parallel_models", 1) > 1 and len(installed) >= 2
     return {
@@ -493,6 +506,42 @@ def _fuzzy_decision(gguf_state: str | None, ollama_state: str | None, phase: str
             winner = "gguf" if gguf_state == "healthy" else ("ollama" if ollama_state == "healthy" else "deterministic")
         return {"winner": winner, "confidence": "moderate" if winner in {"llamafile", "gguf", "ollama"} else "unavailable",
                 "reason": "fuzzy engine unavailable; static provider order used.", "phase": phase, "ranking": []}
+
+
+def _cloud_summary(settings: dict[str, Any]) -> dict[str, Any]:
+    """Honest, non-probing summary of the multi-provider cloud layer.
+
+    No network calls — definitions and key *presence* only. Live health and
+    discovery live in the AI PROVIDERS window and GET /api/providers.
+    """
+    try:
+        try:
+            from providers import catalog as prov_catalog, keys as prov_keys  # type: ignore
+        except ImportError:
+            from backend.providers import catalog as prov_catalog, keys as prov_keys  # type: ignore
+        privacy = str(settings.get("privacy_mode") or "local")
+        entries: list[dict[str, Any]] = []
+        for definition in prov_catalog.PROVIDERS_BY_ID.values():
+            if definition.get("mode") == "local" or not definition.get("enabled_default"):
+                continue
+            slot = definition.get("key_slot")
+            entries.append({
+                "id": definition["id"],
+                "free_status": definition.get("free_status"),
+                "key_configured": bool(prov_keys.get_key(slot)) if slot else True,
+            })
+        ready = [item["id"] for item in entries if item["key_configured"]]
+        if settings.get("offline") is True:
+            state, reason = "blocked", "offline mode blocks all cloud providers."
+        elif privacy == "local":
+            state, reason = "blocked", "privacy mode 'local' blocks cloud providers — set privacy mode to 'hybrid' or 'cloud' to allow cloud fallback."
+        elif ready:
+            state, reason = "configured", f"{len(ready)} cloud provider(s) are eligible for free-only fallback (credentials present or not required)."
+        else:
+            state, reason = "unconfigured", "no cloud provider credentials are configured (see .env.example)."
+        return {"state": state, "providers": entries, "reason": reason}
+    except Exception:
+        return {"state": "unknown", "providers": [], "reason": "provider layer unavailable."}
 
 
 def model_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -573,7 +622,7 @@ def model_status(settings: dict[str, Any] | None = None) -> dict[str, Any]:
                        "endpoint": local.get("endpoint")},
         },
         "fuzzy": fuzzy,
-        "cloud": {"state": "disabled", "providers": [], "reason": "Cloud providers are not configured and are disabled by default."},
+        "cloud": _cloud_summary(settings),
         "selected": selected,
         "routing": {"phases": routes, "resource_mode": (local.get("resources") or {}).get("mode")},
         "message": "Local advisory routing prefers the llamafile loopback server, then on-device GGUF, then Ollama loopback, then the agent council. Deterministic planning and execution remain authoritative.",
@@ -722,7 +771,7 @@ def choose_route(request: str, plan: dict[str, Any] | None = None, operation: di
         # single primary model keeps request latency bounded; the multi-model
         # verification still happens during post-execution interpretation.
         max_models = 1
-    preferred_fast = settings.get("model_fast") or local.get("recommended", {}).get("fast") or "llama3.2:3b"
+    preferred_fast = settings.get("model_fast") or local.get("recommended", {}).get("fast") or "qwen2.5:3b"
     preferred_plan = settings.get("model_planner") or local.get("recommended", {}).get("planner") or "qwen3:4b"
     preferred_analysis = settings.get("model_primary") or local.get("recommended", {}).get("analysis") or "phi4-mini:3.8b"
     preferred_special = settings.get("model_specialist") or local.get("recommended", {}).get("specialist") or "gemma3:4b"
@@ -877,8 +926,13 @@ def _model_timeout(settings: dict[str, Any] | None = None, default: int = 12) ->
 
 def _model_keepalive(settings: dict[str, Any] | None = None) -> str:
     settings = settings or {}
-    value = str(settings.get("model_keepalive") or "0m")[:32]
-    return value if value else "0m"
+    # Default 15m: on low-spec machines (2 GHz class) an immediate unload means
+    # the next turn pays a full model reload (~40 s); keep the model resident.
+    # "0m" was the old shipped default (never user-selectable) — migrate it.
+    value = str(settings.get("model_keepalive") or "").strip()[:32]
+    if value in {"", "0", "0m", "0s"}:
+        return "15m"
+    return value
 
 
 def _coerce_reply(text: str, role: str, model: str) -> dict[str, Any]:
