@@ -4,6 +4,7 @@ import {
   JsonRecord, TurnResult, OperationDocument,
   cancelOperation, getOperation, runTurn, apiPost, streamOperation,
 } from './vortexApi';
+import { isWeb } from './runtimeState';
 
 export function conversationId(): string | undefined {
   try {
@@ -131,6 +132,33 @@ export async function cancelRunningOperation(operationId: string): Promise<void>
 }
 
 export async function startTurn(request: string, engagementId?: string): Promise<TurnResult> {
+  if (isWeb()) {
+    // WEB_CLOUD runtime: the Vercel backend is stateless, so the browser
+    // supplies its own bounded history window plus any relevant past
+    // answers it holds (real historical candidates for cloud arbitration),
+    // then persists both sides of the exchange locally.
+    const { recentHistory, retrieveHistoricalCandidates, appendWebMessage } = await import('./webConversations');
+    const cid = conversationId();
+    const turn = await runTurn(request, {
+      conversation_id: cid,
+      history: recentHistory(cid),
+      historical_candidates: retrieveHistoricalCandidates(request),
+    });
+    const conversation = (turn.conversation || {}) as JsonRecord;
+    const resolvedId = typeof conversation.id === 'string' && conversation.id ? conversation.id : cid;
+    if (resolvedId) {
+      persistConversationId(resolvedId);
+      try {
+        appendWebMessage(resolvedId, 'user', request);
+        const reply = String(turn.reply || turn.explanation || '');
+        if (reply) {
+          const message = (turn.message || {}) as JsonRecord;
+          appendWebMessage(resolvedId, 'vortex', reply, (message.meta || {}) as JsonRecord);
+        }
+      } catch { /* storage unavailable — the turn itself still succeeded */ }
+    }
+    return turn;
+  }
   const turn = await runTurn(request, {
     engagement_id: engagementId,
     conversation_id: conversationId(),

@@ -61,8 +61,11 @@ def provider_allowed(policy: dict[str, Any], definition: dict[str, Any], overrid
         return True, "provider provides renewable free credits with zero overage risk"
 
     if free_status == _catalog.STATUS_FREE_BILLABLE_OVERAGE:
-        # Allowed if user explicitly confirmed free tier hard stop
-        if overrides.get("allow_in_free_mode") is True or definition.get("id") == "cloudflare":
+        # Hard billing policy: a provider whose free tier can roll into
+        # billed overage (e.g. Cloudflare Workers AI on a paid account) is
+        # blocked until the OPERATOR explicitly verifies their own plan has a
+        # hard stop and sets allow_in_free_mode. No hard-coded exemptions.
+        if overrides.get("allow_in_free_mode") is True:
             return True, "free tier active (operator confirmed no overage / hard cap)"
         return False, "FREE_BILLABLE_OVERAGE: potential overage billing possible on paid accounts"
 

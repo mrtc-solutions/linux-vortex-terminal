@@ -20,6 +20,10 @@ import {
 import { startTurn, watchOperation, persistConversationId } from '../services/turnRunner';
 import { setLastTurn } from '../services/lastTurnStore';
 import { advisorySummary, guardianSummary, toFuzzyConsensus } from '../services/realFuzzyAdapter';
+import { detectRuntime } from '../services/runtime';
+import { isWeb } from '../services/runtimeState';
+import { setActiveAi } from '../services/activeAi';
+import { getProviders } from '../services/vortexApi';
 
 interface TerminalViewProps {
   selectionRef: React.MutableRefObject<(id: string) => Promise<void>>;
@@ -181,9 +185,62 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     };
   }, [selectionRef]);
 
+  // Web/Vercel boot: the backend is the serverless cloud API. There is no
+  // sidecar, no local Qwen and NO access to the visitor's Linux machine —
+  // the greeting says so instead of pretending.
+  const bootWeb = async (version: string) => {
+    try {
+      const payload = await getProviders();
+      if (!mountedRef.current) return;
+      const snapshot = asRecord(payload.providers);
+      const providers = Array.isArray(snapshot.providers) ? snapshot.providers.map(asRecord) : [];
+      const eligible = providers.filter((p) => p.mode === 'cloud' && p.enabled === true
+        && p.policy_allowed === true && (p.key_configured === true || p.requires_api_key === false));
+      const chain = (Array.isArray(snapshot.fallback_order) ? snapshot.fallback_order : [])
+        .map(String).filter((id) => eligible.some((p) => p.id === id)).slice(0, 6);
+      const freeOnly = snapshot.free_only !== false;
+      setPromptUser('web');
+      setPromptCwd('cloud');
+      setConnected(true);
+      appendLines([
+        {
+          id: `greet-web-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), type: 'system',
+          content: `Vortex Terminal v${version} — ☁ WEB / CLOUD runtime (Vercel backend connected).\n`
+            + `LOCAL MACHINE: NOT CONNECTED — this web app cannot run commands on your Linux host, and won't pretend to.\n`
+            + `Local Qwen is unavailable in Web Mode; using cloud AI.\n`
+            + `Cloud AI chain: ${chain.length > 0 ? chain.join(' → ') : 'no eligible free provider configured yet'}`
+            + ` · Free-only: ${freeOnly ? 'ON ($0 enforced server-side)' : 'OFF'}`,
+        },
+        {
+          id: `greet-web-2-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), type: 'output',
+          content: eligible.length > 0
+            ? `Ask anything (\"hello\", \"Explain Docker\"). Conversation history stays in THIS browser.\nSystem actions need the Local Linux runtime: clone the repo and run npm install && npm start.`
+            : `No cloud AI keys are configured on this deployment, so AI replies are unavailable.\nThe operator must set GEMINI_API_KEY_1/2, GROQ_API_KEY or OPENROUTER_API_KEY in Vercel (server-side).`,
+        },
+      ]);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      appendLines([{
+        id: `boot-web-fail-${Date.now()}`, timestamp: new Date().toLocaleTimeString(), type: 'error',
+        content: `Web backend reachable but provider status failed: ${err instanceof Error ? err.message : String(err)}`,
+      }]);
+      setConnected(true);
+    }
+  };
+
   // Boot: real sidecar handshake, then a greeting built from live facts.
   // Also reused by the `retry` command after a failed handshake.
   const boot = async (isRetry = false) => {
+    const runtime = await detectRuntime(isRetry);
+    if (runtime.runtime === 'WEB_CLOUD') {
+      appendLines([{
+        id: `boot-${Date.now()}`, timestamp: new Date().toLocaleTimeString(),
+        type: 'system',
+        content: 'Vortex Terminal — ☁ WEB / CLOUD runtime detected (Vercel). Connecting to the cloud backend…',
+      }]);
+      await bootWeb(runtime.version || '0.3.0');
+      return;
+    }
     appendLines([{
       id: `boot-${Date.now()}`, timestamp: new Date().toLocaleTimeString(),
       type: 'system',
@@ -273,7 +330,9 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       setIsProcessing(false);
       setStage('');
       const message = err instanceof ApiError && err.code === 'network'
-        ? `Sidecar unreachable. Start it with: ./vortex serve --bind-host 127.0.0.1 --bind-port 8765`
+        ? (isWeb()
+          ? 'Vortex web backend unreachable — check your internet connection and retry.'
+          : `Sidecar unreachable. Start it with: ./vortex serve --bind-host 127.0.0.1 --bind-port 8765`)
         : (err instanceof Error ? err.message : String(err));
       appendLines([{
         id: `err-${Date.now()}`, timestamp: new Date().toLocaleTimeString(),
@@ -285,16 +344,70 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     if (!mountedRef.current) return;
     setLastTurn(turn);
 
+    // Web Mode action requests: the Vercel backend has no reach into the
+    // visitor's Linux machine and says so explicitly instead of faking a run.
+    if (String(turn.mode || '') === 'web_action_blocked') {
+      appendLines([{
+        id: `webblock-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'warning',
+        content: String(turn.reply || 'Local Linux host is not connected in Web Mode.'),
+        rawCommand: trimmed,
+        meta: { modelName: 'WEB / CLOUD runtime — no local execution', exitCode: 1, reachLevel: 'LOCAL MACHINE: NOT CONNECTED' },
+      }]);
+      setIsProcessing(false);
+      setStage('');
+      sound.playAlert();
+      return;
+    }
+
     // Conversational turns: a natural AI reply only — no Guardian commentary,
     // no plan table, no adapter talk. Action turns keep the full pipeline below.
     if (String(turn.mode || '') === 'conversation') {
       const ai = asRecord(turn.ai);
       const reply = String(turn.reply || turn.explanation || '');
       const ok = String(ai.state || '') === 'responded';
+      const aiMode = String(ai.mode || (String(ai.provider || '') === 'ollama-local' ? 'local' : (ai.provider ? 'cloud' : '')));
+      const sourceBadge = aiMode === 'local' ? 'LOCAL' : aiMode === 'cloud' ? 'CLOUD' : '';
       const providerLabel = ai.provider
-        ? `${String(ai.provider_name || ai.provider)} · ${String(ai.model || '')}${ai.free === true ? ' · $0' : ''}`
+        ? `${sourceBadge ? `${sourceBadge} · ` : ''}${String(ai.provider_name || ai.provider)} · ${String(ai.model || '')}${ai.free === true ? ' · $0' : ''}`
         : 'no provider available';
-      appendLines([{
+      // Concise fallback status (task: "Local Qwen unavailable → Using Gemini #1"),
+      // built from the REAL attempt log the provider manager returned.
+      const attempts = Array.isArray(ai.attempts) ? ai.attempts.map(asRecord) : [];
+      let fallbackNote = '';
+      if (ok && attempts.length > 0 && ai.provider) {
+        const skipped = attempts[0];
+        const skippedName = String(skipped.provider || 'provider');
+        const why = String(skipped.state || 'unavailable').replace(/_/g, ' ');
+        fallbackNote = `${skippedName === 'ollama-local' ? 'Local Qwen' : skippedName} ${why} → Using ${String(ai.provider_name || ai.provider)}`;
+      }
+      setActiveAi(ok ? {
+        provider: String(ai.provider || ''),
+        providerName: String(ai.provider_name || ai.provider || ''),
+        model: String(ai.model || ''),
+        mode: aiMode === 'local' ? 'local' : aiMode === 'cloud' ? 'cloud' : '',
+        free: ai.free === true ? true : ai.free === false ? false : null,
+        fallbackNote,
+      } : null);
+      const lines: TerminalLine[] = [];
+      if (fallbackNote) {
+        lines.push({
+          id: `fallback-${Date.now()}`, timestamp: new Date().toLocaleTimeString(),
+          type: 'system', content: fallbackNote,
+        });
+      }
+      const contribution = String(turn.historical_contribution || 'none');
+      if (contribution !== 'none') {
+        const arbitration = asRecord(turn.arbitration);
+        lines.push({
+          id: `arb-${Date.now()}`, timestamp: new Date().toLocaleTimeString(),
+          type: 'system',
+          content: `Historical answer arbitration: ${String(arbitration.decision || 'evaluated')} `
+            + `(contribution: ${contribution}, mode: ${String(arbitration.arbitration_mode || 'LOCAL')})`,
+        });
+      }
+      lines.push({
         id: `conv-${Date.now()}`,
         timestamp: new Date().toLocaleTimeString(),
         type: ok ? 'output' : 'error',
@@ -306,7 +419,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           exitCode: ok ? 0 : 1,
           reachLevel: 'CONVERSATION',
         },
-      }]);
+      });
+      appendLines(lines);
       setIsProcessing(false);
       setStage('');
       if (ok) sound.playSuccess(); else sound.playAlert();

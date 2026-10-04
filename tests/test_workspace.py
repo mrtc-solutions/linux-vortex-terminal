@@ -1173,5 +1173,81 @@ class StartFailureTests(unittest.TestCase):
             os.environ.pop("VORTEX_DATA_DIR", None)
 
 
+class ContainerRuntimeArgvTests(unittest.TestCase):
+    """Regression: on hosts with a REAL Docker socket (CI, user machines),
+    local_container_runtime() used to return the resolved binary path as
+    argv[0], which command_spec() rejects (argv[0] must equal the executable
+    name) — every container plan died with PolicyError('invalid argv')."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["VORTEX_DATA_DIR"] = self.tmp.name
+        self.store = Store(Path(self.tmp.name) / "vortex.db")
+
+    def tearDown(self):
+        os.environ.pop("VORTEX_DATA_DIR", None)
+        self.tmp.cleanup()
+
+    def _docker_env(self):
+        import socket as _socket
+        from backend import vortex_backend as vb
+        sock_path = Path(self.tmp.name) / "docker.sock"
+        server = _socket.socket(_socket.AF_UNIX)
+        server.bind(str(sock_path))
+        self.addCleanup(server.close)
+        real_probe = vb.probe_executable
+
+        def fake_probe(name, **kwargs):
+            if name == "docker":
+                return {"name": "docker", "state": "installed",
+                        "path": "/usr/bin/docker", "realpath": "/usr/bin/docker",
+                        "version": "Docker version 27.0.0", "security_flags": []}
+            return real_probe(name, **kwargs)
+
+        return sock_path, fake_probe
+
+    def test_docker_socket_argv_head_is_runtime_name(self):
+        from backend import vortex_backend as vb
+        sock_path, fake_probe = self._docker_env()
+        with patch.object(vb, "probe_executable", side_effect=fake_probe), \
+             patch.object(vb, "docker_socket_candidates", return_value=(sock_path,)):
+            info = vb.local_container_runtime()
+            self.assertIsNotNone(info)
+            runtime, argv = info
+            self.assertEqual(runtime, "docker")
+            self.assertEqual(argv[0], "docker", "argv[0] must be the runtime name, not a binary path")
+            self.assertIn(f"unix://{sock_path.resolve()}", " ".join(argv))
+
+    def test_docker_ps_plan_builds_without_policy_error_when_socket_present(self):
+        from backend import vortex_backend as vb
+        sock_path, fake_probe = self._docker_env()
+        with patch.object(vb, "probe_executable", side_effect=fake_probe), \
+             patch.object(vb, "docker_socket_candidates", return_value=(sock_path,)):
+            plan = build_plan(self.store, "docker ps", self.tmp.name)
+            self.assertEqual(plan["kind"], "container_inspection")
+            self.assertEqual(plan["status"], "planned", plan.get("notes"))
+            argv = plan["commands"][0]["argv"]
+            self.assertEqual(argv[0], "docker")
+            self.assertIn("ps", argv)
+            self.assertIn("--no-trunc", argv)
+
+    def test_podman_argv_head_is_runtime_name(self):
+        from backend import vortex_backend as vb
+        real_probe = vb.probe_executable
+
+        def fake_probe(name, **kwargs):
+            if name == "docker":
+                return {"name": "docker", "state": "absent", "path": None, "version": None}
+            if name == "podman":
+                return {"name": "podman", "state": "installed",
+                        "path": "/usr/bin/podman", "realpath": "/usr/bin/podman",
+                        "version": "podman 5.0", "security_flags": []}
+            return real_probe(name, **kwargs)
+
+        with patch.object(vb, "probe_executable", side_effect=fake_probe):
+            info = vb.local_container_runtime()
+            self.assertEqual(info, ("podman", ["podman", "--remote=false"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -643,6 +643,16 @@ class ProviderManager:
             result["message"] += f" — using installed tag {effective}"
         with self._lock:
             self._local_runtime = dict(result)
+            # The probe just verified Ollama is reachable and the model is
+            # installed. If the active cooldown was caused by an environment
+            # problem the operator has now fixed (daemon down / model missing),
+            # clear it so chat recovers immediately instead of waiting out the
+            # cooldown. Timeout/load cooldowns are kept: a fast /api/tags reply
+            # does not prove inference will be fast.
+            stat = self._stats.get("ollama-local")
+            if stat and float(stat.get("cooldown_until") or 0.0) > time.monotonic() \
+                    and stat.get("last_error_kind") in {"model_unavailable", "network_unavailable"}:
+                stat["cooldown_until"] = 0.0
         return result
 
     def warm_up(self, settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -835,6 +845,11 @@ class ProviderManager:
     def candidate_order(self, settings: dict[str, Any]) -> list[str]:
         preferred = str(settings.get("conversation_provider") or "auto")
         order = list(_catalog.DEFAULT_FALLBACK_ORDER)
+        # WEB_CLOUD runtime (Vercel backend): there is no loopback Ollama on
+        # the server and the visitor's machine is NOT reachable — the local
+        # entry is skipped honestly instead of timing out against 127.0.0.1.
+        if str(settings.get("runtime") or "").upper() == "WEB_CLOUD":
+            order = [item for item in order if item != "ollama-local"]
         if preferred != "auto" and preferred in order:
             order.remove(preferred)
             order.insert(0, preferred)
@@ -865,7 +880,42 @@ class ProviderManager:
             wanted_model = model or (str(settings.get("conversation_model") or "") or None)
             order = self.candidate_order(settings)
         attempts: list[dict[str, Any]] = []
+        web_runtime = str(settings.get("runtime") or "").upper() == "WEB_CLOUD"
+        # Optional wall-clock budget across the WHOLE fallback chain. The
+        # serverless web runtime sets this so a chain of slow providers can
+        # never outlive the platform's function limit and die opaquely —
+        # the caller gets an honest "budget exhausted" attempt instead.
+        overall_started = time.monotonic()
+        try:
+            total_deadline = float(settings.get("total_deadline_seconds") or 0)
+        except (TypeError, ValueError):
+            total_deadline = 0.0
         for candidate in order:
+            call_settings = settings
+            if total_deadline:
+                remaining = total_deadline - (time.monotonic() - overall_started)
+                if remaining <= 0:
+                    attempts.append({
+                        "provider": candidate, "state": "deadline_exceeded",
+                        "detail": (f"skipped — the {int(total_deadline)}s total AI time budget was "
+                                   "exhausted by earlier providers"),
+                    })
+                    break
+                # Clamp the per-call timeout to the remaining budget so even an
+                # in-flight request cannot outlive the deadline (a call started
+                # at T-1s must not run its full configured timeout past T).
+                try:
+                    per_call = float(settings.get("cloud_timeout_seconds") or _DEFAULT_CLOUD_TIMEOUT)
+                except (TypeError, ValueError):
+                    per_call = _DEFAULT_CLOUD_TIMEOUT
+                if per_call > remaining:
+                    call_settings = dict(settings)
+                    call_settings["cloud_timeout_seconds"] = max(2.0, remaining)
+            if web_runtime and candidate == "ollama-local":
+                # Never pretend the Vercel backend can reach local Qwen.
+                attempts.append({"provider": "ollama-local", "state": "unavailable_web",
+                                 "detail": "Local Qwen is unavailable in Web Mode; using cloud AI."})
+                continue
             # A pinned model only applies to the provider it was pinned for;
             # fallback providers resolve their own policy-allowed model.
             requested_model = wanted_model if (preferred_target and candidate == preferred_target) else None
@@ -903,7 +953,7 @@ class ProviderManager:
                 if exc.kind in {"blocked_policy", "model_unavailable"} and str(definition.get("discovery")) not in {"static", "ollama-tags"}:
                     # One discovery attempt before giving up on this provider.
                     try:
-                        self.discover_models(candidate, settings)
+                        self.discover_models(candidate, call_settings)
                         resolved_model, model_entry = self._resolve_model(definition, requested_model, policy, overrides)
                     except ProviderError as retry_exc:
                         attempts.append({"provider": candidate, "state": retry_exc.kind, "detail": retry_exc.detail})
@@ -913,7 +963,7 @@ class ProviderManager:
                     continue
             started = time.monotonic()
             try:
-                reply = self._chat(definition, resolved_model, messages, settings)
+                reply = self._chat(definition, resolved_model, messages, call_settings)
                 latency_ms = int((time.monotonic() - started) * 1000)
                 self._record_success(candidate, latency_ms)
                 return {

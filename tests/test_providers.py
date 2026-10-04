@@ -124,6 +124,20 @@ class PolicyTests(ProviderTestCase):
         self.assertFalse(allowed)
         self.assertIn("free-only", reason)
 
+    def test_billable_overage_provider_blocked_without_operator_override(self):
+        """FREE_BILLABLE_OVERAGE (e.g. Cloudflare Workers AI) must be blocked
+        in free-only mode unless the operator explicitly verified a hard cap —
+        no hard-coded provider exemptions from the billing policy."""
+        policy = prov_policy.cost_policy({"free_only_mode": True})
+        definition = prov_catalog.provider_def("cloudflare")
+        self.assertEqual(definition.get("free_status"), prov_catalog.STATUS_FREE_BILLABLE_OVERAGE)
+        allowed, reason = prov_policy.provider_allowed(policy, definition, {})
+        self.assertFalse(allowed)
+        self.assertIn("FREE_BILLABLE_OVERAGE", reason)
+        allowed, reason = prov_policy.provider_allowed(policy, definition, {"allow_in_free_mode": True})
+        self.assertTrue(allowed)
+        self.assertIn("operator", reason)
+
     def test_free_only_blocks_unknown_pricing(self):
         policy = prov_policy.cost_policy({"free_only_mode": True})
         definition = prov_catalog.provider_def("openrouter")
@@ -253,6 +267,56 @@ class GenerateTests(ProviderTestCase):
                                         provider_id="groq")
         kinds2 = {item["provider"]: item["state"] for item in result2["attempts"]}
         self.assertEqual(kinds2.get("groq"), "cooling_down")
+
+    def test_per_call_timeout_is_clamped_to_remaining_deadline(self):
+        """With a total deadline, an in-flight call must not be allowed its
+        full configured timeout past the deadline — the effective per-call
+        timeout is clamped to the remaining budget (serverless safety)."""
+        handler, url = self.mock({
+            "/models": (200, {"data": [{"id": "llama-3.3-70b-versatile"}]}),
+            "/chat/completions": (200, chat_payload("quick reply")),
+        })
+        self.patch_base("groq", url)
+        self.set_key("GROQ_API_KEY")
+        seen: list[float] = []
+        original_chat = self.manager._chat
+
+        def spying_chat(definition, model, messages, settings):
+            seen.append(float(settings.get("cloud_timeout_seconds") or 0))
+            return original_chat(definition, model, messages, settings)
+
+        with patch.object(self.manager, "_chat", side_effect=spying_chat):
+            settings = dict(HYBRID)
+            settings.update({"cloud_timeout_seconds": 30, "total_deadline_seconds": 5})
+            result = self.manager.generate([{"role": "user", "content": "hello"}], settings,
+                                           provider_id="groq", allow_fallback=False)
+        self.assertEqual(result["state"], "responded")
+        self.assertEqual(len(seen), 1)
+        # 30s configured, but only ~5s of budget remained → clamped.
+        self.assertLessEqual(seen[0], 5.0)
+        self.assertGreaterEqual(seen[0], 2.0)
+
+    def test_no_deadline_leaves_per_call_timeout_untouched(self):
+        handler, url = self.mock({
+            "/models": (200, {"data": [{"id": "llama-3.3-70b-versatile"}]}),
+            "/chat/completions": (200, chat_payload("quick reply")),
+        })
+        self.patch_base("groq", url)
+        self.set_key("GROQ_API_KEY")
+        seen: list[float] = []
+        original_chat = self.manager._chat
+
+        def spying_chat(definition, model, messages, settings):
+            seen.append(float(settings.get("cloud_timeout_seconds") or 0))
+            return original_chat(definition, model, messages, settings)
+
+        with patch.object(self.manager, "_chat", side_effect=spying_chat):
+            settings = dict(HYBRID)
+            settings["cloud_timeout_seconds"] = 30
+            result = self.manager.generate([{"role": "user", "content": "hello"}], settings,
+                                           provider_id="groq", allow_fallback=False)
+        self.assertEqual(result["state"], "responded")
+        self.assertEqual(seen, [30.0])
 
     def test_free_only_mode_refuses_provider_with_only_paid_models(self):
         handler, url = self.mock({
@@ -406,6 +470,35 @@ class LocalQwenTests(ProviderTestCase):
     def test_not_running_reported_distinctly(self):
         status = self.manager.local_status({"ollama_endpoint": "http://127.0.0.1:9"})
         self.assertIn(status["state"], {"ollama_not_running", "ollama_not_installed"})
+
+    def test_healthy_probe_clears_environment_cooldown(self):
+        """After the operator fixes `model missing` (ollama pull), a verified
+        healthy probe must clear the cooldown so chat recovers immediately."""
+        import time as _time
+        from backend.providers.manager import ProviderError
+        self.manager._record_failure("ollama-local", ProviderError("model_unavailable", "404 model not found"))
+        self.assertGreater(self.manager._in_cooldown("ollama-local"), 0)
+        handler, url = self.mock({
+            "/api/tags": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+            "/api/ps": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+        })
+        status = self.manager.local_status({"ollama_endpoint": url})
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(self.manager._in_cooldown("ollama-local"), 0)
+
+    def test_healthy_probe_keeps_timeout_cooldown(self):
+        """A fast /api/tags answer does not prove inference is fast: timeout
+        cooldowns must survive a healthy status probe."""
+        from backend.providers.manager import ProviderError
+        self.manager._record_failure("ollama-local", ProviderError("timeout", "inference timed out"))
+        self.assertGreater(self.manager._in_cooldown("ollama-local"), 0)
+        handler, url = self.mock({
+            "/api/tags": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+            "/api/ps": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+        })
+        status = self.manager.local_status({"ollama_endpoint": url})
+        self.assertEqual(status["state"], "ready")
+        self.assertGreater(self.manager._in_cooldown("ollama-local"), 0)
 
     def test_local_chat_answers_through_mock_ollama(self):
         handler, url = self.mock({

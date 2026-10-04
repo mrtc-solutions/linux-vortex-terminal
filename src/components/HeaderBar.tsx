@@ -21,6 +21,8 @@ import {
   Wrench,
 } from 'lucide-react';
 import { sound } from '../services/soundEffects';
+import { RuntimeInfo, detectRuntime, onRuntimeChange } from '../services/runtime';
+import { ActiveAi, onActiveAiChange } from '../services/activeAi';
 
 interface HeaderBarProps {
   activeTab: 'terminal' | 'map' | 'out' | 'report' | 'fuzzy' | 'agent-reach';
@@ -57,6 +59,17 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   const [providerBadges, setProviderBadges] = useState<{ name: string; state: string; reason: string }[]>([]);
   const [advisorLabel, setAdvisorLabel] = useState('Advisors: …');
   const [freeOnly, setFreeOnly] = useState<boolean | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
+  const [activeAiState, setActiveAiState] = useState<ActiveAi | null>(null);
+
+  // Runtime + active-AI badges: the operator must always know whether this
+  // is ● LOCAL — Linux or ☁ WEB — Vercel, and which AI answered last.
+  useEffect(() => {
+    void detectRuntime();
+    const offRuntime = onRuntimeChange(setRuntime);
+    const offAi = onActiveAiChange(setActiveAiState);
+    return () => { offRuntime(); offAi(); };
+  }, []);
 
   // One honest telemetry pass from the live sidecar (no staged cluster stats).
   useEffect(() => {
@@ -185,6 +198,36 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
               <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--theme-border)] text-xs font-mono opacity-80">
                 v0.3.0
               </span>
+              {/* Runtime badge: the user must always know which runtime they are in. */}
+              <span
+                title={runtime?.runtime === 'WEB_CLOUD'
+                  ? 'WEB / CLOUD runtime: the Vercel backend answers with cloud AI. Your local Linux machine is NOT connected.'
+                  : runtime?.runtime === 'LOCAL_LINUX'
+                    ? 'LOCAL runtime: the sidecar runs on this Linux machine with local adapters and (when installed) local Qwen.'
+                    : 'Runtime not detected yet — no backend has answered.'}
+                className={`text-[10px] font-bold px-1.5 py-0.5 rounded border font-mono ${
+                  runtime?.runtime === 'WEB_CLOUD'
+                    ? 'bg-sky-950/80 text-sky-300 border-sky-800/60'
+                    : runtime?.runtime === 'LOCAL_LINUX'
+                      ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/50'
+                      : 'bg-stone-900 text-stone-500 border-stone-700'
+                }`}
+              >
+                {runtime?.runtime === 'WEB_CLOUD' ? '☁ WEB — Vercel'
+                  : runtime?.runtime === 'LOCAL_LINUX' ? '● LOCAL — Linux' : '○ RUNTIME ?'}
+              </span>
+              {activeAiState ? (
+                <span
+                  title={`Last answer came from ${activeAiState.mode === 'local' ? 'the LOCAL model' : 'a CLOUD provider'}: ${activeAiState.providerName} (${activeAiState.model})${activeAiState.fallbackNote ? ` — ${activeAiState.fallbackNote}` : ''}`}
+                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded border font-mono ${
+                    activeAiState.mode === 'local'
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/50'
+                      : 'bg-indigo-950/80 text-indigo-300 border-indigo-800/60'
+                  }`}
+                >
+                  {activeAiState.mode === 'local' ? 'LOCAL' : 'CLOUD'} · {activeAiState.providerName || activeAiState.provider}
+                </span>
+              ) : null}
             </div>
           </div>
 

@@ -385,7 +385,11 @@ class VortexCoreTests(unittest.TestCase):
         self.assertEqual(components["podman"]["runtime"], "podman")
         self.assertEqual(components["podman"]["path"], "/usr/bin/podman")
 
-    def test_local_container_runtime_uses_probed_podman_binary(self):
+    def test_local_container_runtime_returns_name_headed_argv_for_podman(self):
+        # argv[0] must be the plain runtime name: command_spec() enforces
+        # argv[0] == executable and resolves/validates the real binary via
+        # probe_executable() itself. A path-headed argv broke every container
+        # plan on hosts with a real engine (PolicyError: invalid argv).
         probe = {
             "name": "podman",
             "state": "installed",
@@ -396,7 +400,7 @@ class VortexCoreTests(unittest.TestCase):
             {"state": "absent"} if name == "docker" else probe
         )):
             runtime = vtx_backend.local_container_runtime()
-        self.assertEqual(runtime, ("podman", ["/usr/bin/podman", "--remote=false"]))
+        self.assertEqual(runtime, ("podman", ["podman", "--remote=false"]))
 
     def test_container_detection_never_fabricates_runtime_state(self):
         plan = build_plan(self.store, 'inspect docker containers', self.tmp.name)

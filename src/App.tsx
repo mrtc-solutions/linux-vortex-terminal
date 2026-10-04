@@ -173,7 +173,7 @@ export function App() {
         break;
       case 'dependencies':
         spec = {
-          id, title: 'HOST DEPENDENCIES · PRESENT + MISSING',
+          id, title: 'MISSING DEPENDENCIES',
           icon: <Wrench className="w-3.5 h-3.5 text-[var(--theme-primary)]" />,
           width: 720, height: 600,
           content: <Dependencies onOpenPopup={openPopup} />,
