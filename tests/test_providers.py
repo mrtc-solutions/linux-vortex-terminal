@@ -124,6 +124,20 @@ class PolicyTests(ProviderTestCase):
         self.assertFalse(allowed)
         self.assertIn("free-only", reason)
 
+    def test_billable_overage_provider_blocked_without_operator_override(self):
+        """FREE_BILLABLE_OVERAGE (e.g. Cloudflare Workers AI) must be blocked
+        in free-only mode unless the operator explicitly verified a hard cap —
+        no hard-coded provider exemptions from the billing policy."""
+        policy = prov_policy.cost_policy({"free_only_mode": True})
+        definition = prov_catalog.provider_def("cloudflare")
+        self.assertEqual(definition.get("free_status"), prov_catalog.STATUS_FREE_BILLABLE_OVERAGE)
+        allowed, reason = prov_policy.provider_allowed(policy, definition, {})
+        self.assertFalse(allowed)
+        self.assertIn("FREE_BILLABLE_OVERAGE", reason)
+        allowed, reason = prov_policy.provider_allowed(policy, definition, {"allow_in_free_mode": True})
+        self.assertTrue(allowed)
+        self.assertIn("operator", reason)
+
     def test_free_only_blocks_unknown_pricing(self):
         policy = prov_policy.cost_policy({"free_only_mode": True})
         definition = prov_catalog.provider_def("openrouter")
