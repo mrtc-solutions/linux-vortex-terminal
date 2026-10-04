@@ -254,6 +254,56 @@ class GenerateTests(ProviderTestCase):
         kinds2 = {item["provider"]: item["state"] for item in result2["attempts"]}
         self.assertEqual(kinds2.get("groq"), "cooling_down")
 
+    def test_per_call_timeout_is_clamped_to_remaining_deadline(self):
+        """With a total deadline, an in-flight call must not be allowed its
+        full configured timeout past the deadline — the effective per-call
+        timeout is clamped to the remaining budget (serverless safety)."""
+        handler, url = self.mock({
+            "/models": (200, {"data": [{"id": "llama-3.3-70b-versatile"}]}),
+            "/chat/completions": (200, chat_payload("quick reply")),
+        })
+        self.patch_base("groq", url)
+        self.set_key("GROQ_API_KEY")
+        seen: list[float] = []
+        original_chat = self.manager._chat
+
+        def spying_chat(definition, model, messages, settings):
+            seen.append(float(settings.get("cloud_timeout_seconds") or 0))
+            return original_chat(definition, model, messages, settings)
+
+        with patch.object(self.manager, "_chat", side_effect=spying_chat):
+            settings = dict(HYBRID)
+            settings.update({"cloud_timeout_seconds": 30, "total_deadline_seconds": 5})
+            result = self.manager.generate([{"role": "user", "content": "hello"}], settings,
+                                           provider_id="groq", allow_fallback=False)
+        self.assertEqual(result["state"], "responded")
+        self.assertEqual(len(seen), 1)
+        # 30s configured, but only ~5s of budget remained → clamped.
+        self.assertLessEqual(seen[0], 5.0)
+        self.assertGreaterEqual(seen[0], 2.0)
+
+    def test_no_deadline_leaves_per_call_timeout_untouched(self):
+        handler, url = self.mock({
+            "/models": (200, {"data": [{"id": "llama-3.3-70b-versatile"}]}),
+            "/chat/completions": (200, chat_payload("quick reply")),
+        })
+        self.patch_base("groq", url)
+        self.set_key("GROQ_API_KEY")
+        seen: list[float] = []
+        original_chat = self.manager._chat
+
+        def spying_chat(definition, model, messages, settings):
+            seen.append(float(settings.get("cloud_timeout_seconds") or 0))
+            return original_chat(definition, model, messages, settings)
+
+        with patch.object(self.manager, "_chat", side_effect=spying_chat):
+            settings = dict(HYBRID)
+            settings["cloud_timeout_seconds"] = 30
+            result = self.manager.generate([{"role": "user", "content": "hello"}], settings,
+                                           provider_id="groq", allow_fallback=False)
+        self.assertEqual(result["state"], "responded")
+        self.assertEqual(seen, [30.0])
+
     def test_free_only_mode_refuses_provider_with_only_paid_models(self):
         handler, url = self.mock({
             "/models": (200, {"data": [

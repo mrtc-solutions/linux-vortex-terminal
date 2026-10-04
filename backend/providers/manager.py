@@ -891,13 +891,26 @@ class ProviderManager:
         except (TypeError, ValueError):
             total_deadline = 0.0
         for candidate in order:
-            if total_deadline and (time.monotonic() - overall_started) >= total_deadline:
-                attempts.append({
-                    "provider": candidate, "state": "deadline_exceeded",
-                    "detail": (f"skipped — the {int(total_deadline)}s total AI time budget was "
-                               "exhausted by earlier providers"),
-                })
-                break
+            call_settings = settings
+            if total_deadline:
+                remaining = total_deadline - (time.monotonic() - overall_started)
+                if remaining <= 0:
+                    attempts.append({
+                        "provider": candidate, "state": "deadline_exceeded",
+                        "detail": (f"skipped — the {int(total_deadline)}s total AI time budget was "
+                                   "exhausted by earlier providers"),
+                    })
+                    break
+                # Clamp the per-call timeout to the remaining budget so even an
+                # in-flight request cannot outlive the deadline (a call started
+                # at T-1s must not run its full configured timeout past T).
+                try:
+                    per_call = float(settings.get("cloud_timeout_seconds") or _DEFAULT_CLOUD_TIMEOUT)
+                except (TypeError, ValueError):
+                    per_call = _DEFAULT_CLOUD_TIMEOUT
+                if per_call > remaining:
+                    call_settings = dict(settings)
+                    call_settings["cloud_timeout_seconds"] = max(2.0, remaining)
             if web_runtime and candidate == "ollama-local":
                 # Never pretend the Vercel backend can reach local Qwen.
                 attempts.append({"provider": "ollama-local", "state": "unavailable_web",
@@ -940,7 +953,7 @@ class ProviderManager:
                 if exc.kind in {"blocked_policy", "model_unavailable"} and str(definition.get("discovery")) not in {"static", "ollama-tags"}:
                     # One discovery attempt before giving up on this provider.
                     try:
-                        self.discover_models(candidate, settings)
+                        self.discover_models(candidate, call_settings)
                         resolved_model, model_entry = self._resolve_model(definition, requested_model, policy, overrides)
                     except ProviderError as retry_exc:
                         attempts.append({"provider": candidate, "state": retry_exc.kind, "detail": retry_exc.detail})
@@ -950,7 +963,7 @@ class ProviderManager:
                     continue
             started = time.monotonic()
             try:
-                reply = self._chat(definition, resolved_model, messages, settings)
+                reply = self._chat(definition, resolved_model, messages, call_settings)
                 latency_ms = int((time.monotonic() - started) * 1000)
                 self._record_success(candidate, latency_ms)
                 return {
