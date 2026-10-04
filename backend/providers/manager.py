@@ -643,6 +643,16 @@ class ProviderManager:
             result["message"] += f" — using installed tag {effective}"
         with self._lock:
             self._local_runtime = dict(result)
+            # The probe just verified Ollama is reachable and the model is
+            # installed. If the active cooldown was caused by an environment
+            # problem the operator has now fixed (daemon down / model missing),
+            # clear it so chat recovers immediately instead of waiting out the
+            # cooldown. Timeout/load cooldowns are kept: a fast /api/tags reply
+            # does not prove inference will be fast.
+            stat = self._stats.get("ollama-local")
+            if stat and float(stat.get("cooldown_until") or 0.0) > time.monotonic() \
+                    and stat.get("last_error_kind") in {"model_unavailable", "network_unavailable"}:
+                stat["cooldown_until"] = 0.0
         return result
 
     def warm_up(self, settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -871,7 +881,23 @@ class ProviderManager:
             order = self.candidate_order(settings)
         attempts: list[dict[str, Any]] = []
         web_runtime = str(settings.get("runtime") or "").upper() == "WEB_CLOUD"
+        # Optional wall-clock budget across the WHOLE fallback chain. The
+        # serverless web runtime sets this so a chain of slow providers can
+        # never outlive the platform's function limit and die opaquely —
+        # the caller gets an honest "budget exhausted" attempt instead.
+        overall_started = time.monotonic()
+        try:
+            total_deadline = float(settings.get("total_deadline_seconds") or 0)
+        except (TypeError, ValueError):
+            total_deadline = 0.0
         for candidate in order:
+            if total_deadline and (time.monotonic() - overall_started) >= total_deadline:
+                attempts.append({
+                    "provider": candidate, "state": "deadline_exceeded",
+                    "detail": (f"skipped — the {int(total_deadline)}s total AI time budget was "
+                               "exhausted by earlier providers"),
+                })
+                break
             if web_runtime and candidate == "ollama-local":
                 # Never pretend the Vercel backend can reach local Qwen.
                 attempts.append({"provider": "ollama-local", "state": "unavailable_web",

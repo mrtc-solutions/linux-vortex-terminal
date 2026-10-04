@@ -407,6 +407,35 @@ class LocalQwenTests(ProviderTestCase):
         status = self.manager.local_status({"ollama_endpoint": "http://127.0.0.1:9"})
         self.assertIn(status["state"], {"ollama_not_running", "ollama_not_installed"})
 
+    def test_healthy_probe_clears_environment_cooldown(self):
+        """After the operator fixes `model missing` (ollama pull), a verified
+        healthy probe must clear the cooldown so chat recovers immediately."""
+        import time as _time
+        from backend.providers.manager import ProviderError
+        self.manager._record_failure("ollama-local", ProviderError("model_unavailable", "404 model not found"))
+        self.assertGreater(self.manager._in_cooldown("ollama-local"), 0)
+        handler, url = self.mock({
+            "/api/tags": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+            "/api/ps": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+        })
+        status = self.manager.local_status({"ollama_endpoint": url})
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(self.manager._in_cooldown("ollama-local"), 0)
+
+    def test_healthy_probe_keeps_timeout_cooldown(self):
+        """A fast /api/tags answer does not prove inference is fast: timeout
+        cooldowns must survive a healthy status probe."""
+        from backend.providers.manager import ProviderError
+        self.manager._record_failure("ollama-local", ProviderError("timeout", "inference timed out"))
+        self.assertGreater(self.manager._in_cooldown("ollama-local"), 0)
+        handler, url = self.mock({
+            "/api/tags": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+            "/api/ps": (200, {"models": [{"name": "qwen2.5:3b"}]}),
+        })
+        status = self.manager.local_status({"ollama_endpoint": url})
+        self.assertEqual(status["state"], "ready")
+        self.assertGreater(self.manager._in_cooldown("ollama-local"), 0)
+
     def test_local_chat_answers_through_mock_ollama(self):
         handler, url = self.mock({
             "/api/tags": (200, {"models": [{"name": "qwen2.5:3b"}]}),

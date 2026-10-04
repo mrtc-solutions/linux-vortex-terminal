@@ -111,6 +111,11 @@ def web_settings() -> dict[str, Any]:
         "conversation_provider": "auto",
         "conversation_model": "",
         "secondary_ai_mode": "on-demand",
+        # Serverless budgets: a Vercel function is hard-capped (maxDuration
+        # 60s). Each provider call gets at most 20s, and the WHOLE fallback
+        # chain stops honestly at 40s instead of being killed mid-flight.
+        "cloud_timeout_seconds": 20,
+        "total_deadline_seconds": 40,
     }
 
 
@@ -277,7 +282,11 @@ def _arbitrate_web(request: str, history: list[dict[str, str]],
             )
         mgr = _manager()
         messages = _conversation.build_messages(request, history)
-        new_result = mgr.generate(messages, settings, purpose="conversation")
+        # Two sequential cloud stages (candidate + arbitration) must both fit
+        # inside the serverless budget — split it rather than risk a kill.
+        staged = dict(settings)
+        staged["total_deadline_seconds"] = 18
+        new_result = mgr.generate(messages, staged, purpose="conversation")
         normalizer = CandidateNormalizer(scorer=HistoricalCandidateScorer())
         candidates = [normalizer.normalize_historical(request, h) for h in historical]
         if new_result.get("state") == "responded":
@@ -286,7 +295,7 @@ def _arbitrate_web(request: str, history: list[dict[str, str]],
             return None
         arbitrator = AnswerArbitrator(provider_manager=mgr,
                                       comparator=CandidateComparator())
-        arb = arbitrator.arbitrate(request, candidates, settings=settings)
+        arb = arbitrator.arbitrate(request, candidates, settings=staged)
         winning = next((c for c in arb.candidates
                         if c.candidate_id == arb.selected_candidate_id),
                        arb.candidates[0] if arb.candidates else None)
@@ -428,6 +437,9 @@ def _provider_refresh(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     re-verification against the provider APIs (dynamic registry — no
     hard-coded model catalogue)."""
     settings = web_settings()
+    # Bulk refreshes touch several upstream APIs: use a short per-call
+    # timeout so even 5 slow providers fit the serverless budget.
+    settings["cloud_timeout_seconds"] = 8
     mgr = _manager()
     provider_id = str(body.get("provider_id") or "").strip()
     targets: list[str]
@@ -441,7 +453,7 @@ def _provider_refresh(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         snapshot = mgr.providers_snapshot(settings, probe_local=False)
         targets = [p["id"] for p in snapshot.get("providers", [])
                    if p.get("mode") == "cloud" and p.get("enabled")
-                   and (p.get("key_configured") or not p.get("requires_api_key"))][:8]
+                   and (p.get("key_configured") or not p.get("requires_api_key"))][:5]
     results: dict[str, Any] = {}
     for target in targets:
         if target == "ollama-local":

@@ -195,6 +195,30 @@ class TurnTests(unittest.TestCase):
         self.assertIn(429, statuses)
 
 
+class ServerlessBudgetTests(unittest.TestCase):
+    def test_generate_respects_total_deadline(self):
+        """The serverless runtime must stop the fallback chain honestly when
+        the wall-clock budget is gone instead of being killed mid-flight."""
+        from backend.providers.manager import ProviderManager
+        mgr = ProviderManager()
+        result = mgr.generate(
+            [{"role": "user", "content": "hello"}],
+            {"runtime": "WEB_CLOUD", "privacy_mode": "hybrid",
+             "total_deadline_seconds": 1e-9},
+        )
+        self.assertEqual(result["state"], "unavailable")
+        states = {a.get("state") for a in result["attempts"]}
+        self.assertIn("deadline_exceeded", states)
+        # Exactly one honest "budget exhausted" marker, then the chain stops.
+        self.assertEqual(
+            [a.get("state") for a in result["attempts"]].count("deadline_exceeded"), 1)
+
+    def test_web_settings_carry_serverless_budgets(self):
+        settings = webapi.web_settings()
+        self.assertLessEqual(settings["total_deadline_seconds"], 45)
+        self.assertLessEqual(settings["cloud_timeout_seconds"], 25)
+
+
 class FreeOnlyEnforcementTests(unittest.TestCase):
     def test_env_free_only_cannot_be_overridden_by_browser_settings(self):
         from backend.providers import policy
